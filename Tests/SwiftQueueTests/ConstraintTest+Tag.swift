@@ -32,7 +32,7 @@ class ConstraintTestTag: XCTestCase {
 
         let (type, job) = (UUID().uuidString, TestJob {
             manager?.cancelOperations(tag: tag)
-            $0.done(.fail(JobError()))
+            throw JobError()
         })
 
         let creator = TestCreator([type: job])

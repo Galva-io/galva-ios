@@ -24,7 +24,7 @@ import Dispatch
 import Foundation
 
 extension DispatchQueue {
-    func runAfter(_ seconds: TimeInterval, callback: @escaping () -> Void) {
+    func runAfter(_ seconds: TimeInterval, callback: @escaping @Sendable () -> Void) {
         let delta = DispatchTime.now() + seconds
         asyncAfter(deadline: delta, execute: callback)
     }

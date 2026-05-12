@@ -27,7 +27,7 @@ import XCTest
 
 
 class TestJob: Job {
-    private let onRunCallback: (JobResult) -> Void
+    private let onRunCallback: () async throws -> Void
     private var withRetry: RetryConstraint
 
     private var onRunCount = 0
@@ -41,19 +41,17 @@ class TestJob: Job {
 
     private var lastError: Error?
 
-    init(retry: RetryConstraint = .retry(delay: 0), onRunCallback: @escaping (JobResult) -> Void = { $0.done(.success) }) {
+    init(retry: RetryConstraint = .retry(delay: 0), onRunCallback: @escaping () async throws -> Void = {}) {
         self.onRunCallback = onRunCallback
         withRetry = retry
     }
 
-    func onRun(callback: JobResult) {
-        XCTAssertFalse(Thread.isMainThread)
+    func onRun() async throws {
         onRunCount += 1
-        onRunCallback(callback)
+        try await onRunCallback()
     }
 
     func onRetry(error: Error) -> RetryConstraint {
-        XCTAssertFalse(Thread.isMainThread)
         lastError = error
         onRetryCount += 1
         return withRetry
@@ -147,7 +145,7 @@ class TestJob: Job {
 
 class TestJobFail: TestJob {
     required init(retry: RetryConstraint = .retry(delay: 0), error: Error = JobError()) {
-        super.init(retry: retry) { $0.done(.fail(error)) }
+        super.init(retry: retry) { throw error }
     }
 }
 
@@ -267,6 +265,15 @@ extension JobBuilder {
     func build(job: Job, logger: SwiftQueueLogger = NoLogger.shared, listener: JobListener? = nil) -> SqOperation {
         let info = build()
         let constraints = info.constraints
-        return SqOperation(job, info, logger, listener, DispatchQueue.global(qos: DispatchQoS.QoSClass.utility), constraints)
+        return SqOperation(job, info, logger, listener, DispatchQueue.global(qos: .userInitiated), constraints)
+    }
+}
+
+extension SwiftQueueManagerBuilder {
+    /// Convenience for tests: uses userInitiated QoS to avoid priority inversions with XCTest semaphores
+    static func testBuilder(creator: JobCreator) -> SwiftQueueManagerBuilder {
+        return SwiftQueueManagerBuilder(creator: creator)
+            .set(persister: NoPersister.shared)
+            .set(dispatchQueue: DispatchQueue.global(qos: .userInitiated))
     }
 }

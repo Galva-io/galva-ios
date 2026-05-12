@@ -182,7 +182,7 @@ struct SqManagerParams {
          logger: SwiftQueueLogger = NoLogger.shared,
          listener: JobListener? = nil,
          initInBackground: Bool = false,
-         dispatchQueue: DispatchQueue = DispatchQueue.global(qos: DispatchQoS.QoSClass.utility),
+         dispatchQueue: DispatchQueue = DispatchQueue.global(qos: .userInitiated),
          enqueueThread: DispatchQueue? = nil)
     {
         self.jobCreator = jobCreator

@@ -26,7 +26,10 @@ import XCTest
 
 class ConstraintTestTimeout: XCTestCase {
     func testRunTimeoutConstraint() {
-        let (type, job) = (UUID().uuidString, TestJob(onRunCallback: { _ in }))
+        let (type, job) = (UUID().uuidString, TestJob(onRunCallback: {
+            // Simulate a long-running job that will be cancelled by timeout
+            try await Task.sleep(nanoseconds: UInt64(3600) * 1_000_000_000)
+        }))
 
         let creator = TestCreator([type: job])
 

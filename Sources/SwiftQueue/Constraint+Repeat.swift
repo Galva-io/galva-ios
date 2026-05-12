@@ -22,7 +22,7 @@
 
 import Foundation
 
-final class RepeatConstraint: SimpleConstraint, CodableConstraint {
+final class RepeatConstraint: SimpleConstraint, CodableConstraint, @unchecked Sendable {
     /// Number of run maximum
     let maxRun: Limit
 

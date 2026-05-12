@@ -11,7 +11,8 @@ protocol MessageConsumer: Sendable {
     func consume(messages: [Message]) async throws
 }
 
-actor MessageQueue {
+@GalvaActor
+class MessageQueue {
     struct QueueOptions {
         struct BatchingWindow {
             var timeWindow: TimeInterval

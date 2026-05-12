@@ -35,6 +35,9 @@ final class SqOperation: Operation, @unchecked Sendable {
     private let constraints: [JobConstraint]
     private let listener: JobListener?
 
+    /// The currently running async task for this operation
+    private var currentTask: Task<Void, Never>?
+
     /// Current number of repetition. Transient value
     var currentRepetition: Int = 0
 
@@ -102,6 +105,7 @@ final class SqOperation: Operation, @unchecked Sendable {
         logger.log(.verbose, jobId: name, message: "Job has been canceled")
         lastError = with
         onTerminate()
+        currentTask?.cancel()
         super.cancel()
     }
 
@@ -147,7 +151,16 @@ final class SqOperation: Operation, @unchecked Sendable {
 
         logger.log(.verbose, jobId: name, message: "Job is running")
         listener?.onBeforeRun(job: info)
-        handler.onRun(callback: self)
+
+        currentTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.handler.onRun()
+                self.done(.success)
+            } catch {
+                self.done(.fail(error))
+            }
+        }
     }
 
     func remove() {
@@ -158,7 +171,7 @@ final class SqOperation: Operation, @unchecked Sendable {
     }
 }
 
-extension SqOperation: JobResult {
+extension SqOperation {
     func done(_ result: JobCompletion) {
         guard !isFinished else { return }
 

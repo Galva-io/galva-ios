@@ -22,11 +22,11 @@
 
 import Foundation
 
-protocol ConstraintMaker {
+protocol ConstraintMaker: Sendable {
     func make(from decoder: Decoder) throws -> [CodableConstraint]
 }
 
-class DefaultConstraintMaker: ConstraintMaker {
+final class DefaultConstraintMaker: ConstraintMaker {
     // accessible for extension
     init() {}
 

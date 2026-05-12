@@ -22,7 +22,7 @@
 
 import Foundation
 
-final class JobRetryConstraint: SimpleConstraint, CodableConstraint {
+final class JobRetryConstraint: SimpleConstraint, CodableConstraint, @unchecked Sendable {
     /// Maximum number of authorised retried
     var limit: Limit
 

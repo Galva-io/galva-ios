@@ -66,12 +66,6 @@ protocol JobInfoSerializer {
     func deserialize(json: String) throws -> JobInfo
 }
 
-/// Callback to give result in synchronous or asynchronous job
-protocol JobResult {
-    /// Method callback to notify the completion of your
-    func done(_ result: JobCompletion)
-}
-
 /// Enum to define possible Job completion values
 enum JobCompletion {
     /// Job completed successfully
@@ -85,8 +79,7 @@ enum JobCompletion {
 protocol Job {
     /// Perform your operation
     /// Will be called in background thread
-    func onRun(callback: JobResult)
-    
+    func onRun() async throws
 
     /// Fail has failed with the
     /// Will only gets called if the job can be retried
@@ -108,18 +101,9 @@ class LambdaJob: Job {
         self.lambda = lambda
         self.retry = retry
     }
-    
-    func run() async throws {
-        try lambda()
-    }
 
-    func onRun(callback: JobResult) {
-        do {
-            try lambda()
-            callback.done(.success)
-        } catch {
-            callback.done(.fail(error))
-        }
+    func onRun() async throws {
+        try lambda()
     }
 
     func onRetry(error _: Error) -> RetryConstraint {
@@ -131,7 +115,7 @@ class LambdaJob: Job {
     }
 }
 
-protocol Queue {
+protocol Queue: Sendable {
     var name: String { get }
 
     var maxConcurrent: Int { get }

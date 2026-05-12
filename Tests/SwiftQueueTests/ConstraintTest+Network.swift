@@ -73,7 +73,7 @@ class ConstraintTestNetwork: XCTestCase {
     }
 }
 
-class TestNetworkMonitor: NetworkMonitor {
+class TestNetworkMonitor: NetworkMonitor, @unchecked Sendable {
     private let semaphore: DispatchSemaphore
 
     private var hasNetworkChanged = false

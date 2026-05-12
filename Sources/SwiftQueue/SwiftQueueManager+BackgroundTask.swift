@@ -36,7 +36,16 @@
                     task.expirationHandler = {
                         operation.done(.fail(SwiftQueueError.timeout))
                     }
-                    operation.handler.onRun(callback: TaskJobResult(actual: operation, task: task))
+//                    Task {
+//                        do {
+//                            try await operation.handler.onRun()
+//                            operation.done(.success)
+//                            task.setTaskCompleted(success: true)
+//                        } catch {
+//                            operation.done(.fail(error))
+//                            task.setTaskCompleted(success: false)
+//                        }
+//                    }
                 }
             }
         }
@@ -79,28 +88,6 @@
                 try BGTaskScheduler.shared.submit(request)
             } catch {
                 logger.log(.verbose, jobId: name, message: "Could not schedule BackgroundTask")
-            }
-        }
-    }
-
-    @available(iOS 13.0, tvOS 13.0, macCatalyst 13.1, *)
-    private class TaskJobResult: JobResult {
-        private let task: BGTask
-        private let actual: JobResult
-
-        init(actual: JobResult, task: BGTask) {
-            self.actual = actual
-            self.task = task
-        }
-
-        func done(_ result: JobCompletion) {
-            actual.done(result)
-
-            switch result {
-            case .success:
-                task.setTaskCompleted(success: true)
-            case .fail:
-                task.setTaskCompleted(success: false)
             }
         }
     }
