@@ -23,16 +23,16 @@
 
 import Foundation
 
-public struct Message: Sendable, Hashable, Codable {
+struct Message: Sendable, Hashable, Codable {
     /// Client-generated UUID v7 (time-ordered). Becomes `messageId` on the wire.
-    public let messageId: UUID
-    public let anonymousId: String?
-    public let endUserId: String?
-    public let timestamp: Date
-    public let context: MessageContext?
-    public let body: Body
+    let messageId: UUID
+    let anonymousId: String?
+    let endUserId: String?
+    let timestamp: Date
+    let context: MessageContext?
+    let body: Body
 
-    public init(
+    init(
         messageId: UUID = UUIDv7.next(),
         anonymousId: String?,
         endUserId: String?,
@@ -49,11 +49,11 @@ public struct Message: Sendable, Hashable, Codable {
     }
 
     /// Stable per-record id (string form of `messageId`) used by storage layer.
-    public var id: String { messageId.uuidString }
+    var id: String { messageId.uuidString }
 
     // MARK: - Body
 
-    public enum Body: Sendable, Hashable {
+    enum Body: Sendable, Hashable {
         case identify(traits: [String: AnyJSONValue]?)
         case alias(previousId: String, targetId: String)
         case track(event: String,
@@ -66,7 +66,7 @@ public struct Message: Sendable, Hashable, Codable {
                                         disabled: Bool?,
                                         categories: [String: Bool]?)
 
-        public enum TrackSource: String, Sendable, Codable, Hashable {
+        enum TrackSource: String, Sendable, Codable, Hashable {
             case profile
             case product
             case plan
@@ -74,7 +74,7 @@ public struct Message: Sendable, Hashable, Codable {
             case entitlement
         }
 
-        public var wireType: WireType {
+        var wireType: WireType {
             switch self {
             case .identify:                     return .identify
             case .alias:                        return .alias
@@ -85,7 +85,7 @@ public struct Message: Sendable, Hashable, Codable {
             }
         }
 
-        public enum WireType: String, Sendable, Codable, Hashable {
+        enum WireType: String, Sendable, Codable, Hashable {
             case identify
             case alias
             case track
@@ -111,7 +111,7 @@ public struct Message: Sendable, Hashable, Codable {
         case channelType, disabled, categories
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         messageId = try c.decode(UUID.self, forKey: .messageId)
         anonymousId = try c.decodeIfPresent(String.self, forKey: .anonymousId)
@@ -154,7 +154,7 @@ public struct Message: Sendable, Hashable, Codable {
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(messageId, forKey: .messageId)
         try c.encodeIfPresent(anonymousId, forKey: .anonymousId)
@@ -194,7 +194,7 @@ struct BatchCollectRequest: Sendable, Codable {
 
 // MARK: - Legacy compatibility
 
-public extension Message {
+extension Message {
     /// Coarse type discriminator preserved for compatibility with older test
     /// code. New code should switch on `body` directly.
     enum MessageType: Equatable, Sendable {

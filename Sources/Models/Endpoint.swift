@@ -2,9 +2,10 @@
 //  Endpoint.swift
 //  Galva
 //
-//  Communication endpoint discriminated union — the payload for
-//  `create-communication-endpoint` and `delete-communication-endpoint`
-//  messages.
+//  INTERNAL wire-format model for `create-communication-endpoint`,
+//  `delete-communication-endpoint`, and `set-communication-preference`
+//  messages. Integrators interact with the public `Communication` API in
+//  Galva.swift — they never construct these types directly.
 //
 //  Two channels:
 //    • .email(address)
@@ -17,22 +18,22 @@
 
 import Foundation
 
-public enum CommunicationEndpoint: Sendable, Hashable {
+enum CommunicationEndpoint: Sendable, Hashable {
     case email(String)
     case pushNotification(platform: PushPlatform, token: String)
 
-    public enum PushPlatform: String, Sendable, Codable, Hashable {
+    enum PushPlatform: String, Sendable, Codable, Hashable {
         case apns
         case fcm
     }
 
-    public enum ChannelType: String, Sendable, Codable, Hashable {
+    enum ChannelType: String, Sendable, Codable, Hashable {
         case email
         case pushNotification = "push-notification"
         case inApp = "in-app"
     }
 
-    public var channelType: ChannelType {
+    var channelType: ChannelType {
         switch self {
         case .email:            return .email
         case .pushNotification: return .pushNotification
@@ -45,7 +46,7 @@ extension CommunicationEndpoint: Codable {
         case channelType, email, platform, token
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let channel = try c.decode(ChannelType.self, forKey: .channelType)
         switch channel {
@@ -63,7 +64,7 @@ extension CommunicationEndpoint: Codable {
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(channelType, forKey: .channelType)
         switch self {
@@ -72,6 +73,29 @@ extension CommunicationEndpoint: Codable {
         case .pushNotification(let platform, let token):
             try c.encode(platform, forKey: .platform)
             try c.encode(token, forKey: .token)
+        }
+    }
+}
+
+// MARK: - Public → wire bridges
+
+extension Communication.PushPlatform {
+    /// Maps a public `Communication.PushPlatform` to the internal wire enum.
+    var wireValue: CommunicationEndpoint.PushPlatform {
+        switch self {
+        case .apns: return .apns
+        case .fcm:  return .fcm
+        }
+    }
+}
+
+extension Communication.Channel {
+    /// Maps a public `Communication.Channel` to the internal wire enum.
+    var wireValue: CommunicationEndpoint.ChannelType {
+        switch self {
+        case .email:            return .email
+        case .pushNotification: return .pushNotification
+        case .inApp:            return .inApp
         }
     }
 }

@@ -2,104 +2,107 @@
 //  Context.swift
 //  Galva
 //
-//  Mirrors the rich `context` object in /identities/batchCollect.
+//  INTERNAL wire model for the rich `context` object in
+//  /identities/batchCollect. Integrators never construct or read these
+//  types — they're populated by ContextProvider on the way to the queue.
 //
-//  Every field is optional. The SDK populates whatever it can collect locally
-//  (app/device/os/screen/locale/timezone/library). The server enriches the
-//  rest (ip, network, referrer, userAgentData) from request headers.
+//  Every field is optional. The SDK populates whatever it can collect
+//  locally (app/device/os/screen/locale/timezone/library). The server
+//  enriches the rest (ip, network, referrer, userAgentData) from request
+//  headers.
 //
-//  Built once per message by `ContextProvider` from a Sendable `DeviceSnapshot`
-//  captured on MainActor during SDK configure. No live UIKit reads on the hot
-//  path.
+//  Built once per message by `ContextProvider` from a Sendable
+//  `DeviceSnapshot` captured on MainActor during SDK configure. No live
+//  UIKit reads on the hot path.
 //
 
 import Foundation
 
-public struct MessageContext: Sendable, Codable, Hashable {
-    public var app: App?
-    public var device: Device?
-    public var ip: String?
-    public var library: Library?
-    public var locale: String?
-    public var network: Network?
-    public var os: OS?
-    public var page: Page?
-    public var referrer: Referrer?
-    public var screen: Screen?
-    public var timezone: String?
-    public var userAgent: String?
-    public var userAgentData: UserAgentData?
+struct MessageContext: Sendable, Codable, Hashable {
+    var app: App?
+    var device: Device?
+    var ip: String?
+    var library: Library?
+    var locale: String?
+    var network: Network?
+    var os: OS?
+    var page: Page?
+    var referrer: Referrer?
+    var screen: Screen?
+    var timezone: String?
+    var userAgent: String?
+    var userAgentData: UserAgentData?
 
-    public struct App: Sendable, Codable, Hashable {
-        public var name: String?
-        public var version: String?
-        public var build: String?
-        public var namespace: String?
+    struct App: Sendable, Codable, Hashable {
+        var name: String?
+        var version: String?
+        var build: String?
+        var namespace: String?
     }
 
-    public struct Device: Sendable, Codable, Hashable {
-        public var id: String?
-        public var advertisingId: String?
-        public var adTrackingEnabled: Bool?
-        public var manufacturer: String?
-        public var model: String?
-        public var name: String?
-        public var type: String?
-        public var token: String?
-        public var version: String?
+    struct Device: Sendable, Codable, Hashable {
+        var id: String?
+        var advertisingId: String?
+        var adTrackingEnabled: Bool?
+        var manufacturer: String?
+        var model: String?
+        var name: String?
+        var type: String?
+        var token: String?
+        var version: String?
     }
 
-    public struct Library: Sendable, Codable, Hashable {
-        public var name: String?
-        public var version: String?
+    struct Library: Sendable, Codable, Hashable {
+        var name: String?
+        var version: String?
     }
 
-    public struct Network: Sendable, Codable, Hashable {
-        public var bluetooth: Bool?
-        public var carrier: String?
-        public var cellular: Bool?
-        public var wifi: Bool?
+    struct Network: Sendable, Codable, Hashable {
+        var bluetooth: Bool?
+        var carrier: String?
+        var cellular: Bool?
+        var wifi: Bool?
     }
 
-    public struct OS: Sendable, Codable, Hashable {
-        public var name: String?
-        public var version: String?
+    struct OS: Sendable, Codable, Hashable {
+        var name: String?
+        var version: String?
     }
 
-    public struct Page: Sendable, Codable, Hashable {
-        public var path: String?
-        public var referrer: String?
-        public var search: String?
-        public var title: String?
-        public var url: String?
+    struct Page: Sendable, Codable, Hashable {
+        var path: String?
+        var referrer: String?
+        var search: String?
+        var title: String?
+        var url: String?
     }
 
-    public struct Referrer: Sendable, Codable, Hashable {
-        public var id: String?
-        public var type: String?
-        public var name: String?
-        public var url: String?
-        public var link: String?
+    struct Referrer: Sendable, Codable, Hashable {
+        var id: String?
+        var type: String?
+        var name: String?
+        var url: String?
+        var link: String?
     }
 
-    public struct Screen: Sendable, Codable, Hashable {
-        public var width: Double?
-        public var height: Double?
-        public var density: Double?
+    struct Screen: Sendable, Codable, Hashable {
+        var width: Double?
+        var height: Double?
+        var density: Double?
     }
 
-    public struct UserAgentData: Sendable, Codable, Hashable {
-        public var brands: [Brand]?
-        public var mobile: Bool?
-        public var platform: String?
-        public var bitness: String?
-        public var model: String?
-        public var platformVersion: String?
-        public var uaFullVersion: String?
+    struct UserAgentData: Sendable, Codable, Hashable {
+        var brands: [Brand]?
+        var mobile: Bool?
+        var platform: String?
+        var bitness: String?
+        var model: String?
+        var platformVersion: String?
+        var uaFullVersion: String?
 
-        public struct Brand: Sendable, Codable, Hashable {
-            public var brand: String?
-            public var version: String?
+        struct Brand: Sendable, Codable, Hashable {
+            var brand: String?
+            var version: String?
         }
     }
 }

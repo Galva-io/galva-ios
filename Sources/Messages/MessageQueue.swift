@@ -58,23 +58,53 @@ class MessageQueue {
     private var processingTask: Task<Void, Never>?
     private var consecutiveFailures: Int = 0
 
-    init(
+    /// Reentrancy guard. `processAllMessages` awaits the consumer, which is a
+    /// suspension point — without this flag another `emit` arriving during
+    /// the await could start a parallel drain that fetches the same not-yet-
+    /// deleted batch and delivers it twice.
+    private var isProcessing: Bool = false
+
+    /// Designated initializer — caller supplies the storage backend.
+    /// `nonisolated` so non-actor code (notably tests) can construct a queue;
+    /// the body only writes stored properties and doesn't touch shared state.
+    nonisolated init(
+        consumer: any MessageConsumer,
+        storage: any MessageStorage,
+        options: QueueOptions? = nil,
+        logger: any GalvaLogger = GalvaConsoleLogger()
+    ) {
+        self.consumer = consumer
+        self.storage = storage
+        self.options = options
+        self.logger = logger
+    }
+
+    /// Convenience initializer — picks SQLite under the app's Documents
+    /// directory using `name` as the file stem; falls back to in-memory if
+    /// SQLite fails to open. Production callers use this; tests inject a
+    /// storage explicitly via the designated initializer.
+    nonisolated convenience init(
         consumer: any MessageConsumer,
         options: QueueOptions? = nil,
         name: String? = nil,
         logger: any GalvaLogger = GalvaConsoleLogger()
     ) {
-        self.consumer = consumer
-        self.options = options
-        self.logger = logger
-        let queueName = name ?? "__DEFAULT"
+        let storage = Self.defaultStorage(name: name ?? "__DEFAULT", logger: logger)
+        self.init(consumer: consumer, storage: storage, options: options, logger: logger)
+    }
 
+    private nonisolated static func defaultStorage(
+        name: String,
+        logger: any GalvaLogger
+    ) -> any MessageStorage {
         do {
-            let containerPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? NSTemporaryDirectory()
-            let dbFileURL = URL(fileURLWithPath: containerPath).appendingPathComponent("galva-\(queueName).db")
-            storage = try SQLiteMessageStorage(dbPath: dbFileURL.path)
+            let containerPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path
+                ?? NSTemporaryDirectory()
+            let dbFileURL = URL(fileURLWithPath: containerPath).appendingPathComponent("galva-\(name).db")
+            return try SQLiteMessageStorage(dbPath: dbFileURL.path)
         } catch {
-            storage = InMemoryMessageStorage()
+            logger.log(.warning, message: "SQLite open failed, falling back to in-memory storage", error: error)
+            return InMemoryMessageStorage()
         }
     }
 
@@ -106,7 +136,9 @@ class MessageQueue {
     }
 
     func startRunloop() async {
-        guard state == .idle else { return }
+        // Allow restart from `.idle` or `.stopped`. Re-entry while already
+        // `.processing` is a no-op.
+        guard state != .processing else { return }
         state = .processing
 
         // Process any existing messages immediately
@@ -158,6 +190,12 @@ class MessageQueue {
 
     private func processAllMessages() async {
         guard state == .processing else { return }
+        // Reentrancy guard — only one drain at a time. A concurrent caller
+        // exits early because the in-flight drain will pick up any newly
+        // emitted messages in its own loop.
+        guard !isProcessing else { return }
+        isProcessing = true
+        defer { isProcessing = false }
 
         while state == .processing {
             do {

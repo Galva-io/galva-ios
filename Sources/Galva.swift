@@ -278,6 +278,31 @@ public extension AppUserAttribute where Self == AppUser.CountryAttribute {
     static var country: AppUser.CountryAttribute { .init() }
 }
 
+public extension AppUserAttribute where Self == AppUser.TimezoneAttribute {
+    /// Built-in timezone trait. Maps to server key `$gv_timezone`. Use IANA
+    /// names (e.g. `"America/New_York"`).
+    ///
+    /// The SDK auto-attaches the device's current timezone on every identify
+    /// call (anonymous and identified). Set this explicitly only to override.
+    static var timezone: AppUser.TimezoneAttribute { .init() }
+}
+
+public extension AppUserAttribute where Self == AppUser.LanguageCodeAttribute {
+    /// Built-in language code trait. Maps to server key `$gv_languageCode`.
+    /// BCP 47 language tag (e.g. `"en"`, `"en-US"`).
+    ///
+    /// The SDK auto-attaches the device's current language code on every
+    /// identify call (anonymous and identified). Set this explicitly only
+    /// to override (e.g. host app has an in-app language picker).
+    static var languageCode: AppUser.LanguageCodeAttribute { .init() }
+}
+
+public extension AppUserAttribute where Self == AppUser.TotalLifetimeValueAttribute {
+    /// Built-in total lifetime value trait. Maps to server key
+    /// `$gv_totalLifetimeValue`. Value is a currency amount as a `Double`.
+    static var totalLifetimeValue: AppUser.TotalLifetimeValueAttribute { .init() }
+}
+
 /// User identity and traits.
 ///
 /// Galva tracks two kinds of identifiers:
@@ -384,6 +409,26 @@ public enum AppUser {
         public typealias Value = String
         public let attributeName = "$gv_country"
     }
+
+    /// Timezone trait attribute (IANA name). Server key: `$gv_timezone`.
+    public struct TimezoneAttribute: Sendable, AppUserAttribute {
+        public typealias Value = String
+        public let attributeName = "$gv_timezone"
+    }
+
+    /// Language code trait attribute (BCP 47 tag).
+    /// Server key: `$gv_languageCode`.
+    public struct LanguageCodeAttribute: Sendable, AppUserAttribute {
+        public typealias Value = String
+        public let attributeName = "$gv_languageCode"
+    }
+
+    /// Total lifetime value trait attribute (currency amount, `Double`).
+    /// Server key: `$gv_totalLifetimeValue`.
+    public struct TotalLifetimeValueAttribute: Sendable, AppUserAttribute {
+        public typealias Value = Double
+        public let attributeName = "$gv_totalLifetimeValue"
+    }
 }
 
 // MARK: - Communication
@@ -395,6 +440,23 @@ public enum AppUser {
 /// push notifications. Preferences control which workflows (Trial Rescue,
 /// Payment Recovery, Winback…) are allowed to use each channel.
 public enum Communication {
+
+    // MARK: Public enums
+
+    /// Push provider for a device token.
+    public enum PushPlatform: String, Sendable, Hashable {
+        /// Apple Push Notification service (default on Apple platforms).
+        case apns
+        /// Firebase Cloud Messaging.
+        case fcm
+    }
+
+    /// Communication channel a preference applies to.
+    public enum Channel: String, Sendable, Hashable {
+        case email
+        case pushNotification
+        case inApp
+    }
 
     /// Register an email address as a reachable endpoint for the current user.
     ///
@@ -424,16 +486,16 @@ public enum Communication {
     ///
     ///     Communication.registerPushToken(hexToken)              // .apns
     ///     Communication.registerPushToken(fcmToken, platform: .fcm)
-    public static func registerPushToken(_ token: String, platform: CommunicationEndpoint.PushPlatform = .apns) {
+    public static func registerPushToken(_ token: String, platform: PushPlatform = .apns) {
         Task { @GalvaActor in
-            await SDKCore.shared.createEndpoint(.pushNotification(platform: platform, token: token))
+            await SDKCore.shared.createEndpoint(.pushNotification(platform: platform.wireValue, token: token))
         }
     }
 
     /// Remove a previously-registered push-notification endpoint.
-    public static func unregisterPushToken(_ token: String, platform: CommunicationEndpoint.PushPlatform = .apns) {
+    public static func unregisterPushToken(_ token: String, platform: PushPlatform = .apns) {
         Task { @GalvaActor in
-            await SDKCore.shared.deleteEndpoint(.pushNotification(platform: platform, token: token))
+            await SDKCore.shared.deleteEndpoint(.pushNotification(platform: platform.wireValue, token: token))
         }
     }
 
@@ -452,12 +514,12 @@ public enum Communication {
     ///         categories: ["payment-recovery": false]
     ///     )
     public static func setPreference(
-        channel: CommunicationEndpoint.ChannelType,
+        channel: Channel,
         disabled: Bool? = nil,
         categories: [String: Bool]? = nil
     ) {
         Task { @GalvaActor in
-            await SDKCore.shared.setPreference(channel: channel, disabled: disabled, categories: categories)
+            await SDKCore.shared.setPreference(channel: channel.wireValue, disabled: disabled, categories: categories)
         }
     }
 }

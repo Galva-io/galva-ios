@@ -12,13 +12,10 @@ enum SDKConstants {
     static let version = "1.0.0"
 
     /// Library name as it appears in the `context.library` field.
-    static let libraryName = "swift"
+    static let libraryName = "ios"
 
-    /// Value for the `x-sdk-version` header. Format: `swift/X.Y.Z`, max 20 chars.
-    static let sdkVersionHeader: String = {
-        let raw = "swift/\(version)"
-        return String(raw.prefix(20))
-    }()
+    /// Value for the `x-sdk-version` header. Format: `ios-X.Y.Z`.
+    static let sdkVersionHeader: String = "\(libraryName)-\(version)"
 
     /// Default Galva API base URL.
     static let defaultBaseURL = URL(string: "https://api.galva.dev")!

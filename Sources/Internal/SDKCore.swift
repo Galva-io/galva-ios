@@ -113,6 +113,11 @@ final class SDKCore {
         await queue.startRunloop()
         configured = true
         logger.log(.info, message: "Galva SDK configured", error: nil)
+
+        // Seed built-in traits ($gv_timezone, $gv_languageCode) for the
+        // current anonymous user so the server has them before any explicit
+        // identify() call.
+        await identify(userId: nil, appAccountToken: nil, traits: nil)
     }
 
     func setDeviceToken(_ token: String) {
@@ -142,6 +147,15 @@ final class SDKCore {
         if let token = appAccountToken {
             mergedTraits["$gv_appAccountToken"] = .string(token.uuidString)
         }
+        // Auto-attach device-derived built-in traits on every identify so the
+        // server sees them for both anonymous and identified users. Caller-
+        // supplied values win — host apps with an in-app language/timezone
+        // picker can pass `.timezone` / `.languageCode` to override.
+        for (key, value) in Self.deviceTraits() {
+            if mergedTraits[key] == nil {
+                mergedTraits[key] = value
+            }
+        }
 
         let msg = Message(
             anonymousId: identity.anonymousId,
@@ -152,11 +166,25 @@ final class SDKCore {
         await queue.emit(msg)
     }
 
+    /// Built-in traits sourced from the device on every identify. Keys must
+    /// match the `$gv_*` taxonomy in the OpenAPI spec.
+    private static func deviceTraits() -> [String: AnyJSONValue] {
+        var out: [String: AnyJSONValue] = [
+            "$gv_timezone": .string(TimeZone.current.identifier)
+        ]
+        if let lang = Locale.current.languageCode, !lang.isEmpty {
+            out["$gv_languageCode"] = .string(lang)
+        }
+        return out
+    }
+
     func logOut() async {
         guard let identity else { return }
         identity.setEndUserId(nil)
         identity.rotateAnonymousId()
         setCachedEndUserId(nil)
+        // Seed built-in traits for the freshly-rotated anonymous user.
+        await identify(userId: nil, appAccountToken: nil, traits: nil)
     }
 
     // MARK: Track

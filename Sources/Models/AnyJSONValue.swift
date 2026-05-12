@@ -20,10 +20,11 @@
 
 import Foundation
 
-/// A type-erased JSON value that conforms to `Codable` and `Sendable`.
-/// Used for `traits`, `properties`, and `categories` maps where the server
-/// schema is `additionalProperties: {}` (any JSON allowed).
-public enum AnyJSONValue: Sendable, Hashable {
+/// INTERNAL type-erased JSON value used for the wire `traits`, `properties`,
+/// and `categories` maps. Integrators interact with `GalvaCompatibleValue`
+/// instead — `AnyJSONValue` is constructed by the SDK on the way to the
+/// uploader.
+enum AnyJSONValue: Sendable, Hashable {
     case null
     case bool(Bool)
     case int(Int64)
@@ -35,7 +36,7 @@ public enum AnyJSONValue: Sendable, Hashable {
 
 // MARK: - Convenience init from any GalvaCompatibleValue
 
-public extension AnyJSONValue {
+extension AnyJSONValue {
     /// Best-effort coercion from a `GalvaCompatibleValue`. Returns `.null` for
     /// values that can't be represented (should never happen for spec types).
     init(_ value: any GalvaCompatibleValue) {
@@ -65,7 +66,7 @@ public extension AnyJSONValue {
 // MARK: - Codable
 
 extension AnyJSONValue: Codable {
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() {
             self = .null
@@ -88,7 +89,7 @@ extension AnyJSONValue: Codable {
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         switch self {
         case .null:           try c.encodeNil()
