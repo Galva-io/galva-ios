@@ -226,33 +226,6 @@ extension Decimal: GalvaCompatibleValue {}
 /// Convenience alias for `[String: any GalvaCompatibleValue]`.
 public typealias EventAttributes = [String: any GalvaCompatibleValue]
 
-// MARK: - AppEvent
-
-/// Protocol for strongly-typed events. Implement this on a struct/enum to
-/// avoid stringly-typed `AppEvents.track("...")` call sites.
-///
-/// Example:
-///
-///     struct PurchaseEvent: AppEvent {
-///         let sku: String
-///         let price: Double
-///         var eventName: String { "Purchase" }
-///         var attributes: EventAttributes? {
-///             ["sku": sku, "price": price]
-///         }
-///     }
-///
-///     AppEvents.track(PurchaseEvent(sku: "pro", price: 9.99))
-public protocol AppEvent: Sendable {
-    /// Wire name for the event, e.g. `"Purchase"`. Should match your
-    /// taxonomy.
-    var eventName: String { get }
-
-    /// Optional properties attached to the event. `nil` for events with no
-    /// payload.
-    var attributes: EventAttributes? { get }
-}
-
 // MARK: - AppEvents
 
 /// Event-tracking entry point.
@@ -260,6 +233,31 @@ public protocol AppEvent: Sendable {
 /// All `track(...)` calls return immediately; the event is queued, persisted,
 /// and uploaded asynchronously.
 public enum AppEvents {
+
+    /// Protocol for strongly-typed events. Conform a struct or enum to
+    /// avoid stringly-typed `AppEvents.track("…")` call sites.
+    ///
+    /// Example:
+    ///
+    ///     struct PurchaseEvent: AppEvents.Event {
+    ///         let sku: String
+    ///         let price: Double
+    ///         var eventName: String { "Purchase" }
+    ///         var attributes: EventAttributes? {
+    ///             ["sku": sku, "price": price]
+    ///         }
+    ///     }
+    ///
+    ///     AppEvents.track(PurchaseEvent(sku: "pro", price: 9.99))
+    public protocol Event: Sendable {
+        /// Wire name for the event, e.g. `"Purchase"`. Should match your
+        /// taxonomy.
+        var eventName: String { get }
+
+        /// Optional properties attached to the event. `nil` for events
+        /// with no payload.
+        var attributes: EventAttributes? { get }
+    }
 
     /// Track an event with a string name and optional attributes.
     ///
@@ -283,8 +281,8 @@ public enum AppEvents {
         }
     }
 
-    /// Track a strongly-typed `AppEvent` value.
-    public static func track<E: AppEvent>(_ event: E) {
+    /// Track a strongly-typed `AppEvents.Event` value.
+    public static func track<E: Event>(_ event: E) {
         track(event.eventName, attributes: event.attributes)
     }
 }
@@ -294,8 +292,10 @@ public enum AppEvents {
 /// Strongly-typed user trait keys. Conform a `struct` to this protocol to
 /// define a typed setter that can be called as `AppUser.set(.myTrait, …)`.
 ///
-/// Built-in default attributes: `.email`, `.fullName`, `.firstName`,
-/// `.lastName`, `.country`.
+/// Built-in trait keys: `.email`, `.fullName`, `.firstName`, `.lastName`,
+/// `.country`, `.timezone`, `.languageCode`, `.totalLifetimeValue`. The
+/// underlying types live in [`AppUserTraits`](x-source-tag://AppUserTraits)
+/// — you rarely need to name them directly.
 public protocol AppUserAttribute: Sendable {
     /// Type of the value this attribute accepts. Must be a Galva-compatible
     /// scalar.
@@ -306,55 +306,112 @@ public protocol AppUserAttribute: Sendable {
     var attributeName: String { get }
 }
 
-public extension AppUserAttribute where Self == AppUser.EmailAttribute {
-    /// Built-in email trait. Maps to server key `$gv_email`.
-    static var email: AppUser.EmailAttribute { .init() }
+// MARK: - AppUserTraits
+//
+// Sidecar namespace for the trait struct types. Developers reach these
+// via dot-shorthand at the call site (`AppUser.set(.email, "…")`); the
+// types are rarely typed by name, so they live here instead of inside
+// `AppUser` to keep `AppUser.` autocomplete focused on methods.
+
+/// Strongly-typed built-in user trait keys. Reach these via dot-shorthand:
+///
+///     AppUser.set(.email, "peter@example.com")
+///     AppUser.set(.timezone, "America/New_York")
+///
+/// To define your own custom typed trait, conform a struct to
+/// `AppUserAttribute` directly (you don't need to use this namespace).
+public enum AppUserTraits {
+
+    /// Email trait. Server key: `$gv_email`.
+    public struct Email: Sendable, AppUserAttribute {
+        public typealias Value = String
+        public let attributeName = "$gv_email"
+    }
+
+    /// Full-name trait. Server key: `$gv_fullName`.
+    public struct FullName: Sendable, AppUserAttribute {
+        public typealias Value = String
+        public let attributeName = "$gv_fullName"
+    }
+
+    /// First-name trait. Server key: `$gv_firstName`.
+    public struct FirstName: Sendable, AppUserAttribute {
+        public typealias Value = String
+        public let attributeName = "$gv_firstName"
+    }
+
+    /// Last-name trait. Server key: `$gv_lastName`.
+    public struct LastName: Sendable, AppUserAttribute {
+        public typealias Value = String
+        public let attributeName = "$gv_lastName"
+    }
+
+    /// Country trait (ISO 3166 alpha-2). Server key: `$gv_country`.
+    public struct Country: Sendable, AppUserAttribute {
+        public typealias Value = String
+        public let attributeName = "$gv_country"
+    }
+
+    /// Timezone trait (IANA name). Server key: `$gv_timezone`.
+    /// Auto-attached from the device on every identify; set explicitly
+    /// only to override (e.g. host app exposes its own picker).
+    public struct Timezone: Sendable, AppUserAttribute {
+        public typealias Value = String
+        public let attributeName = "$gv_timezone"
+    }
+
+    /// Language code trait (BCP 47 tag). Server key: `$gv_languageCode`.
+    /// Auto-attached from the device on every identify; set explicitly
+    /// only to override.
+    public struct LanguageCode: Sendable, AppUserAttribute {
+        public typealias Value = String
+        public let attributeName = "$gv_languageCode"
+    }
+
+    /// Total lifetime value trait (currency, `Double`).
+    /// Server key: `$gv_totalLifetimeValue`.
+    public struct TotalLifetimeValue: Sendable, AppUserAttribute {
+        public typealias Value = Double
+        public let attributeName = "$gv_totalLifetimeValue"
+    }
 }
 
-public extension AppUserAttribute where Self == AppUser.FullNameAttribute {
-    /// Built-in full-name trait. Maps to server key `$gv_fullName`.
-    static var fullName: AppUser.FullNameAttribute { .init() }
+// MARK: - AppUserAttribute dot-shorthand
+//
+// These power `AppUser.set(.email, …)` etc. The static factories live on
+// the protocol so they only appear in autocomplete after the `.` —
+// they're invisible everywhere else.
+
+public extension AppUserAttribute where Self == AppUserTraits.Email {
+    static var email: AppUserTraits.Email { .init() }
 }
 
-public extension AppUserAttribute where Self == AppUser.FirstNameAttribute {
-    /// Built-in first-name trait. Maps to server key `$gv_firstName`.
-    static var firstName: AppUser.FirstNameAttribute { .init() }
+public extension AppUserAttribute where Self == AppUserTraits.FullName {
+    static var fullName: AppUserTraits.FullName { .init() }
 }
 
-public extension AppUserAttribute where Self == AppUser.LastNameAttribute {
-    /// Built-in last-name trait. Maps to server key `$gv_lastName`.
-    static var lastName: AppUser.LastNameAttribute { .init() }
+public extension AppUserAttribute where Self == AppUserTraits.FirstName {
+    static var firstName: AppUserTraits.FirstName { .init() }
 }
 
-public extension AppUserAttribute where Self == AppUser.CountryAttribute {
-    /// Built-in country trait. Maps to server key `$gv_country`. Use ISO 3166
-    /// alpha-2 codes (e.g. `"US"`, `"VN"`).
-    static var country: AppUser.CountryAttribute { .init() }
+public extension AppUserAttribute where Self == AppUserTraits.LastName {
+    static var lastName: AppUserTraits.LastName { .init() }
 }
 
-public extension AppUserAttribute where Self == AppUser.TimezoneAttribute {
-    /// Built-in timezone trait. Maps to server key `$gv_timezone`. Use IANA
-    /// names (e.g. `"America/New_York"`).
-    ///
-    /// The SDK auto-attaches the device's current timezone on every identify
-    /// call (anonymous and identified). Set this explicitly only to override.
-    static var timezone: AppUser.TimezoneAttribute { .init() }
+public extension AppUserAttribute where Self == AppUserTraits.Country {
+    static var country: AppUserTraits.Country { .init() }
 }
 
-public extension AppUserAttribute where Self == AppUser.LanguageCodeAttribute {
-    /// Built-in language code trait. Maps to server key `$gv_languageCode`.
-    /// BCP 47 language tag (e.g. `"en"`, `"en-US"`).
-    ///
-    /// The SDK auto-attaches the device's current language code on every
-    /// identify call (anonymous and identified). Set this explicitly only
-    /// to override (e.g. host app has an in-app language picker).
-    static var languageCode: AppUser.LanguageCodeAttribute { .init() }
+public extension AppUserAttribute where Self == AppUserTraits.Timezone {
+    static var timezone: AppUserTraits.Timezone { .init() }
 }
 
-public extension AppUserAttribute where Self == AppUser.TotalLifetimeValueAttribute {
-    /// Built-in total lifetime value trait. Maps to server key
-    /// `$gv_totalLifetimeValue`. Value is a currency amount as a `Double`.
-    static var totalLifetimeValue: AppUser.TotalLifetimeValueAttribute { .init() }
+public extension AppUserAttribute where Self == AppUserTraits.LanguageCode {
+    static var languageCode: AppUserTraits.LanguageCode { .init() }
+}
+
+public extension AppUserAttribute where Self == AppUserTraits.TotalLifetimeValue {
+    static var totalLifetimeValue: AppUserTraits.TotalLifetimeValue { .init() }
 }
 
 /// User identity and traits.
@@ -430,58 +487,6 @@ public enum AppUser {
         Task { @GalvaActor in
             await SDKCore.shared.logOut()
         }
-    }
-
-    // MARK: Default trait attribute types (canonical `$gv_*` server keys)
-
-    /// Email trait attribute. Server key: `$gv_email`.
-    public struct EmailAttribute: Sendable, AppUserAttribute {
-        public typealias Value = String
-        public let attributeName = "$gv_email"
-    }
-
-    /// Full-name trait attribute. Server key: `$gv_fullName`.
-    public struct FullNameAttribute: Sendable, AppUserAttribute {
-        public typealias Value = String
-        public let attributeName = "$gv_fullName"
-    }
-
-    /// First-name trait attribute. Server key: `$gv_firstName`.
-    public struct FirstNameAttribute: Sendable, AppUserAttribute {
-        public typealias Value = String
-        public let attributeName = "$gv_firstName"
-    }
-
-    /// Last-name trait attribute. Server key: `$gv_lastName`.
-    public struct LastNameAttribute: Sendable, AppUserAttribute {
-        public typealias Value = String
-        public let attributeName = "$gv_lastName"
-    }
-
-    /// Country trait attribute (ISO 3166 alpha-2). Server key: `$gv_country`.
-    public struct CountryAttribute: Sendable, AppUserAttribute {
-        public typealias Value = String
-        public let attributeName = "$gv_country"
-    }
-
-    /// Timezone trait attribute (IANA name). Server key: `$gv_timezone`.
-    public struct TimezoneAttribute: Sendable, AppUserAttribute {
-        public typealias Value = String
-        public let attributeName = "$gv_timezone"
-    }
-
-    /// Language code trait attribute (BCP 47 tag).
-    /// Server key: `$gv_languageCode`.
-    public struct LanguageCodeAttribute: Sendable, AppUserAttribute {
-        public typealias Value = String
-        public let attributeName = "$gv_languageCode"
-    }
-
-    /// Total lifetime value trait attribute (currency amount, `Double`).
-    /// Server key: `$gv_totalLifetimeValue`.
-    public struct TotalLifetimeValueAttribute: Sendable, AppUserAttribute {
-        public typealias Value = Double
-        public let attributeName = "$gv_totalLifetimeValue"
     }
 }
 
@@ -579,29 +584,27 @@ public enum Communication {
 }
 
 
-// MARK: - InAppMessage
-
-/// A server-driven in-app message addressed to the current user.
-///
-/// Streamed via `InAppMessages.messages` (or per-type variants). Render the
-/// message however you like — typical UX is to load `contentUrl` in a sheet.
-///
-/// > Note: In-app messages are a planned v2 feature. The current stream
-/// > returns no values.
-public protocol InAppMessage: Sendable {
-    /// Server-generated message id.
-    var messageId: String { get }
-    /// Originating workflow type (Trial Rescue, Payment Recovery, etc.).
-    var messageType: InAppMessages.MessageType { get }
-    /// URL of the message content (HTML or remote view).
-    var contentUrl: URL { get }
-}
+// MARK: - InAppMessages
 
 /// In-app message streams.
 ///
 /// > Note: Server-driven streaming lands in v2. APIs are present so call
 /// > sites can be written today, but emit no values yet.
 public enum InAppMessages {
+
+    /// A server-driven in-app message addressed to the current user.
+    ///
+    /// Streamed via `InAppMessages.messages` (or per-type variants).
+    /// Render the message however you like — typical UX is to load
+    /// `contentUrl` in a sheet.
+    public protocol Message: Sendable {
+        /// Server-generated message id.
+        var messageId: String { get }
+        /// Originating workflow type (Trial Rescue, Payment Recovery, etc.).
+        var messageType: MessageType { get }
+        /// URL of the message content (HTML or remote view).
+        var contentUrl: URL { get }
+    }
 
     /// Workflow type that produced an in-app message.
     public enum MessageType: String, Sendable, CaseIterable {
@@ -612,12 +615,12 @@ public enum InAppMessages {
     }
 
     /// Stream of all in-app messages addressed to the current user.
-    public static var messages: AsyncStream<InAppMessage> {
+    public static var messages: AsyncStream<any Message> {
         AsyncStream { _ in }
     }
 
     /// Stream of in-app messages filtered by one or more types.
-    public static func messages(of types: MessageType...) -> AsyncStream<InAppMessage> {
+    public static func messages(of types: MessageType...) -> AsyncStream<any Message> {
         AsyncStream { _ in }
     }
 }
