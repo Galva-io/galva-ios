@@ -109,7 +109,7 @@ class MessageQueue {
         do {
             let url = try defaultStorageURL(name: name)
             try? markExcludedFromBackup(url)
-            return try SQLiteMessageStorage(dbPath: url.path)
+            return try SQLiteMessageStorage(dbPath: url.path, logger: logger)
         } catch {
             logger.warning(.storage, "SQLite open failed, falling back to in-memory storage", error: error)
             return InMemoryMessageStorage()

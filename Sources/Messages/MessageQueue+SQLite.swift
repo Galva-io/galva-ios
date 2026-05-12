@@ -21,9 +21,11 @@ actor SQLiteMessageStorage: MessageStorage {
     private let dbPath: String
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let logger: any GalvaLogger
 
-    init(dbPath: String) throws {
+    init(dbPath: String, logger: any GalvaLogger = NoOpLogger()) throws {
         self.dbPath = dbPath
+        self.logger = logger
 
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .custom { date, encoder in
@@ -51,25 +53,18 @@ actor SQLiteMessageStorage: MessageStorage {
         if sqlite3_open(dbPath, &tempDb) != SQLITE_OK {
             throw MessageStorageError.storageError("Unable to open database at path: \(dbPath)")
         }
+
+        // Schema migrations live in StorageMigrator. On downgrade (DB is
+        // newer than this SDK), it throws — we close the handle and let
+        // the caller fall back to in-memory storage, leaving the on-disk
+        // data untouched for the next forward upgrade.
+        do {
+            try StorageMigrator.migrate(tempDb, logger: logger)
+        } catch {
+            sqlite3_close(tempDb)
+            throw error
+        }
         db = tempDb
-
-        let createTableSQL = """
-        CREATE TABLE IF NOT EXISTS messages (
-            id TEXT PRIMARY KEY,
-            payload BLOB NOT NULL,
-            created_at REAL NOT NULL DEFAULT (julianday('now'))
-        );
-        """
-        if sqlite3_exec(tempDb, createTableSQL, nil, nil, nil) != SQLITE_OK {
-            sqlite3_close(tempDb)
-            throw MessageStorageError.storageError("Unable to create messages table")
-        }
-
-        let createIndexSQL = "CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);"
-        if sqlite3_exec(tempDb, createIndexSQL, nil, nil, nil) != SQLITE_OK {
-            sqlite3_close(tempDb)
-            throw MessageStorageError.storageError("Unable to create index")
-        }
     }
 
     deinit {
@@ -105,7 +100,7 @@ actor SQLiteMessageStorage: MessageStorage {
 
     func fetchMessages(limit: Int) async throws -> [Message] {
         let selectSQL = """
-        SELECT payload FROM messages
+        SELECT id, payload FROM messages
         ORDER BY created_at ASC
         LIMIT ?;
         """
@@ -118,19 +113,49 @@ actor SQLiteMessageStorage: MessageStorage {
         sqlite3_bind_int(stmt, 1, Int32(limit))
 
         var out: [Message] = []
+        var quarantined: [(id: String, payload: Data, reason: String)] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let length = sqlite3_column_bytes(stmt, 0)
-            guard length > 0, let bytes = sqlite3_column_blob(stmt, 0) else { continue }
+            let idCString = sqlite3_column_text(stmt, 0)
+            let id = idCString.map { String(cString: $0) } ?? "<unknown>"
+
+            let length = sqlite3_column_bytes(stmt, 1)
+            guard length > 0, let bytes = sqlite3_column_blob(stmt, 1) else {
+                quarantined.append((id: id, payload: Data(), reason: "empty payload"))
+                continue
+            }
             let data = Data(bytes: bytes, count: Int(length))
             do {
                 let msg = try decoder.decode(Message.self, from: data)
                 out.append(msg)
             } catch {
-                // Corrupt row — skip. Could quarantine in future.
-                continue
+                // Undecodable payload. Likely from an older or future
+                // SDK build with an incompatible JSON shape, or a row
+                // tampered with on disk. Move it out of the active queue
+                // so we don't keep tripping on it; surface to logs +
+                // diagnostics via `quarantineCount`.
+                quarantined.append((id: id, payload: data, reason: "decode failed: \(error)"))
             }
         }
+
+        // Move undecodable rows to quarantine + remove from main table.
+        // Done outside the SELECT loop so we don't invalidate `stmt`.
+        if !quarantined.isEmpty {
+            for row in quarantined {
+                try StorageMigrator.quarantine(
+                    db,
+                    originalId: row.id,
+                    payload: row.payload,
+                    reason: row.reason,
+                    logger: logger
+                )
+            }
+            try await deleteMessages(quarantined.map(\.id))
+        }
         return out
+    }
+
+    func quarantineCount() async throws -> Int {
+        try StorageMigrator.quarantineCount(db)
     }
 
     func deleteMessages(_ ids: [String]) async throws {

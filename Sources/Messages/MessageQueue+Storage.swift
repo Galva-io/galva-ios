@@ -29,6 +29,17 @@ protocol MessageStorage: Actor {
     /// removed (may be less than `count` if the store has fewer messages).
     @discardableResult
     func dropOldest(_ count: Int) async throws -> Int
+
+    /// Number of rows currently in the quarantine table (un-decodable
+    /// messages that couldn't be parsed by the current SDK build). Used
+    /// for diagnostics and migration tests. In-memory storage returns 0.
+    func quarantineCount() async throws -> Int
+}
+
+extension MessageStorage {
+    /// Default implementation — only the SQLite backend supports
+    /// quarantine. In-memory has nowhere to keep un-decodable rows.
+    func quarantineCount() async throws -> Int { 0 }
 }
 
 enum MessageStorageError: Error {
