@@ -17,15 +17,21 @@
 //    bits 64–65   variant (10)   ← 2-bit RFC 4122 variant
 //    bits 66–127  rand_b         ← 62 bits CSPRNG-derived
 //
-//  Monotonicity guarantees (matches mhayes853/swift-uuidv7 reference):
-//    • Two calls in the same millisecond: counter increments → sort order
-//      matches call order.
-//    • Counter overflow (>0xFFF in one ms): carry into the next ms and
-//      reset the counter to 0.
-//    • Clock rewinds (NTP, manual time-shift): timestamp pins to the
+//  Monotonicity guarantees:
+//    • Same-millisecond calls → counter increments → output sorts in call
+//      order.
+//    • Counter overflow (>0xFFF in one ms) → carries into the next ms.
+//    • Clock rewinds (NTP, manual time-shift) → timestamp pins to the
 //      previously-emitted ms until wall-clock catches up.
 //
 //  Thread-safe. `SystemRandomNumberGenerator` is cryptographically secure.
+//
+//  Testability:
+//    • `MonotonicCounter` is internal so tests can instantiate fresh
+//      instances (avoiding shared-state contamination) and verify
+//      sequencing behaviour against a synthetic clock feed.
+//    • `makeBytes(millis:sequence:randomBytes:)` is internal so tests can
+//      assert the bit layout deterministically without rolling random bytes.
 //
 
 import Foundation
@@ -35,15 +41,32 @@ enum UUIDv7 {
     /// Generate a new UUID v7. Thread-safe and monotonically increasing.
     static func next() -> UUID {
         let nowMs = UInt64(Date().timeIntervalSince1970 * 1000)
-        let (millis, seq) = Monotonic.shared.advance(currentMs: nowMs)
+        let (millis, seq) = MonotonicCounter.shared.advance(currentMs: nowMs)
 
         // 62 bits of CSPRNG-derived randomness for rand_b (bytes 8..15).
-        // Bytes 6 and 7 carry the timestamp's low byte + 12-bit sequence.
+        // Bytes 6 and 7 carry the version + 12-bit sequence.
         var randB = [UInt8](repeating: 0, count: 8)
         randB.withUnsafeMutableBytes { ptr in
             _ = SystemRandomNumberGenerator.fillBytes(into: ptr)
         }
 
+        return makeBytes(millis: millis, sequence: seq, randomBytes: randB)
+    }
+
+    /// Pure bit-packer. Useful from tests to assert layout with a known
+    /// `randomBytes` payload; production callers use `next()`.
+    ///
+    /// - Parameters:
+    ///   - millis: 48-bit unix-ms timestamp (only the low 48 bits are used).
+    ///   - sequence: 12-bit monotonic counter (only the low 12 bits are used).
+    ///   - randomBytes: exactly 8 bytes used as `rand_b`. The variant bits
+    ///     are stamped on by this function — the caller does not need to.
+    static func makeBytes(
+        millis: UInt64,
+        sequence: UInt16,
+        randomBytes: [UInt8]
+    ) -> UUID {
+        precondition(randomBytes.count == 8, "rand_b must be exactly 8 bytes")
         var bytes = [UInt8](repeating: 0, count: 16)
 
         // 48 bits unix_ts_ms (big-endian, bytes 0..5).
@@ -54,13 +77,13 @@ enum UUIDv7 {
         bytes[4] = UInt8((millis >>  8) & 0xFF)
         bytes[5] = UInt8( millis        & 0xFF)
 
-        // Version (top nibble of byte 6 = 0x7) + top 4 bits of 12-bit seq.
-        bytes[6] = 0x70 | UInt8((seq >> 8) & 0x0F)
-        // Low 8 bits of the 12-bit seq.
-        bytes[7] = UInt8(seq & 0xFF)
+        // Version 0x7 in top nibble of byte 6, top 4 bits of seq in low nibble.
+        bytes[6] = 0x70 | UInt8((sequence >> 8) & 0x0F)
+        // Low 8 bits of seq.
+        bytes[7] = UInt8(sequence & 0xFF)
 
         // rand_b across bytes 8..15.
-        for i in 0..<8 { bytes[8 + i] = randB[i] }
+        for i in 0..<8 { bytes[8 + i] = randomBytes[i] }
         // Variant (top 2 bits of byte 8 = 10xx).
         bytes[8] = (bytes[8] & 0x3F) | 0x80
 
@@ -73,20 +96,22 @@ enum UUIDv7 {
     }
 }
 
-// MARK: - Monotonic state (RFC 9562 §6.2 Method 1)
+// MARK: - Monotonic counter (RFC 9562 §6.2 Method 1)
 
-/// Per-process monotonic counter + clock-rewind watermark. Critical section
-/// is tiny so an `NSLock` is fine and keeps this file Foundation-only.
-private final class Monotonic: @unchecked Sendable {
-    static let shared = Monotonic()
+/// Per-process monotonic counter + clock-rewind watermark. Internal so
+/// tests can instantiate fresh ones; production uses the `shared` instance.
+final class MonotonicCounter: @unchecked Sendable {
+    static let shared = MonotonicCounter()
 
     private let lock = NSLock()
     private var previousMs: UInt64 = 0
     private var sequence: UInt16 = 0
 
+    init() {}
+
     /// Returns `(millis, seq)` to embed in the next UUID, advancing the
     /// counter so the resulting UUID is strictly greater than the previous
-    /// one emitted from this process.
+    /// one emitted from this counter.
     func advance(currentMs: UInt64) -> (UInt64, UInt16) {
         lock.lock()
         defer { lock.unlock() }
@@ -113,7 +138,7 @@ private final class Monotonic: @unchecked Sendable {
 
 // MARK: - Random helper (Swift std)
 
-private extension SystemRandomNumberGenerator {
+extension SystemRandomNumberGenerator {
     /// Fills the provided buffer with cryptographically secure random bytes.
     static func fillBytes(into buffer: UnsafeMutableRawBufferPointer) -> Int {
         var rng = SystemRandomNumberGenerator()

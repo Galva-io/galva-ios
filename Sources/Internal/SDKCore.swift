@@ -27,21 +27,43 @@ import Foundation
 final class SDKCore {
 
     nonisolated static let shared = SDKCore()
-    nonisolated private init() {}
+
+    /// `nonisolated` + internal so tests can construct fresh instances
+    /// (the production singleton would otherwise accumulate state across
+    /// tests). Production callers use `.shared`.
+    nonisolated init() {}
 
     // MARK: State
+    //
+    // A few members below are deliberately `internal` rather than `private`
+    // so that `SDKCore+Testing.swift` (a same-module extension) can wire
+    // pre-built dependencies in without going through the production
+    // `configure(apiKey:...)` path. Keep the *production* surface that
+    // touches these members in this file; testing helpers live in the
+    // extension.
 
-    private var configured = false
+    var configured = false
     private var apiKey: String?
     private var autoTrack: Galva.AutoTrackCategory = []
     private var logLevel: Galva.LogLevel = .warning
     private var deviceToken: String?
 
-    private var identity: IdentityStore?
-    private var queue: MessageQueue?
+    var identity: IdentityStore?
+    var queue: MessageQueue?
     private var uploader: Uploader?
-    private var contextProvider: ContextProvider?
-    private var logger: any GalvaLogger = GalvaConsoleLogger()
+    var contextProvider: ContextProvider?
+
+    /// The configured "sink" — user-supplied or the default OSLog logger.
+    /// Stored separately from `logger` because we need to re-wrap it in a
+    /// `LevelFilterLogger` whenever the level OR the sink changes.
+    private var sinkLogger: any GalvaLogger = OSLogLogger()
+
+    /// Logger used by every SDK call site. Always a `LevelFilterLogger`
+    /// wrapping `sinkLogger`. Recomputed when either dependency changes.
+    var logger: any GalvaLogger = LevelFilterLogger(
+        minLevel: .warning,
+        wrapped: OSLogLogger()
+    )
 
     /// Thread-safe mirror of the identified endUserId. Mutated whenever
     /// identify/logOut runs on GalvaActor; read by `AppUser.identifiedUserId`
@@ -56,7 +78,7 @@ final class SDKCore {
         return Self._identifiedUserId
     }
 
-    private func setCachedEndUserId(_ value: String?) {
+    func setCachedEndUserId(_ value: String?) {
         Self._identifiedUserIdLock.lock()
         Self._identifiedUserId = value
         Self._identifiedUserIdLock.unlock()
@@ -70,16 +92,22 @@ final class SDKCore {
     func configure(
         apiKey: String,
         autoTrack: Galva.AutoTrackCategory,
-        logLevel: Galva.LogLevel
+        logLevel: Galva.LogLevel,
+        userLogger: (any GalvaLogger)? = nil
     ) async {
         guard !configured else {
-            logger.log(.warning, message: "Galva.configure called more than once — ignoring", error: nil)
+            logger.warning(.configuration, "configure called more than once — ignoring")
             return
         }
 
         self.apiKey = apiKey
         self.autoTrack = autoTrack
         self.logLevel = logLevel
+        if let userLogger {
+            self.sinkLogger = userLogger
+        }
+        rebuildLogger()
+
         let identity = IdentityStore()
         self.identity = identity
 
@@ -112,12 +140,30 @@ final class SDKCore {
 
         await queue.startRunloop()
         configured = true
-        logger.log(.info, message: "Galva SDK configured", error: nil)
+        logger.info(.configuration, "SDK configured", metadata: [
+            "logLevel": String(describing: logLevel),
+            "anonymousId": identity.anonymousId,
+        ])
 
         // Seed built-in traits ($gv_timezone, $gv_languageCode) for the
         // current anonymous user so the server has them before any explicit
         // identify() call.
         await identify(userId: nil, appAccountToken: nil, traits: nil)
+    }
+
+    /// Install a custom logger after configure. The level filter set at
+    /// configure-time is preserved unless `minLevel` is also supplied.
+    func installLogger(_ userLogger: any GalvaLogger, minLevel: Galva.LogLevel? = nil) {
+        if let minLevel { self.logLevel = minLevel }
+        self.sinkLogger = userLogger
+        rebuildLogger()
+        logger.info(.configuration, "custom logger installed")
+    }
+
+    /// Rebuild `logger` to wrap the current `sinkLogger` at the current
+    /// `logLevel`. Called whenever either changes.
+    private func rebuildLogger() {
+        self.logger = LevelFilterLogger(minLevel: logLevel, wrapped: sinkLogger)
     }
 
     func setDeviceToken(_ token: String) {
@@ -135,9 +181,14 @@ final class SDKCore {
         traits: [String: AnyJSONValue]?
     ) async {
         guard let queue, let identity, let contextProvider else {
-            logger.log(.warning, message: "identify called before configure()", error: nil)
+            logger.warning(.identity, "identify called before configure() — dropping")
             return
         }
+        logger.debug(.identity, "identify", metadata: [
+            "userId": userId ?? "<none>",
+            "hasTraits": traits.map { String($0.count) } ?? "0",
+            "hasAccountToken": appAccountToken == nil ? "false" : "true",
+        ])
         if let userId {
             identity.setEndUserId(userId)
             setCachedEndUserId(userId)
@@ -179,7 +230,13 @@ final class SDKCore {
     }
 
     func logOut() async {
-        guard let identity else { return }
+        guard let identity else {
+            logger.warning(.identity, "logOut called before configure() — dropping")
+            return
+        }
+        logger.info(.identity, "logOut", metadata: [
+            "previousEndUserId": identity.endUserId ?? "<anonymous>",
+        ])
         identity.setEndUserId(nil)
         identity.rotateAnonymousId()
         setCachedEndUserId(nil)
@@ -191,9 +248,13 @@ final class SDKCore {
 
     func track(event: String, properties: [String: AnyJSONValue]?) async {
         guard let queue, let identity, let contextProvider else {
-            logger.log(.warning, message: "track called before configure()", error: nil)
+            logger.warning(.identity, "track called before configure() — dropping", metadata: ["event": event])
             return
         }
+        logger.debug(.identity, "track", metadata: [
+            "event": event,
+            "propsCount": properties.map { String($0.count) } ?? "0",
+        ])
         let msg = Message(
             anonymousId: identity.anonymousId,
             endUserId: identity.endUserId,
@@ -206,7 +267,13 @@ final class SDKCore {
     // MARK: Communication endpoints
 
     func createEndpoint(_ endpoint: CommunicationEndpoint) async {
-        guard let queue, let identity, let contextProvider else { return }
+        guard let queue, let identity, let contextProvider else {
+            logger.warning(.identity, "createEndpoint called before configure() — dropping")
+            return
+        }
+        logger.debug(.identity, "createEndpoint", metadata: [
+            "channel": endpoint.channelType.rawValue,
+        ])
         let msg = Message(
             anonymousId: identity.anonymousId,
             endUserId: identity.endUserId,
@@ -217,7 +284,13 @@ final class SDKCore {
     }
 
     func deleteEndpoint(_ endpoint: CommunicationEndpoint) async {
-        guard let queue, let identity, let contextProvider else { return }
+        guard let queue, let identity, let contextProvider else {
+            logger.warning(.identity, "deleteEndpoint called before configure() — dropping")
+            return
+        }
+        logger.debug(.identity, "deleteEndpoint", metadata: [
+            "channel": endpoint.channelType.rawValue,
+        ])
         let msg = Message(
             anonymousId: identity.anonymousId,
             endUserId: identity.endUserId,
@@ -232,7 +305,15 @@ final class SDKCore {
         disabled: Bool?,
         categories: [String: Bool]?
     ) async {
-        guard let queue, let identity, let contextProvider else { return }
+        guard let queue, let identity, let contextProvider else {
+            logger.warning(.identity, "setPreference called before configure() — dropping")
+            return
+        }
+        logger.debug(.identity, "setPreference", metadata: [
+            "channel": channel.rawValue,
+            "disabled": disabled.map(String.init(describing:)) ?? "<unset>",
+            "categoryCount": String(categories?.count ?? 0),
+        ])
         let msg = Message(
             anonymousId: identity.anonymousId,
             endUserId: identity.endUserId,

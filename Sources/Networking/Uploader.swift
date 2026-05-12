@@ -38,7 +38,15 @@ enum UploadError: Error, @unchecked Sendable {
     case cancelled
 }
 
-actor Uploader {
+/// Abstract uploader so `UploadConsumer` can be tested against a fake
+/// without touching URLSession. The concrete `Uploader` actor below is
+/// the production implementation; tests pass a small `Sendable`
+/// conformer that returns canned `UploadOutcome` values.
+protocol MessageUploader: Sendable {
+    func upload(messages: [Message]) async -> UploadOutcome
+}
+
+actor Uploader: MessageUploader {
     let baseURL: URL
     let apiKey: String
     let session: URLSession
@@ -68,23 +76,50 @@ actor Uploader {
         do {
             request = try makeRequest(url: url, messages: messages)
         } catch {
-            logger.log(.error, message: "Uploader: failed to encode batch", error: error)
+            logger.error(.uploader, "failed to encode batch", metadata: [
+                "batchSize": String(messages.count),
+            ], error: error)
             // Encoding failure is permanent — message can't be sent regardless.
             return .permanent(UploadError.encoding(error))
         }
 
+        logger.debug(.uploader, "POST batch", metadata: [
+            "batchSize": String(messages.count),
+            "url": url.absoluteString,
+        ])
+
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
+                logger.warning(.uploader, "invalid response (non-HTTP)")
                 return .retryable(UploadError.invalidResponse)
             }
-            return classify(status: http.statusCode, body: data)
+            let outcome = classify(status: http.statusCode, body: data)
+            switch outcome {
+            case .success:
+                logger.debug(.uploader, "batch accepted", metadata: [
+                    "status": String(http.statusCode),
+                    "batchSize": String(messages.count),
+                ])
+            case .retryable(let err):
+                logger.warning(.uploader, "retryable response", metadata: [
+                    "status": String(http.statusCode),
+                ], error: err)
+            case .permanent(let err):
+                logger.error(.uploader, "permanent response — dropping batch", metadata: [
+                    "status": String(http.statusCode),
+                    "batchSize": String(messages.count),
+                ], error: err)
+            }
+            return outcome
         } catch {
             // URLSession transport error — almost always retryable (network down,
             // timeout, DNS, TLS, etc.). Cancellation propagates as retryable too.
             if (error as NSError).code == NSURLErrorCancelled {
+                logger.debug(.uploader, "request cancelled")
                 return .retryable(UploadError.cancelled)
             }
+            logger.warning(.uploader, "transport error", error: error)
             return .retryable(UploadError.transport(error))
         }
     }

@@ -67,28 +67,54 @@ public enum Galva {
 
     // MARK: LogLevel
 
-    /// Minimum severity for log entries emitted by the SDK. Higher values
-    /// suppress more output.
+    /// Minimum severity for log entries emitted by the SDK. Maps 1:1 onto
+    /// the system `os.Logger` levels so output appears at the expected
+    /// severity in Console.app and Xcode's debug console.
     ///
-    ///     .debug    — extremely verbose; per-event payloads
-    ///     .info     — flushes, identity changes, workflow attempts
-    ///     .notice   — significant events (default in production)
-    ///     .warning  — retries, rate-limits, recoverable issues
-    ///     .error    — failed flushes, decode failures
-    ///     .critical — invariant broken, data-loss risk
-    ///     .off      — silence the SDK entirely
+    ///     .debug   — extremely verbose; per-event payloads, every HTTP call
+    ///     .info    — significant lifecycle: configure, identify, logOut, flush
+    ///     .notice  — state changes worth knowing about (default in dev)
+    ///     .warning — recoverable issues: retries, rate-limits, malformed config
+    ///     .error   — operation failed: permanent upload failure, decode failure
+    ///     .fault   — invariant broken, data-loss risk
+    ///     .off     — silence the SDK entirely
     public enum LogLevel: Int, Sendable, Comparable {
-        case debug    = 0
-        case info     = 1
-        case notice   = 2
-        case warning  = 3
-        case error    = 4
-        case critical = 5
-        case off      = 99
+        case debug   = 0
+        case info    = 1
+        case notice  = 2
+        case warning = 3
+        case error   = 4
+        case fault   = 5
+        case off     = 99
 
         public static func < (lhs: Self, rhs: Self) -> Bool {
             lhs.rawValue < rhs.rawValue
         }
+    }
+
+    // MARK: LogCategory
+
+    /// Logical area of the SDK that produced a log entry. Each category
+    /// becomes a distinct `os.Logger`, which means you can filter to just
+    /// one subsystem in Console.app:
+    ///
+    ///     subsystem:co.galva.sdk category:queue
+    ///
+    /// Custom `GalvaLogger` implementations receive the category on every
+    /// `LogEntry` so they can route or annotate as they like.
+    public enum LogCategory: String, Sendable, CaseIterable {
+        /// SDK setup and configuration.
+        case configuration = "config"
+        /// Identity store reads/writes and identify/logout lifecycle.
+        case identity
+        /// In-memory + on-disk message queue activity.
+        case queue
+        /// SQLite-backed message storage.
+        case storage
+        /// HTTP transport: every request, response status, and retry.
+        case uploader
+        /// App-level lifecycle (cold start, background, foreground).
+        case lifecycle
     }
 
     // MARK: configure
@@ -104,6 +130,13 @@ public enum Galva {
     ///   - autoTrackCategories: Which categories of events the SDK should
     ///     collect automatically. Default: `[.lifecycle, .transactions]`.
     ///   - logLevel: Minimum severity to log. Default: `.warning`.
+    ///   - logger: Optional custom logger. When `nil` (default), the SDK
+    ///     writes to `os.Logger(subsystem: "co.galva.sdk", category: …)` —
+    ///     open Console.app and filter `subsystem:co.galva.sdk` to see
+    ///     every category in real time. Pass a custom logger to forward
+    ///     SDK logs into your own pipeline (Sentry, Datadog, file
+    ///     logger, etc.). The configured `logLevel` is still applied to
+    ///     filter entries before they reach your logger.
     ///
     /// Example:
     ///
@@ -115,14 +148,35 @@ public enum Galva {
     public static func configure(
         apiKey: String,
         autoTrackCategories: AutoTrackCategory = [.lifecycle, .transactions],
-        logLevel: LogLevel = .warning
+        logLevel: LogLevel = .warning,
+        logger: (any GalvaLogger)? = nil
     ) {
         Task { @GalvaActor in
             await SDKCore.shared.configure(
                 apiKey: apiKey,
                 autoTrack: autoTrackCategories,
-                logLevel: logLevel
+                logLevel: logLevel,
+                userLogger: logger
             )
+        }
+    }
+
+    /// Install a custom `GalvaLogger` at any point after `configure(...)`.
+    /// The `logLevel` filter set at configure time is preserved — your
+    /// logger only sees entries that pass it.
+    ///
+    /// Use this to wire Galva logs into your existing app pipeline:
+    ///
+    ///     struct CrashlyticsLogger: GalvaLogger {
+    ///         func log(_ entry: Galva.LogEntry) {
+    ///             Crashlytics.crashlytics().log("[\(entry.category.rawValue)] \(entry.message)")
+    ///         }
+    ///     }
+    ///
+    ///     Galva.setLogger(CrashlyticsLogger())
+    public static func setLogger(_ logger: any GalvaLogger) {
+        Task { @GalvaActor in
+            SDKCore.shared.installLogger(logger)
         }
     }
 

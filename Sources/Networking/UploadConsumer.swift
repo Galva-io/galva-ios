@@ -21,23 +21,23 @@
 import Foundation
 
 struct UploadConsumer: MessageConsumer {
-    let uploader: Uploader
+    let uploader: any MessageUploader
     let logger: any GalvaLogger
 
     func consume(messages: [Message]) async throws {
         let outcome = await uploader.upload(messages: messages)
         switch outcome {
         case .success:
-            logger.log(.info, message: "Uploaded \(messages.count) messages", error: nil)
+            logger.info(.uploader, "uploaded batch", metadata: ["size": String(messages.count)])
         case .permanent(let error):
-            logger.log(
-                .error,
-                message: "Permanent upload failure (\(messages.count) messages dropped)",
-                error: error
-            )
+            logger.error(.uploader, "permanent failure — dropping batch",
+                         metadata: ["size": String(messages.count)],
+                         error: error)
             // Return normally so queue deletes them — retrying won't help.
         case .retryable(let error):
-            logger.log(.warning, message: "Retryable upload failure", error: error)
+            logger.warning(.uploader, "retryable failure — will retry",
+                           metadata: ["size": String(messages.count)],
+                           error: error)
             throw error
         }
     }

@@ -71,7 +71,7 @@ class MessageQueue {
         consumer: any MessageConsumer,
         storage: any MessageStorage,
         options: QueueOptions? = nil,
-        logger: any GalvaLogger = GalvaConsoleLogger()
+        logger: any GalvaLogger = OSLogLogger()
     ) {
         self.consumer = consumer
         self.storage = storage
@@ -87,7 +87,7 @@ class MessageQueue {
         consumer: any MessageConsumer,
         options: QueueOptions? = nil,
         name: String? = nil,
-        logger: any GalvaLogger = GalvaConsoleLogger()
+        logger: any GalvaLogger = OSLogLogger()
     ) {
         let storage = Self.defaultStorage(name: name ?? "__DEFAULT", logger: logger)
         self.init(consumer: consumer, storage: storage, options: options, logger: logger)
@@ -103,12 +103,16 @@ class MessageQueue {
             let dbFileURL = URL(fileURLWithPath: containerPath).appendingPathComponent("galva-\(name).db")
             return try SQLiteMessageStorage(dbPath: dbFileURL.path)
         } catch {
-            logger.log(.warning, message: "SQLite open failed, falling back to in-memory storage", error: error)
+            logger.warning(.storage, "SQLite open failed, falling back to in-memory storage", error: error)
             return InMemoryMessageStorage()
         }
     }
 
     func emit(_ message: Message) async {
+        logger.debug(.queue, "emit", metadata: [
+            "type": String(describing: message.body.wireType),
+            "messageId": message.id,
+        ])
         do {
             // Store message sequentially to guarantee FIFO order
             try await storage.storeMessage(message)
@@ -116,7 +120,7 @@ class MessageQueue {
             // Trigger processing based on options
             await triggerProcessingIfNeeded()
         } catch {
-            logger.log(.error, message: "Failed to store message", error: error)
+            logger.error(.queue, "failed to store message", error: error)
         }
     }
 
@@ -161,7 +165,7 @@ class MessageQueue {
                     await processAllMessages()
                 }
             } catch {
-                logger.log(.warning, message: "Failed to check queue size", error: error)
+                logger.warning(.queue, "failed to check queue size", error: error)
                 // Continue anyway - processAllMessages will handle errors
                 await processAllMessages()
             }
@@ -210,26 +214,39 @@ class MessageQueue {
                 }
 
                 // Process messages
+                logger.debug(.queue, "draining batch", metadata: ["size": String(messages.count)])
                 do {
                     try await consumer.consume(messages: messages)
 
                     // Remove processed messages only on success
                     try await storage.deleteMessages(messages.map { $0.id })
                     consecutiveFailures = 0
+                    logger.debug(.queue, "batch acknowledged", metadata: ["size": String(messages.count)])
                 } catch {
-                    logger.log(.warning, message: "Failed to process messages", error: error)
-                    // Don't delete messages on failure - they remain in queue for retry.
-                    // Exponential backoff with jitter to avoid hammering on outage.
                     consecutiveFailures += 1
                     let delay = Backoff.delay(forAttempt: consecutiveFailures)
+                    logger.warning(.queue, "consumer failed; retaining batch and backing off",
+                                   metadata: [
+                                       "batchSize": String(messages.count),
+                                       "consecutiveFailures": String(consecutiveFailures),
+                                       "backoffSeconds": String(format: "%.2f", delay),
+                                   ],
+                                   error: error)
+                    // Don't delete messages on failure - they remain in queue for retry.
+                    // Exponential backoff with jitter to avoid hammering on outage.
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     break // Stop processing this batch, batch timer will resume.
                 }
 
             } catch {
-                logger.log(.error, message: "Failed to fetch messages", error: error)
                 consecutiveFailures += 1
                 let delay = Backoff.delay(forAttempt: consecutiveFailures)
+                logger.error(.storage, "failed to fetch messages",
+                             metadata: [
+                                 "consecutiveFailures": String(consecutiveFailures),
+                                 "backoffSeconds": String(format: "%.2f", delay),
+                             ],
+                             error: error)
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 break
             }
