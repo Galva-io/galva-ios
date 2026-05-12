@@ -1,0 +1,152 @@
+# Release — triggered when a tag `v*` is pushed (or manually via the
+# Actions UI). Builds Galva.xcframework, uploads it to a GitHub Release
+# alongside the SPM binary-target checksum + a ready-to-paste snippet.
+#
+# What a maintainer does to ship a release:
+#
+#   git tag v1.2.3
+#   git push --tags
+#
+# That's it. This workflow does the rest:
+#   1. Lint + test (re-runs the CI gates against the tagged commit)
+#   2. Build Galva.xcframework via scripts/build-xcframework.sh
+#   3. Create the GitHub release (or update it if it already exists)
+#   4. Upload Galva.xcframework.zip + .checksum
+#   5. Generate release notes including a copy-paste-ready binaryTarget
+#      snippet for SPM consumers who want a binary distribution.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.2.3). Must already exist."
+        required: true
+
+permissions:
+  contents: write   # to create the release + upload artifacts
+
+jobs:
+  release:
+    name: Build + publish XCFramework
+    runs-on: macos-14
+    steps:
+      # ---- Resolve the tag we're releasing ----------------------------
+      # Triggered by a tag push: GITHUB_REF is `refs/tags/v1.2.3`.
+      # Triggered by workflow_dispatch: inputs.tag is the source of truth.
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          # Check out the exact tag (workflow_dispatch needs this; tag
+          # push already runs against the tagged commit).
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Select Xcode
+        run: sudo xcode-select -switch /Applications/Xcode_15.4.app
+
+      # ---- Re-run gates against the tagged commit ---------------------
+      # Cheap insurance: catches the rare case where main passed CI but
+      # the tagged commit didn't (force-push, manual tag of an older
+      # commit, etc.).
+      - name: Lint
+        run: ./scripts/lint.sh
+
+      - name: Test
+        run: swift test --parallel
+
+      # ---- Build the XCFramework --------------------------------------
+      - name: Build Galva.xcframework
+        run: ./scripts/build-xcframework.sh
+
+      - name: Read computed SPM checksum
+        id: checksum
+        run: |
+          checksum=$(cat build/Galva.xcframework.zip.checksum)
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
+      # ---- Compose release notes --------------------------------------
+      # Multi-line YAML strings are awful; write to a file instead.
+      - name: Generate release notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          REPO: ${{ github.repository }}
+          CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+        run: |
+          cat > release-notes.md <<EOF
+          ## Galva iOS SDK $TAG
+
+          ### Install via SPM (source)
+
+          \`\`\`swift
+          .package(url: "https://github.com/$REPO", from: "${TAG#v}")
+          \`\`\`
+
+          ### Install via prebuilt XCFramework
+
+          Download \`Galva.xcframework.zip\` from this release, unzip, and drag \`Galva.xcframework\` into your Xcode project (set to **Embed & Sign**).
+
+          ### Install via SPM binary target
+
+          Paste this into your \`Package.swift\`:
+
+          \`\`\`swift
+          .binaryTarget(
+              name: "Galva",
+              url: "https://github.com/$REPO/releases/download/$TAG/Galva.xcframework.zip",
+              checksum: "$CHECKSUM"
+          )
+          \`\`\`
+
+          SHA-256 checksum: \`$CHECKSUM\`
+          EOF
+
+      # ---- Publish ----------------------------------------------------
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # If a release for this tag already exists (e.g. created via
+          # the GitHub UI before this workflow ran), update it. Otherwise
+          # create a fresh one.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — updating notes + uploading assets"
+            gh release edit "$TAG" --notes-file release-notes.md
+          else
+            gh release create "$TAG" \
+                --title "$TAG" \
+                --notes-file release-notes.md
+          fi
+
+          # Upload artefacts. --clobber so re-running the workflow
+          # replaces existing assets instead of failing.
+          gh release upload "$TAG" \
+              build/Galva.xcframework.zip \
+              build/Galva.xcframework.zip.checksum \
+              --clobber
+
+      # ---- Surface the result in the Actions UI ----------------------
+      - name: Summary
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          REPO: ${{ github.repository }}
+          CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+        run: |
+          {
+            echo "## Released $TAG"
+            echo ""
+            echo "**Artifact:** https://github.com/$REPO/releases/download/$TAG/Galva.xcframework.zip"
+            echo ""
+            echo "**Checksum:** \`$CHECKSUM\`"
+          } >> "$GITHUB_STEP_SUMMARY"

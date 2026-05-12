@@ -1,0 +1,53 @@
+# CI — runs on every PR and every push to main.
+#
+# Jobs:
+#   • lint  — scripts/lint.sh (host-app perf hazards, crash patterns)
+#   • test  — swift test (~20s, 200+ tests)
+#
+# Both are required for merging. Keep them fast — anything that
+# legitimately needs a long-running matrix belongs in release.yml.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel any in-flight CI runs for the same branch when a new commit
+# lands. Saves CI minutes; the latest commit is always what matters.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run scripts/lint.sh
+        run: ./scripts/lint.sh
+
+  test:
+    name: Test (swift test)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      # macOS runners ship multiple Xcodes; pick a known-good one so
+      # builds are reproducible. Bump when GitHub Actions retires this
+      # image.
+      - name: Select Xcode
+        run: sudo xcode-select -switch /Applications/Xcode_15.4.app
+
+      - name: Cache SPM build artefacts
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            spm-${{ runner.os }}-
+
+      - name: swift test
+        run: swift test --parallel

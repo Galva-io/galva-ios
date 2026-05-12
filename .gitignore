@@ -1,2 +1,36 @@
-.build
-.swiftpm
+# Swift Package Manager
+.build/
+.swiftpm/xcode/xcuserdata/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+Package.resolved
+Packages/
+
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+
+# XCFramework build outputs (produced by scripts/build-xcframework.sh)
+build/
+*.xcframework
+*.xcframework.zip
+*.xcframework.zip.checksum
+
+# Test artefacts
+*.xctestplan.xcuserstate
+default.profraw
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local environment overrides
+.env
+.env.local
