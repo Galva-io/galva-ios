@@ -1,0 +1,144 @@
+# Galva iOS SDK — SwiftLint configuration
+#
+# This config is for developers who have SwiftLint installed locally
+# (`brew install swiftlint`). It layers EXTRA quality coverage on top
+# of `scripts/lint.sh`, which is the canonical, dependency-free floor.
+#
+# Run:
+#     swiftlint                 # warnings + errors
+#     swiftlint --strict        # treat warnings as errors (CI)
+#     swiftlint --fix           # autocorrect what it can
+#
+# Rationale per rule below — the goal is "SDK never affects host app"
+# plus standard hygiene. Catching things at lint time is much cheaper
+# than discovering them in production via a crash report.
+
+# Restrict scanning to production code. Tests get more flexibility:
+# force-unwrapping a fixture URL or printing in a debug helper is fine.
+included:
+  - Sources
+
+excluded:
+  - .build
+  - Tests
+  - Pods
+  - DerivedData
+
+# ────────────────────────────────────────────────────────────────────
+# Rules we DON'T want firing — mostly noise or already covered by
+# Swift's own compiler / formatter.
+# ────────────────────────────────────────────────────────────────────
+disabled_rules:
+  - line_length              # we wrap manually; long URLs are OK
+  - identifier_name          # we have short, deliberate names (db, ms, etc.)
+  - todo                     # we use TODO/FIXME as breadcrumbs; not noise
+  - file_length              # SDKCore.swift is ~250 lines and intentional
+  - type_body_length         # ditto
+  - trailing_whitespace      # editor handles this
+
+# ────────────────────────────────────────────────────────────────────
+# Opt-in rules — these aren't default but matter for an SDK that must
+# never crash the host app.
+# ────────────────────────────────────────────────────────────────────
+opt_in_rules:
+  - force_unwrapping             # avoid Optional!  in production
+  - implicitly_unwrapped_optional # avoid `var x: Foo!`
+  - force_https                  # all URLs must be https
+  - unused_import                # no dead `import Foo`
+  - empty_count                  # `.count == 0` → `.isEmpty`
+  - empty_string                 # `== ""` → `.isEmpty`
+  - first_where                  # `.filter { }.first` → `.first(where:)`
+  - last_where                   # same for `.last`
+  - contains_over_first_not_nil  # `.first(where:) != nil` → `.contains(where:)`
+  - sorted_first_last            # use min/max instead of sort+first/last
+  - prefer_zero_over_explicit_init # `Int(0)` → `0`
+  - reduce_into                  # for mutable reductions, prefer `reduce(into:)`
+  - toggle_bool                  # `b = !b` → `b.toggle()`
+  - redundant_optional_initialization # `var x: Int? = nil` → `var x: Int?`
+  - operator_usage_whitespace    # `x+y` → `x + y`
+  - explicit_init                # `.init(x)` where the type is clear → drop `.init`
+  - convenience_type             # caseless enums for namespaces, not structs/classes
+
+# ────────────────────────────────────────────────────────────────────
+# Severity overrides — promote these from warning to error because
+# they map to "host app perf/stability hazard".
+# ────────────────────────────────────────────────────────────────────
+force_unwrapping:
+  severity: error
+
+force_cast:
+  severity: error
+
+force_try:
+  severity: error
+
+implicitly_unwrapped_optional:
+  severity: error
+
+# ────────────────────────────────────────────────────────────────────
+# Custom rules — overlap with scripts/lint.sh on purpose. SwiftLint
+# users get richer file:line:column reporting in Xcode; CI uses the
+# shell script. Either one catches all of these.
+#
+# Disable on a single line with the SwiftLint syntax:
+#
+#     let x = URL(...)! // swiftlint:disable:next force_unwrapping
+#
+# ────────────────────────────────────────────────────────────────────
+custom_rules:
+  galva_no_dispatch_main_sync:
+    name: "DispatchQueue.main.sync blocks the host's main thread"
+    regex: 'DispatchQueue\.main\.sync'
+    message: "Never block on the main thread from within the SDK. Use `await MainActor.run { ... }` from an async context, or `Task { @MainActor in ... }` for fire-and-forget."
+    severity: error
+
+  galva_no_thread_sleep:
+    name: "Thread.sleep blocks the calling thread"
+    regex: 'Thread\.sleep'
+    message: "Use `try await Task.sleep(nanoseconds:)` instead. Thread.sleep blocks GalvaActor and any host thread it inherits."
+    severity: error
+
+  galva_no_dispatch_semaphore:
+    name: "DispatchSemaphore is forbidden in production SDK code"
+    regex: 'DispatchSemaphore'
+    message: "Use actor isolation or async/await. Semaphores block the calling thread."
+    severity: error
+
+  galva_no_runloop_run_until:
+    name: "RunLoop.run(until:) blocks"
+    regex: 'RunLoop\.[a-zA-Z]+\.run\s*\(\s*until'
+    message: "Use Task-based async waiting. RunLoop.run(until:) blocks the calling thread."
+    severity: error
+
+  galva_no_print:
+    name: "Use the GalvaLogger, not print/debugPrint/NSLog"
+    regex: '\b(print|debugPrint|NSLog)\s*\('
+    message: "These write to stdout/stderr and bypass the configured GalvaLogger pipeline (QA can't see them in Console.app; custom logger sinks miss them). Use logger.debug/info/warning/error(...)."
+    severity: error
+
+  galva_no_fatalerror:
+    name: "fatalError crashes the host app"
+    regex: '\bfatalError\s*\('
+    message: "An SDK should never crash the host app. Replace with proper error handling or a log entry at .fault level. (preconditionFailure for true invariants only.)"
+    severity: error
+
+# ────────────────────────────────────────────────────────────────────
+# Tuning for the existing codebase.
+# ────────────────────────────────────────────────────────────────────
+function_body_length:
+  warning: 60
+  error: 120
+
+cyclomatic_complexity:
+  warning: 12
+  error: 20
+
+nesting:
+  type_level:
+    warning: 3
+  function_level:
+    warning: 3
+
+# Force the same color reporter as scripts/lint.sh so output is
+# consistent between local runs and CI.
+reporter: "xcode"

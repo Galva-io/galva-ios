@@ -41,8 +41,23 @@ import os.log
 ///
 /// Conformers receive every entry — filtering by level happens upstream
 /// in the `LevelFilterLogger` the SDK installs by default.
+///
+/// **Performance note** — implement `isEnabled(_:)` if your logger
+/// short-circuits at a level threshold. The SDK's call sites check
+/// `isEnabled` *before* evaluating their message autoclosures, so a
+/// filtered-out `logger.debug(.queue, "expensive \(work)")` costs
+/// nothing beyond a method call and a comparison.
 public protocol GalvaLogger: Sendable {
     func log(_ entry: Galva.LogEntry)
+
+    /// Cheap pre-check. The SDK's convenience methods call this before
+    /// building the `LogEntry` so the message autoclosure doesn't run
+    /// for an entry that would be dropped. Default returns `true`.
+    func isEnabled(_ level: Galva.LogLevel) -> Bool
+}
+
+public extension GalvaLogger {
+    func isEnabled(_ level: Galva.LogLevel) -> Bool { true }
 }
 
 // MARK: - LogEntry
@@ -101,6 +116,7 @@ public extension GalvaLogger {
         file: StaticString = #file,
         line: UInt = #line
     ) {
+        guard isEnabled(.debug) else { return }
         log(Galva.LogEntry(
             level: .debug, category: category, message: message(),
             metadata: metadata, error: error, file: file, line: line
@@ -115,6 +131,7 @@ public extension GalvaLogger {
         file: StaticString = #file,
         line: UInt = #line
     ) {
+        guard isEnabled(.info) else { return }
         log(Galva.LogEntry(
             level: .info, category: category, message: message(),
             metadata: metadata, error: error, file: file, line: line
@@ -129,6 +146,7 @@ public extension GalvaLogger {
         file: StaticString = #file,
         line: UInt = #line
     ) {
+        guard isEnabled(.notice) else { return }
         log(Galva.LogEntry(
             level: .notice, category: category, message: message(),
             metadata: metadata, error: error, file: file, line: line
@@ -143,6 +161,7 @@ public extension GalvaLogger {
         file: StaticString = #file,
         line: UInt = #line
     ) {
+        guard isEnabled(.warning) else { return }
         log(Galva.LogEntry(
             level: .warning, category: category, message: message(),
             metadata: metadata, error: error, file: file, line: line
@@ -157,6 +176,7 @@ public extension GalvaLogger {
         file: StaticString = #file,
         line: UInt = #line
     ) {
+        guard isEnabled(.error) else { return }
         log(Galva.LogEntry(
             level: .error, category: category, message: message(),
             metadata: metadata, error: error, file: file, line: line
@@ -171,6 +191,7 @@ public extension GalvaLogger {
         file: StaticString = #file,
         line: UInt = #line
     ) {
+        guard isEnabled(.fault) else { return }
         log(Galva.LogEntry(
             level: .fault, category: category, message: message(),
             metadata: metadata, error: error, file: file, line: line
@@ -256,8 +277,15 @@ struct LevelFilterLogger: GalvaLogger {
     let wrapped: any GalvaLogger
 
     func log(_ entry: Galva.LogEntry) {
-        guard minLevel != .off, entry.level >= minLevel else { return }
+        guard isEnabled(entry.level) else { return }
         wrapped.log(entry)
+    }
+
+    /// Composes with the wrapped logger so a Sentry/Datadog logger that
+    /// applies its own filter can still report the effective cutoff.
+    func isEnabled(_ level: Galva.LogLevel) -> Bool {
+        guard minLevel != .off, level >= minLevel else { return false }
+        return wrapped.isEnabled(level)
     }
 }
 
@@ -267,4 +295,5 @@ struct LevelFilterLogger: GalvaLogger {
 /// tests that want to suppress all output.
 struct NoOpLogger: GalvaLogger {
     func log(_ entry: Galva.LogEntry) {}
+    func isEnabled(_ level: Galva.LogLevel) -> Bool { false }
 }

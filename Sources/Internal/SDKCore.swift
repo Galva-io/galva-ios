@@ -131,7 +131,8 @@ final class SDKCore {
                 batchingWindow: .init(
                     timeWindow: SDKConstants.defaultFlushInterval,
                     maxCount: SDKConstants.defaultFlushAtCount
-                )
+                ),
+                maxStoredCount: SDKConstants.defaultMaxStoredMessages
             ),
             name: "default",
             logger: logger

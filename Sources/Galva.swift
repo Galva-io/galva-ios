@@ -578,6 +578,7 @@ public enum Communication {
     }
 }
 
+
 // MARK: - InAppMessage
 
 /// A server-driven in-app message addressed to the current user.

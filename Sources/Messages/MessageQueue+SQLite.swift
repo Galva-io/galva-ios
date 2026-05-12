@@ -171,4 +171,31 @@ actor SQLiteMessageStorage: MessageStorage {
             throw MessageStorageError.storageError("Failed to clear queue")
         }
     }
+
+    @discardableResult
+    func dropOldest(_ count: Int) async throws -> Int {
+        guard count > 0 else { return 0 }
+        // Delete the `count` rows with the smallest created_at. SQLite
+        // supports DELETE-with-LIMIT-via-subquery; this works on all
+        // versions we ship against.
+        let sql = """
+        DELETE FROM messages
+        WHERE id IN (
+            SELECT id FROM messages
+            ORDER BY created_at ASC
+            LIMIT ?
+        );
+        """
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MessageStorageError.storageError("Failed to prepare dropOldest statement")
+        }
+        sqlite3_bind_int(stmt, 1, Int32(count))
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw MessageStorageError.storageError("Failed to execute dropOldest")
+        }
+        return Int(sqlite3_changes(db))
+    }
 }

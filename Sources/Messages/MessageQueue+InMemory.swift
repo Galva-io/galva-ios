@@ -46,4 +46,15 @@ actor InMemoryMessageStorage: MessageStorage {
     func clearQueue() async throws {
         messages.removeAll()
     }
+
+    @discardableResult
+    func dropOldest(_ count: Int) async throws -> Int {
+        guard count > 0, !messages.isEmpty else { return 0 }
+        // Sorted by insertion order in this in-memory implementation.
+        let sorted = messages.sorted { $0.createdAt < $1.createdAt }
+        let drop = min(count, sorted.count)
+        let droppedIds = Set(sorted.prefix(drop).map { $0.message.id })
+        messages.removeAll { droppedIds.contains($0.message.id) }
+        return drop
+    }
 }

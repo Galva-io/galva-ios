@@ -22,6 +22,13 @@ protocol MessageStorage: Actor {
 
     /// Clear all messages from storage
     func clearQueue() async throws
+
+    /// Delete the N oldest messages. Used by the queue to enforce a hard
+    /// cap (`QueueOptions.maxStoredCount`) so an offline device can't grow
+    /// the local store unboundedly. Returns the number of rows actually
+    /// removed (may be less than `count` if the store has fewer messages).
+    @discardableResult
+    func dropOldest(_ count: Int) async throws -> Int
 }
 
 enum MessageStorageError: Error {

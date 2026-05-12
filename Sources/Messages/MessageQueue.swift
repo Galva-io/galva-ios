@@ -42,6 +42,15 @@ class MessageQueue {
         }
 
         var batchingWindow: BatchingWindow?
+
+        /// Hard cap on the number of pending messages the queue will keep
+        /// on disk + in memory. When `emit` would exceed the cap, the
+        /// oldest queued messages are dropped (FIFO eviction). Protects
+        /// the host app from unbounded growth if the device is offline for
+        /// long stretches.
+        ///
+        /// `nil` means no cap. Default in production is set by SDKCore.
+        var maxStoredCount: Int?
     }
 
     enum State {
@@ -98,14 +107,47 @@ class MessageQueue {
         logger: any GalvaLogger
     ) -> any MessageStorage {
         do {
-            let containerPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path
-                ?? NSTemporaryDirectory()
-            let dbFileURL = URL(fileURLWithPath: containerPath).appendingPathComponent("galva-\(name).db")
-            return try SQLiteMessageStorage(dbPath: dbFileURL.path)
+            let url = try defaultStorageURL(name: name)
+            try? markExcludedFromBackup(url)
+            return try SQLiteMessageStorage(dbPath: url.path)
         } catch {
             logger.warning(.storage, "SQLite open failed, falling back to in-memory storage", error: error)
             return InMemoryMessageStorage()
         }
+    }
+
+    /// Galva's on-disk store lives under Application Support, not
+    /// Documents. Two reasons:
+    ///
+    ///   1. Documents is iCloud-Backup'd by default. A growing pending
+    ///      queue would balloon the user's backup payload — pure SDK
+    ///      overhead the host app gets blamed for.
+    ///   2. Documents is user-visible in the Files app (when the host
+    ///      app opts in). SDK state shouldn't show up there.
+    ///
+    /// Application Support is the documented place for app-private state
+    /// that should persist. We additionally set `isExcludedFromBackup` on
+    /// the parent directory as a belt-and-suspenders measure.
+    private nonisolated static func defaultStorageURL(name: String) throws -> URL {
+        let fm = FileManager.default
+        let appSupport = try fm.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let dir = appSupport.appendingPathComponent("Galva", isDirectory: true)
+        if !fm.fileExists(atPath: dir.path) {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir.appendingPathComponent("galva-\(name).db")
+    }
+
+    private nonisolated static func markExcludedFromBackup(_ url: URL) throws {
+        var dir = url.deletingLastPathComponent()
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try dir.setResourceValues(values)
     }
 
     func emit(_ message: Message) async {
@@ -117,10 +159,37 @@ class MessageQueue {
             // Store message sequentially to guarantee FIFO order
             try await storage.storeMessage(message)
 
+            // Enforce hard cap (FIFO eviction) so an offline device can't
+            // grow the local store without bound.
+            await enforceSizeCap()
+
             // Trigger processing based on options
             await triggerProcessingIfNeeded()
         } catch {
             logger.error(.queue, "failed to store message", error: error)
+        }
+    }
+
+    /// If the stored count exceeds `maxStoredCount`, drop the oldest
+    /// messages until it doesn't. Logged at warning level because the
+    /// developer almost always wants to know this happened — it means
+    /// either the cap is too low for their workload, or the device has
+    /// been offline long enough that upload can't keep up.
+    private func enforceSizeCap() async {
+        guard let cap = options?.maxStoredCount, cap > 0 else { return }
+        do {
+            let current = try await storage.getQueueSize()
+            guard current > cap else { return }
+            let overflow = current - cap
+            let dropped = try await storage.dropOldest(overflow)
+            logger.warning(.queue, "queue size cap exceeded — dropped oldest messages",
+                           metadata: [
+                               "cap": String(cap),
+                               "dropped": String(dropped),
+                               "remaining": String(max(0, current - dropped)),
+                           ])
+        } catch {
+            logger.error(.queue, "failed to enforce size cap", error: error)
         }
     }
 

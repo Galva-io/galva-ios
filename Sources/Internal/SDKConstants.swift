@@ -18,7 +18,7 @@ enum SDKConstants {
     static let sdkVersionHeader: String = "\(libraryName)-\(version)"
 
     /// Default Galva API base URL.
-    static let defaultBaseURL = URL(string: "https://api.galva.dev")!
+    static let defaultBaseURL = URL(string: "https://api.galva.dev")! // galva-lint:disable reason="hardcoded build-time constant; URL parser cannot fail on this literal"
 
     /// Batch endpoint path.
     static let batchCollectPath = "/identities/batchCollect"
@@ -29,4 +29,10 @@ enum SDKConstants {
     /// Default batching window before forced flush.
     static let defaultFlushInterval: TimeInterval = 5
     static let defaultFlushAtCount: Int = 50
+
+    /// Hard cap on pending messages persisted locally. Protects the host
+    /// app from unbounded storage growth when the device is offline for
+    /// long stretches. Set conservatively — at ~1 KB per message this is
+    /// ~10 MB of disk worst case, matching the design doc target.
+    static let defaultMaxStoredMessages: Int = 10_000
 }
