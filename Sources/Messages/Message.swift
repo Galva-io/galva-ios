@@ -2,235 +2,243 @@
 //  Message.swift
 //  Galva
 //
-//  Created by Peter Vu on 11/9/25.
+//  Wire-format message for POST /identities/batchCollect.
+//
+//  Shape (matches OpenAPI exactly — flat object, type-discriminated):
+//
+//      {
+//        "messageId":   "<uuid v7>",
+//        "anonymousId": "...",
+//        "endUserId":   "...",       // optional
+//        "timestamp":   "2026-05-12T…Z",
+//        "type":        "track" | "identify" | "alias" | "create-…" | …,
+//        "context":     { … },        // optional, server-enriched
+//        …type-specific fields…
+//      }
+//
+//  The Swift representation uses an enum (`Body`) with associated values for
+//  type-safe construction, and a custom Codable to flatten / un-flatten the
+//  wire shape. New message variants go in `Body` + `Body.WireType`.
 //
 
 import Foundation
 
-extension Message {
-    struct TraitUpdateOperation: Codable {
-        enum OperationType: String, Codable {
-            case set = "$set"
-            case setOnce = "$setOnce"
-            case setOnInsert = "$setOnInsert"
-            case unset = "$unset"
-            case rename = "$rename"
-            case currentDate = "$currentDate"
-            case increment = "$inc"
-            case multiply = "$mul"
-            case minimum = "$min"
-            case maximum = "$max"
-            case add = "$add"
+public struct Message: Sendable, Hashable, Codable {
+    /// Client-generated UUID v7 (time-ordered). Becomes `messageId` on the wire.
+    public let messageId: UUID
+    public let anonymousId: String?
+    public let endUserId: String?
+    public let timestamp: Date
+    public let context: MessageContext?
+    public let body: Body
+
+    public init(
+        messageId: UUID = UUIDv7.next(),
+        anonymousId: String?,
+        endUserId: String?,
+        timestamp: Date = Date(),
+        context: MessageContext?,
+        body: Body
+    ) {
+        self.messageId = messageId
+        self.anonymousId = anonymousId
+        self.endUserId = endUserId
+        self.timestamp = timestamp
+        self.context = context
+        self.body = body
+    }
+
+    /// Stable per-record id (string form of `messageId`) used by storage layer.
+    public var id: String { messageId.uuidString }
+
+    // MARK: - Body
+
+    public enum Body: Sendable, Hashable {
+        case identify(traits: [String: AnyJSONValue]?)
+        case alias(previousId: String, targetId: String)
+        case track(event: String,
+                   properties: [String: AnyJSONValue]?,
+                   sourceType: TrackSource?,
+                   sourceId: String?)
+        case createCommunicationEndpoint(CommunicationEndpoint)
+        case deleteCommunicationEndpoint(CommunicationEndpoint)
+        case setCommunicationPreference(channelType: CommunicationEndpoint.ChannelType,
+                                        disabled: Bool?,
+                                        categories: [String: Bool]?)
+
+        public enum TrackSource: String, Sendable, Codable, Hashable {
+            case profile
+            case product
+            case plan
+            case productBilling = "product-billing"
+            case entitlement
         }
 
-        let operation: OperationType
-        let value: RevFlowPrimitive?
+        public var wireType: WireType {
+            switch self {
+            case .identify:                     return .identify
+            case .alias:                        return .alias
+            case .track:                        return .track
+            case .createCommunicationEndpoint:  return .createCommunicationEndpoint
+            case .deleteCommunicationEndpoint:  return .deleteCommunicationEndpoint
+            case .setCommunicationPreference:   return .setCommunicationPreference
+            }
+        }
+
+        public enum WireType: String, Sendable, Codable, Hashable {
+            case identify
+            case alias
+            case track
+            case createCommunicationEndpoint = "create-communication-endpoint"
+            case deleteCommunicationEndpoint = "delete-communication-endpoint"
+            case setCommunicationPreference  = "set-communication-preference"
+        }
+    }
+
+    // MARK: - Codable (flat wire shape)
+
+    private enum CodingKeys: String, CodingKey {
+        case messageId, anonymousId, endUserId, timestamp, type, context
+        // identify
+        case traits
+        // alias
+        case previousId, targetId
+        // track
+        case event, properties, sourceType, sourceId
+        // create/delete-communication-endpoint
+        case endpoint
+        // set-communication-preference
+        case channelType, disabled, categories
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        messageId = try c.decode(UUID.self, forKey: .messageId)
+        anonymousId = try c.decodeIfPresent(String.self, forKey: .anonymousId)
+        endUserId = try c.decodeIfPresent(String.self, forKey: .endUserId)
+        timestamp = try c.decode(Date.self, forKey: .timestamp)
+        context = try c.decodeIfPresent(MessageContext.self, forKey: .context)
+
+        let type = try c.decode(Body.WireType.self, forKey: .type)
+        switch type {
+        case .identify:
+            body = .identify(
+                traits: try c.decodeIfPresent([String: AnyJSONValue].self, forKey: .traits)
+            )
+        case .alias:
+            body = .alias(
+                previousId: try c.decode(String.self, forKey: .previousId),
+                targetId: try c.decode(String.self, forKey: .targetId)
+            )
+        case .track:
+            body = .track(
+                event: try c.decode(String.self, forKey: .event),
+                properties: try c.decodeIfPresent([String: AnyJSONValue].self, forKey: .properties),
+                sourceType: try c.decodeIfPresent(Body.TrackSource.self, forKey: .sourceType),
+                sourceId: try c.decodeIfPresent(String.self, forKey: .sourceId)
+            )
+        case .createCommunicationEndpoint:
+            body = .createCommunicationEndpoint(
+                try c.decode(CommunicationEndpoint.self, forKey: .endpoint)
+            )
+        case .deleteCommunicationEndpoint:
+            body = .deleteCommunicationEndpoint(
+                try c.decode(CommunicationEndpoint.self, forKey: .endpoint)
+            )
+        case .setCommunicationPreference:
+            body = .setCommunicationPreference(
+                channelType: try c.decode(CommunicationEndpoint.ChannelType.self, forKey: .channelType),
+                disabled: try c.decodeIfPresent(Bool.self, forKey: .disabled),
+                categories: try c.decodeIfPresent([String: Bool].self, forKey: .categories)
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(messageId, forKey: .messageId)
+        try c.encodeIfPresent(anonymousId, forKey: .anonymousId)
+        try c.encodeIfPresent(endUserId, forKey: .endUserId)
+        try c.encode(timestamp, forKey: .timestamp)
+        try c.encode(body.wireType, forKey: .type)
+        try c.encodeIfPresent(context, forKey: .context)
+
+        switch body {
+        case .identify(let traits):
+            try c.encodeIfPresent(traits, forKey: .traits)
+        case .alias(let previousId, let targetId):
+            try c.encode(previousId, forKey: .previousId)
+            try c.encode(targetId, forKey: .targetId)
+        case .track(let event, let properties, let sourceType, let sourceId):
+            try c.encode(event, forKey: .event)
+            try c.encodeIfPresent(properties, forKey: .properties)
+            try c.encodeIfPresent(sourceType, forKey: .sourceType)
+            try c.encodeIfPresent(sourceId, forKey: .sourceId)
+        case .createCommunicationEndpoint(let ep),
+             .deleteCommunicationEndpoint(let ep):
+            try c.encode(ep, forKey: .endpoint)
+        case .setCommunicationPreference(let channelType, let disabled, let categories):
+            try c.encode(channelType, forKey: .channelType)
+            try c.encodeIfPresent(disabled, forKey: .disabled)
+            try c.encodeIfPresent(categories, forKey: .categories)
+        }
     }
 }
 
-struct Message: Codable {
-    let id: String
-    let type: MessageType
-    var userId: String?
-    let anonymousId: String?
-    let timestamp: Date
-    let apiVersion: String
-    let event: String?
-    let properties: [String: RevFlowPrimitive]?
-    let traits: [String: TraitUpdateOperation]?
-    let context: Context
+// MARK: - Batch envelope
 
-    static func track(
-        event: String,
-        userId: String?,
-        anonymousId: String?,
-        timestamp: Date = Date(),
-        apiVersion: String,
-        properties: [String: Any]?,
-        context: Context
-    ) -> Self {
-        return .init(
-            id: UUID().uuidString,
-            type: .track,
-            userId: userId,
-            anonymousId: anonymousId,
-            timestamp: timestamp,
-            apiVersion: apiVersion,
-            event: event,
-            properties: properties,
-            traits: nil,
-            context: context
-        )
-    }
+struct BatchCollectRequest: Sendable, Codable {
+    let messages: [Message]
+    let sentAt: Date
+}
 
-    static func identify(
-        userId: String,
-        anonymousId: String,
-        timestamp: Date = Date(),
-        apiVersion: String,
-        traits: [String: TraitUpdateOperation]?,
-        context: Context
-    ) -> Self {
-        return .init(
-            id: UUID().uuidString,
-            type: .identify,
-            userId: userId,
-            anonymousId: anonymousId,
-            timestamp: timestamp,
-            apiVersion: apiVersion,
-            event: nil,
-            properties: nil,
-            traits: traits,
-            context: context
-        )
-    }
+// MARK: - Legacy compatibility
 
-    init(
-        id: String,
-        type: MessageType,
-        userId: String?,
-        anonymousId: String?,
-        timestamp: Date,
-        apiVersion: String,
-        event: String?,
-        properties: [String: Any]?,
-        traits: [String: TraitUpdateOperation]?,
-        context: Context
-    ) {
-        self.id = id
-        self.type = type
-        self.userId = userId
-        self.anonymousId = anonymousId
-        self.timestamp = timestamp
-        self.apiVersion = apiVersion
-        self.event = event
-
-        if let properties, !properties.isEmpty {
-            self.properties = properties.compactMapValues { RevFlowPrimitive(rawValue: $0) }
-        } else {
-            self.properties = nil
-        }
-
-        self.context = context
-        self.traits = traits
-    }
-
-    enum MessageType: String, Codable {
+public extension Message {
+    /// Coarse type discriminator preserved for compatibility with older test
+    /// code. New code should switch on `body` directly.
+    enum MessageType: Equatable, Sendable {
         case track
         case identify
         case alias
+        case createCommunicationEndpoint
+        case deleteCommunicationEndpoint
+        case setCommunicationPreference
     }
 
-    struct Context: Codable {
-        var app: App
-        var device: Device
-        var os: OS
-        var locale: String
-        var timezone: String
-        var library: Library
-        var extra: [String: RevFlowPrimitive]?
-    }
-
-    struct App: Codable {
-        var name: String
-        var version: String
-        var build: String
-        var namespace: String
-    }
-
-    struct Device: Codable {
-        var id: String
-        var model: String
-        var name: String
-        var manufacturer: String
-        var type: String
-    }
-
-    struct OS: Codable {
-        var name: String
-        var version: String
-    }
-
-    struct Library: Codable {
-        var name: String
-        var version: String
-    }
-
-    struct Locale: Codable {
-        var language: String?
-    }
-}
-
-struct RevFlowPrimitive: Codable {
-    private var intValue: Int?
-    private var doubleValue: Double?
-    private var stringValue: String?
-    private var boolValue: Bool?
-
-    init?(rawValue: Any) {
-        if let stringValue = rawValue as? String {
-            self.stringValue = stringValue
-        } else if let intValue = rawValue as? Int {
-            self.intValue = intValue
-        } else if let doubleValue = rawValue as? Double {
-            self.doubleValue = doubleValue
-        } else if let boolValue = rawValue as? Bool {
-            self.boolValue = boolValue
-        } else {
-            return nil
+    var type: MessageType {
+        switch body {
+        case .track:                         return .track
+        case .identify:                      return .identify
+        case .alias:                         return .alias
+        case .createCommunicationEndpoint:   return .createCommunicationEndpoint
+        case .deleteCommunicationEndpoint:   return .deleteCommunicationEndpoint
+        case .setCommunicationPreference:    return .setCommunicationPreference
         }
     }
 
-    init(intValue: Int) {
-        self.intValue = intValue
+    /// Legacy alias for `endUserId` used by older test code.
+    var userId: String? { endUserId }
+
+    /// Convenience accessor for the event name of a `.track` body.
+    var event: String? {
+        if case .track(let event, _, _, _) = body { return event }
+        return nil
     }
 
-    init(doubleValue: Double) {
-        self.doubleValue = doubleValue
-    }
-
-    init(stringValue: String) {
-        self.stringValue = stringValue
-    }
-
-    init(boolValue: Bool) {
-        self.boolValue = boolValue
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        if let intValue = intValue {
-            try container.encode(intValue)
-        } else if let doubleValue = doubleValue {
-            try container.encode(doubleValue)
-        } else if let stringValue = stringValue {
-            try container.encode(stringValue)
-        } else if let boolValue = boolValue {
-            try container.encode(boolValue)
-        } else {
-            throw EncodingError.invalidValue(
-                self,
-                EncodingError.Context(
-                    codingPath: encoder.codingPath, debugDescription: "Invalid RevFlowPrimitive"
-                )
-            )
+    /// Convenience accessor for properties (`.track`) or traits (`.identify`).
+    /// Older tests treat both as a single dictionary.
+    var properties: [String: AnyJSONValue]? {
+        switch body {
+        case .track(_, let props, _, _): return props
+        case .identify(let traits):      return traits
+        default:                         return nil
         }
     }
 
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let intValue = try? container.decode(Int.self) {
-            self.intValue = intValue
-        } else if let doubleValue = try? container.decode(Double.self) {
-            self.doubleValue = doubleValue
-        } else if let stringValue = try? container.decode(String.self) {
-            self.stringValue = stringValue
-        } else if let boolValue = try? container.decode(Bool.self) {
-            self.boolValue = boolValue
-        } else {
-            throw DecodingError.dataCorruptedError(
-                in: container, debugDescription: "Invalid RevFlowPrimitive"
-            )
-        }
+    /// Convenience accessor for the traits dictionary of an `.identify` body.
+    var traits: [String: AnyJSONValue]? {
+        if case .identify(let traits) = body { return traits }
+        return nil
     }
 }

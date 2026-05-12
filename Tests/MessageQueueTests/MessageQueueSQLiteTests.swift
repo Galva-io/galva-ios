@@ -189,16 +189,15 @@ class MessageQueueSQLiteTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(fetched.type, .identify)
         XCTAssertEqual(fetched.userId, "test-user-id")
         XCTAssertEqual(fetched.anonymousId, "test-anon-id")
-        XCTAssertEqual(fetched.event, "identify_event")
-        XCTAssertEqual(fetched.apiVersion, "1.0")
+        // event/apiVersion don't apply to .identify messages in the new model.
 
         // Properties should be nil as we didn't set any
         XCTAssertNil(fetched.properties, "Properties should be nil when not set")
 
-        // Verify context is preserved
-        XCTAssertEqual(fetched.context.app.name, "TestApp")
-        XCTAssertEqual(fetched.context.device.id, "test-device-id")
-        XCTAssertEqual(fetched.context.os.name, "iOS")
+        // Verify context is preserved (now optional chains)
+        XCTAssertEqual(fetched.context?.app?.name, "TestApp")
+        XCTAssertEqual(fetched.context?.device?.id, "test-device-id")
+        XCTAssertEqual(fetched.context?.os?.name, "iOS")
     }
 
     func testOptionalFieldsHandling() async throws {

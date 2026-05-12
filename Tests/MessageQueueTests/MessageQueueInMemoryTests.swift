@@ -183,7 +183,7 @@ class MessageQueueInMemoryTests: XCTestCase, @unchecked Sendable {
 
         // In memory storage should preserve all fields exactly
         XCTAssertEqual(fetched.timestamp, testMessage.timestamp)
-        XCTAssertEqual(fetched.context.app.name, testMessage.context.app.name)
+        XCTAssertEqual(fetched.context?.app?.name, testMessage.context?.app?.name)
     }
 
     func testConcurrentOperations() async throws {

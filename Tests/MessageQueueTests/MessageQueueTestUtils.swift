@@ -2,7 +2,7 @@
 //  MessageQueueTestUtils.swift
 //  GalvaTests
 //
-//  Created by Claude Code on 11/9/25.
+//  Updated for the OpenAPI-aligned Message model.
 //
 
 import Dispatch
@@ -23,7 +23,6 @@ class MockMessageConsumer: MessageConsumer, @unchecked Sendable {
     private var expectedBatches = 0
     private var receivedBatches = 0
 
-    // Unique identifier to avoid cross-test contamination
     private let id = UUID().uuidString
 
     init(onConsume: (([Message]) async throws -> Void)? = nil) {
@@ -92,69 +91,86 @@ class MockMessageConsumer: MessageConsumer, @unchecked Sendable {
         expectedBatches = 0
         receivedBatches = 0
         consumeCallbacks.removeAll()
-        // Don't reset the main callback as it might be set in init
     }
 }
 
 extension Message {
+    /// Builds a `track` Message for tests. If `id` is provided and parses as a
+    /// UUID, it's used as `messageId`; otherwise a UUIDv7 is generated and the
+    /// seed is ignored. Use `createTestMessageWithMappedId` for deterministic
+    /// non-UUID string seeds.
     static func createTestMessage(
         id: String? = nil,
-        type: MessageType = .track,
+        type: Message.MessageType = .track,
         userId: String? = nil,
         anonymousId: String? = nil,
         event: String? = "test_event",
         properties: [String: Any]? = nil
     ) -> Message {
-        let messageId = id ?? UUID().uuidString
-        let now = Date()
+        let messageId: UUID
+        if let id, let parsed = UUID(uuidString: id) {
+            messageId = parsed
+        } else {
+            messageId = UUIDv7.next()
+        }
 
-        let context = Message.Context(
-            app: Message.App(
-                name: "TestApp",
-                version: "1.0.0",
-                build: "1",
-                namespace: "com.test.app"
-            ),
-            device: Message.Device(
-                id: "test-device-id",
-                model: "iPhone",
-                name: "Test iPhone",
-                manufacturer: "Apple",
-                type: "mobile"
-            ),
-            os: Message.OS(
-                name: "iOS",
-                version: "17.0"
-            ),
-            locale: "en",
+        // Coerce [String: Any] → [String: AnyJSONValue] for the wire model.
+        let coercedProperties: [String: AnyJSONValue]? = properties.map { dict in
+            dict.compactMapValues { value -> AnyJSONValue? in
+                switch value {
+                case let v as Bool:    return .bool(v)
+                case let v as Int:     return .int(Int64(v))
+                case let v as Int64:   return .int(v)
+                case let v as Double:  return .double(v)
+                case let v as String:  return .string(v)
+                default:               return .string(String(describing: value))
+                }
+            }
+        }
+
+        let context = MessageContext(
+            app: .init(name: "TestApp", version: "1.0.0", build: "1", namespace: "com.test.app"),
+            device: .init(id: "test-device-id", advertisingId: nil, adTrackingEnabled: nil,
+                          manufacturer: "Apple", model: "iPhone", name: "Test iPhone",
+                          type: "phone", token: nil, version: nil),
+            ip: nil,
+            library: .init(name: "swift", version: "1.0.0"),
+            locale: "en_US",
+            network: nil,
+            os: .init(name: "iOS", version: "17.0"),
+            page: nil,
+            referrer: nil,
+            screen: nil,
             timezone: "America/New_York",
-            library: Message.Library(
-                name: "Galva",
-                version: "1.0.0"
-            ),
-            extra: nil
+            userAgent: nil,
+            userAgentData: nil
         )
 
+        let body: Message.Body
+        switch type {
+        case .identify:
+            body = .identify(traits: coercedProperties)
+        case .alias:
+            body = .alias(previousId: "anon_prev", targetId: userId ?? "target")
+        case .track, .createCommunicationEndpoint, .deleteCommunicationEndpoint, .setCommunicationPreference:
+            body = .track(event: event ?? "test_event", properties: coercedProperties, sourceType: nil, sourceId: nil)
+        }
+
         return Message(
-            id: messageId,
-            type: type,
-            userId: userId,
+            messageId: messageId,
             anonymousId: anonymousId,
-            timestamp: now,
-            apiVersion: "1.0",
-            event: event,
-            properties: properties,
-            traits: nil,
-            context: context
+            endUserId: userId,
+            timestamp: Date(),
+            context: context,
+            body: body
         )
     }
 
-    static func createTestMessages(count: Int, idPrefix: String = "msg") -> [Message] {
-        return (0 ..< count).map { index in
-            createTestMessage(
-                id: "\(idPrefix)_\(String(format: "%03d", index))",
-                event: "test_event_\(index)"
-            )
+    /// Helper for ordering tests — generates `count` messages and returns them
+    /// alongside their generated IDs. Callers should assert against `.map(\.id)`.
+    static func createTestMessages(count: Int, idPrefix _: String = "msg") -> [Message] {
+        (0 ..< count).map { idx in
+            createTestMessage(event: "test_event_\(idx)")
         }
     }
 }

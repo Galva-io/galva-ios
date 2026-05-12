@@ -2,11 +2,33 @@
 //  MessageQueue.swift
 //  Galva
 //
-//  Created by Peter Vu on 11/9/25.
+//  Persistent FIFO message queue with batching, single-consumer dispatch,
+//  and exponential backoff on failure.
+//
+//  Storage: SQLite via SQLiteMessageStorage (falls back to InMemory on
+//  filesystem failure). Each `emit` is durable before returning — events
+//  survive crashes and kills.
+//
+//  Batching:
+//    • Time-based: every `timeWindow` seconds the queue drains.
+//    • Size-based: when queue size hits `maxCount` it drains immediately.
+//    • Per-batch cap: server allows max 100 messages per request.
+//
+//  Failure handling:
+//    • Consumer throws → batch retained, exponential backoff (jittered),
+//      timer resumes processing.
+//    • Storage fails → same backoff.
+//    • Consumer returns successfully → batch deleted from storage.
 //
 
 import Foundation
 
+/// Sink for batches drained from the queue. Implemented by `UploadConsumer`
+/// to bridge into the HTTP uploader.
+///
+/// Throwing from `consume` signals a retryable failure — the queue keeps
+/// the batch and retries after backoff. Returning normally signals "handled"
+/// (success or permanent-drop), and the batch is deleted.
 protocol MessageConsumer: Sendable {
     func consume(messages: [Message]) async throws
 }
@@ -31,17 +53,25 @@ class MessageQueue {
     private let storage: any MessageStorage
     private let consumer: any MessageConsumer
     private let options: QueueOptions?
+    private let logger: any GalvaLogger
     private var state: State = .idle
     private var processingTask: Task<Void, Never>?
+    private var consecutiveFailures: Int = 0
 
-    init(consumer: any MessageConsumer, options: QueueOptions? = nil, name: String? = nil) {
+    init(
+        consumer: any MessageConsumer,
+        options: QueueOptions? = nil,
+        name: String? = nil,
+        logger: any GalvaLogger = GalvaConsoleLogger()
+    ) {
         self.consumer = consumer
         self.options = options
+        self.logger = logger
         let queueName = name ?? "__DEFAULT"
 
         do {
             let containerPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? NSTemporaryDirectory()
-            let dbFileURL = URL(fileURLWithPath: containerPath).appendingPathExtension("\(queueName).db")
+            let dbFileURL = URL(fileURLWithPath: containerPath).appendingPathComponent("galva-\(queueName).db")
             storage = try SQLiteMessageStorage(dbPath: dbFileURL.path)
         } catch {
             storage = InMemoryMessageStorage()
@@ -56,7 +86,7 @@ class MessageQueue {
             // Trigger processing based on options
             await triggerProcessingIfNeeded()
         } catch {
-            print("ERROR: Failed to store message: \(error)")
+            logger.log(.error, message: "Failed to store message", error: error)
         }
     }
 
@@ -99,7 +129,7 @@ class MessageQueue {
                     await processAllMessages()
                 }
             } catch {
-                print("Failed to check queue size: \(error)")
+                logger.log(.warning, message: "Failed to check queue size", error: error)
                 // Continue anyway - processAllMessages will handle errors
                 await processAllMessages()
             }
@@ -131,10 +161,13 @@ class MessageQueue {
 
         while state == .processing {
             do {
-                let batchSize = options?.batchingWindow?.maxCount ?? 100
+                // Cap batch size at server limit (max 100 per spec).
+                let configured = options?.batchingWindow?.maxCount ?? SDKConstants.maxBatchSize
+                let batchSize = min(configured, SDKConstants.maxBatchSize)
                 let messages = try await storage.fetchMessages(limit: batchSize)
 
                 if messages.isEmpty {
+                    consecutiveFailures = 0
                     break // No more messages
                 }
 
@@ -144,18 +177,22 @@ class MessageQueue {
 
                     // Remove processed messages only on success
                     try await storage.deleteMessages(messages.map { $0.id })
+                    consecutiveFailures = 0
                 } catch {
-                    print("Failed to process messages: \(error)")
-                    // Don't delete messages on failure - they remain in queue for retry
-                    // Wait a bit before next attempt to avoid tight loop
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 100ms backoff
-                    break // Stop processing this batch, but continue later
+                    logger.log(.warning, message: "Failed to process messages", error: error)
+                    // Don't delete messages on failure - they remain in queue for retry.
+                    // Exponential backoff with jitter to avoid hammering on outage.
+                    consecutiveFailures += 1
+                    let delay = Backoff.delay(forAttempt: consecutiveFailures)
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    break // Stop processing this batch, batch timer will resume.
                 }
 
             } catch {
-                print("Failed to fetch messages: \(error)")
-                // Storage error - wait longer before retry
-                try? await Task.sleep(nanoseconds: 500_000_000) // 500ms backoff
+                logger.log(.error, message: "Failed to fetch messages", error: error)
+                consecutiveFailures += 1
+                let delay = Backoff.delay(forAttempt: consecutiveFailures)
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 break
             }
         }
