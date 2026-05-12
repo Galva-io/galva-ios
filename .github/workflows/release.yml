@@ -32,7 +32,7 @@ permissions:
 jobs:
   release:
     name: Build + publish XCFramework
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       # ---- Resolve the tag we're releasing ----------------------------
       # Triggered by a tag push: GITHUB_REF is `refs/tags/v1.2.3`.
@@ -53,7 +53,9 @@ jobs:
           ref: ${{ steps.tag.outputs.tag }}
 
       - name: Select Xcode
-        run: sudo xcode-select -switch /Applications/Xcode_15.4.app
+        # Xcode 16.2 ships Swift 6.0 — matches Package.swift's floor.
+        # Bump in lockstep when we raise the Swift floor.
+        run: sudo xcode-select -switch /Applications/Xcode_16.2.app
 
       # ---- Re-run gates against the tagged commit ---------------------
       # Cheap insurance: catches the rare case where main passed CI but

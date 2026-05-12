@@ -23,7 +23,7 @@ concurrency:
 jobs:
   lint:
     name: Lint
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Run scripts/lint.sh
@@ -31,15 +31,16 @@ jobs:
 
   test:
     name: Test (swift test)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
       # macOS runners ship multiple Xcodes; pick a known-good one so
-      # builds are reproducible. Bump when GitHub Actions retires this
-      # image.
+      # builds are reproducible. Xcode 16.2 ships Swift 6.0 — matches
+      # the minimum declared in Package.swift. Bump in lockstep when
+      # we raise the Swift floor.
       - name: Select Xcode
-        run: sudo xcode-select -switch /Applications/Xcode_15.4.app
+        run: sudo xcode-select -switch /Applications/Xcode_16.2.app
 
       - name: Cache SPM build artefacts
         uses: actions/cache@v4
