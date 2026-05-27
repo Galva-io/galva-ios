@@ -22,6 +22,12 @@
 //
 
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(WebKit)
+import WebKit
+#endif
 
 @GalvaActor
 final class SDKCore {
@@ -52,6 +58,42 @@ final class SDKCore {
     var queue: MessageQueue?
     private var uploader: Uploader?
     var contextProvider: ContextProvider?
+
+    /// API client used for non-batch RPC calls (initialize, list/resolve
+    /// communications, bundle download). Independent of the batch
+    /// `Uploader` so the two surfaces evolve separately.
+    var apiClient: APIClient?
+
+    /// SDK initialization: caches the /sdk/initialize response and exposes
+    /// the resolved data (webview versions, batch config, products) to the
+    /// in-app message pipeline.
+    var initializationManager: InitializationManager?
+
+    /// In-app message manager — polling, payload resolution, stream
+    /// fan-out. `nil` before configure() lands.
+    var inAppMessageManager: InAppMessageManager?
+
+    /// Broadcast hub for the `InAppMessages.messages` AsyncStream. Held
+    /// here because `InAppMessages.messages` (a `static var`) needs a
+    /// stable per-SDK reference across calls.
+    let inAppMessageStream = InAppMessageStream()
+
+    /// On-disk cache for WebView HTML bundles.
+    var bundleCache: WebViewBundleCache?
+
+    /// Foreground lifecycle observer driving the in-app message poller.
+    /// Held to keep the registration alive across the SDK's lifetime.
+    /// `nonisolated(unsafe)` because `AppLifecycleObserver` is `@MainActor`
+    /// and we only ever assign / read it through GalvaActor code paths —
+    /// the box is never mutated concurrently.
+    nonisolated(unsafe) var lifecycleObserver: AppLifecycleObserver?
+
+    #if canImport(UIKit) && canImport(WebKit)
+    /// WebView overlay presenter. Created lazily on first show(in:).
+    /// `nonisolated(unsafe)` for the same reason as the lifecycle observer:
+    /// `@MainActor`-isolated but stored from `@GalvaActor` configure().
+    nonisolated(unsafe) var presenter: InAppMessagePresenter?
+    #endif
 
     /// The configured "sink" — user-supplied or the default OSLog logger.
     /// Stored separately from `logger` because we need to re-wrap it in a
@@ -139,6 +181,10 @@ final class SDKCore {
         )
         self.queue = queue
 
+        // Build the in-app messaging stack. Failures here log + skip — we
+        // never block configure() on optional features.
+        bootstrapInAppMessaging(apiKey: apiKey, identity: identity, logger: logger)
+
         await queue.startRunloop()
         configured = true
         logger.info(.configuration, "SDK configured", metadata: [
@@ -150,6 +196,83 @@ final class SDKCore {
         // current anonymous user so the server has them before any explicit
         // identify() call.
         await identify(userId: nil, appAccountToken: nil, traits: nil)
+
+        // Kick off async /sdk/initialize refresh. Cached values are already
+        // surfaced (synchronously) inside bootstrapInAppMessaging — this
+        // pulls the freshest data into the cache for next launch.
+        if let initManager = initializationManager {
+            Task { @GalvaActor in
+                await initManager.refresh()
+            }
+        }
+    }
+
+    /// Wire up the InAppMessaging pipeline (API client, initialization
+    /// cache, bundle cache, manager, lifecycle observer). Best-effort:
+    /// any failure here only disables in-app messages; the core tracking
+    /// pipeline keeps working.
+    private func bootstrapInAppMessaging(
+        apiKey: String,
+        identity: IdentityStore,
+        logger: any GalvaLogger
+    ) {
+        let apiClient = APIClient(
+            baseURL: SDKConstants.defaultBaseURL,
+            apiKey: apiKey,
+            session: .shared,
+            logger: logger
+        )
+        self.apiClient = apiClient
+
+        // Initialization cache — non-fatal if the disk path can't be made.
+        let initCache: InitializationCache?
+        do {
+            initCache = try InitializationCache()
+        } catch {
+            logger.warning(.configuration, "init cache disabled (no disk)", error: error)
+            initCache = nil
+        }
+        let initManager = InitializationManager(
+            client: apiClient,
+            cache: initCache,
+            logger: logger
+        )
+        initManager.loadCached() // synchronous; primes `current`
+        self.initializationManager = initManager
+
+        // Bundle cache — non-fatal if Caches/ isn't writable.
+        let bundleCache: WebViewBundleCache?
+        do {
+            bundleCache = try WebViewBundleCache(client: apiClient, logger: logger)
+        } catch {
+            logger.warning(.configuration, "bundle cache disabled (no disk)", error: error)
+            bundleCache = nil
+        }
+        self.bundleCache = bundleCache
+
+        // Manager — only constructible if both bundleCache and initManager
+        // came up. Without them in-app messaging cannot function.
+        guard let bundleCache else { return }
+        let manager = InAppMessageManager(
+            client: apiClient,
+            identity: identity,
+            stream: inAppMessageStream,
+            bundleCache: bundleCache,
+            initialization: initManager,
+            logger: logger
+        )
+        self.inAppMessageManager = manager
+
+        // Foreground observer drives polling on app open + return.
+        Task { @MainActor [weak self] in
+            let observer = AppLifecycleObserver { [weak self] in
+                Task { @GalvaActor in
+                    await self?.inAppMessageManager?.poll()
+                }
+            }
+            self?.lifecycleObserver = observer
+            observer.start()
+        }
     }
 
     /// Install a custom logger after configure. The level filter set at
@@ -300,6 +423,41 @@ final class SDKCore {
         )
         await queue.emit(msg)
     }
+
+    // MARK: In-app messages
+
+    #if canImport(UIKit) && canImport(WebKit)
+    /// Drive the WebView overlay for a single message. Throws if the
+    /// SDK is not configured or the bundle / payload can't be resolved.
+    func showInAppMessage(_ message: InAppMessages.Message, in scene: UIWindowScene) async throws {
+        guard configured,
+              let manager = inAppMessageManager,
+              let bundleCache,
+              let identity else {
+            throw InAppMessages.Error.notConfigured
+        }
+        let snapshotLogger = logger
+        // Hop to MainActor to construct / reuse the presenter. The
+        // presenter then runs its async show() on the main actor.
+        try await MainActor.run {
+            // Reuse the existing presenter if one is already alive so we
+            // dedupe overlays on duplicate show() calls.
+            let presenter: InAppMessagePresenter
+            if let existing = self.presenter {
+                presenter = existing
+            } else {
+                presenter = InAppMessagePresenter(
+                    messageManager: manager,
+                    identity: identity,
+                    bundleCache: bundleCache,
+                    logger: snapshotLogger
+                )
+                self.presenter = presenter
+            }
+            return presenter
+        }.show(message: message, in: scene)
+    }
+    #endif
 
     func setPreference(
         channel: CommunicationEndpoint.ChannelType,

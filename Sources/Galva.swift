@@ -38,6 +38,9 @@
 //
 
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Galva namespace
 
@@ -586,41 +589,66 @@ public enum Communication {
 
 // MARK: - InAppMessages
 
-/// In-app message streams.
+/// In-app message delivery.
 ///
-/// > Note: Server-driven streaming lands in v2. APIs are present so call
-/// > sites can be written today, but emit no values yet.
+/// Galva fetches pending in-app messages from active workflows on every
+/// app foreground event (cold start + return from background). The
+/// highest-priority message — resolved server-side from the workflow
+/// waterfall — is published on the `messages` stream.
+///
+/// To render a message, await it on the stream and call `show(in:)` on
+/// it. The SDK presents a sheet hosting a `WKWebView` that loads the
+/// versioned HTML bundle. Bundle download, on-disk cache, identity, and
+/// the native bridge (purchase prompt, dismissal, deep link, manage-
+/// subscription URL) are all handled internally.
+///
+/// Example:
+///
+///     Task {
+///         for await message in InAppMessages.messages {
+///             guard let scene = UIApplication.shared
+///                 .connectedScenes
+///                 .first(where: { $0.activationState == .foregroundActive })
+///                 as? UIWindowScene
+///             else { continue }
+///             try? await message.show(in: scene)
+///         }
+///     }
+///
+/// To opt out: simply don't consume `messages`. The SDK still polls (so
+/// suppression analytics stay accurate) but nothing renders.
 public enum InAppMessages {
 
-    /// A server-driven in-app message addressed to the current user.
-    ///
-    /// Streamed via `InAppMessages.messages` (or per-type variants).
-    /// Render the message however you like — typical UX is to load
-    /// `contentUrl` in a sheet.
-    public protocol Message: Sendable {
-        /// Server-generated message id.
-        var messageId: String { get }
-        /// Originating workflow type (Trial Rescue, Payment Recovery, etc.).
-        var messageType: MessageType { get }
-        /// URL of the message content (HTML or remote view).
-        var contentUrl: URL { get }
+    /// Async stream of pending in-app messages addressed to the current
+    /// identity. The SDK publishes the winning message after each
+    /// foreground poll; multiple consumers may iterate concurrently.
+    public static var messages: AsyncStream<InAppMessages.Message> {
+        SDKCore.shared.inAppMessageStream.makeStream()
     }
 
-    /// Workflow type that produced an in-app message.
-    public enum MessageType: String, Sendable, CaseIterable {
-        case trialRescue        = "trial_rescue"
-        case subscriberRescue   = "subscriber_rescue"
-        case paymentRecovery    = "payment_recovery"
-        case winback            = "winback"
+    /// Manually trigger a poll for pending messages. Normally driven by
+    /// the foreground lifecycle — use this when you want to refresh
+    /// outside the standard cold-start / return-to-foreground cadence
+    /// (e.g. after the user completes an in-app action that should
+    /// retrigger a workflow attempt).
+    public static func checkForMessages() {
+        Task { @GalvaActor in
+            await SDKCore.shared.inAppMessageManager?.checkForMessages()
+        }
     }
 
-    /// Stream of all in-app messages addressed to the current user.
-    public static var messages: AsyncStream<any Message> {
-        AsyncStream { _ in }
-    }
-
-    /// Stream of in-app messages filtered by one or more types.
-    public static func messages(of types: MessageType...) -> AsyncStream<any Message> {
-        AsyncStream { _ in }
+    /// Errors surfaced from the in-app messaging pipeline.
+    public enum Error: Swift.Error, Sendable, Hashable {
+        /// SDK has not been configured.
+        case notConfigured
+        /// `show(_:in:)` received a message id the server no longer
+        /// considers valid (workflow exited, message invalidated).
+        case messageNotFound
+        /// WebView bundle for the resolved version isn't on disk and
+        /// couldn't be downloaded.
+        case bundleUnavailable
+        /// Bundle requested a bridge protocol the installed SDK doesn't
+        /// support — update the SDK to render this message.
+        case bridgeProtocolMismatch
     }
 }

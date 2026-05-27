@@ -1,0 +1,232 @@
+//
+//  InAppMessageViewController.swift
+//  Galva
+//
+//  The view controller that hosts the WKWebView for a single in-app
+//  message. Owned by `InAppMessagePresenter`, presented as a sheet via
+//  `present(animated:)` on the host app's topmost view controller.
+//
+//  Why a dedicated VC instead of a free-floating UIWindow overlay:
+//      • UIKit's modal presentation lifecycle (viewWillAppear,
+//        viewDidDisappear, presentationControllerDidDismiss) gives us
+//        clean hooks for setup + teardown.
+//      • Sheets render with the system's standard chrome (grabber,
+//        corner radius, dim-out behind) without us re-implementing any
+//        of it.
+//      • Interactive dismissal (the user swiping the sheet down) is
+//        free — we observe it through the adaptive-presentation
+//        delegate and tear down the same way as a bridge-driven dismiss.
+//      • Lives in the host scene's window hierarchy, so accessibility
+//        focus and system gestures (Reachability, Stage Manager) behave
+//        the same as any other app modal.
+//
+
+import Foundation
+#if canImport(WebKit)
+import WebKit
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
+
+#if canImport(WebKit) && canImport(UIKit)
+
+/// Notified by the VC when the user interactively dismisses the sheet
+/// (swipe-down). The presenter uses this to tear down state that wasn't
+/// caused by a programmatic `dismiss(reason:)`.
+@MainActor
+protocol InAppMessageViewControllerDelegate: AnyObject {
+    func inAppMessageViewControllerDidInteractivelyDismiss(
+        _ controller: InAppMessageViewController
+    )
+}
+
+@MainActor
+final class InAppMessageViewController: UIViewController {
+
+    /// WebView we own. Stored on the VC (not the presenter) so the
+    /// VC controls its full lifetime — `deinit` ensures the
+    /// `WKScriptMessageHandler` is removed even if the presenter is
+    /// dropped before us.
+    let webView: WKWebView
+
+    /// File URL of the loaded HTML bundle. Used as the navigation
+    /// allowlist key.
+    let bundleURL: URL
+
+    /// Server-side message id this VC is presenting. Bridge calls use it
+    /// to validate `activeMessageId`.
+    let messageId: String
+
+    /// Logger inherited from SDKCore.
+    let logger: any GalvaLogger
+
+    weak var delegate: InAppMessageViewControllerDelegate?
+
+    /// True once the bundle has called `galva.ready()` and we've revealed
+    /// the WebView. Idempotent — repeated reveal calls are no-ops.
+    private(set) var hasRevealed: Bool = false
+
+    init(
+        webView: WKWebView,
+        bundleURL: URL,
+        messageId: String,
+        logger: any GalvaLogger
+    ) {
+        self.webView = webView
+        self.bundleURL = bundleURL
+        self.messageId = messageId
+        self.logger = logger
+        super.init(nibName: nil, bundle: nil)
+        self.modalPresentationStyle = .pageSheet
+        if let sheet = sheetPresentationController {
+            // Single large detent keeps the bundle in charge of its own
+            // layout — multi-detent sheets force the bundle to redo its
+            // layout mid-gesture, which the v1 bundle isn't designed for.
+            sheet.detents = [.large()]
+            sheet.prefersGrabberVisible = true
+            sheet.preferredCornerRadius = 16
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+
+    // MARK: - Lifecycle
+
+    override func loadView() {
+        // The VC's view is just a container. The WebView fills it.
+        let container = UIView()
+        container.backgroundColor = .systemBackground
+        container.translatesAutoresizingMaskIntoConstraints = false
+        self.view = container
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        installWebView()
+        // Hidden until the bundle calls galva.ready() so we never flash
+        // unstyled content. The sheet's chrome (background + grabber)
+        // animates in regardless.
+        webView.isHidden = true
+        webView.loadFileURL(
+            bundleURL,
+            allowingReadAccessTo: bundleURL.deletingLastPathComponent()
+        )
+        logger.debug(.identity, "iam VC viewDidLoad — bundle loadFileURL",
+                     metadata: ["messageId": messageId])
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // Hook the adaptive-presentation delegate here (not in init)
+        // because `presentationController` is only non-nil once the
+        // VC is attached to a presentation.
+        presentationController?.delegate = self
+    }
+
+    deinit {
+        // Belt-and-suspenders: drop the script-message handler if the
+        // presenter didn't already (e.g. unexpected mid-flight VC drop).
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: kGalvaBridgeHandlerName)
+    }
+
+    // MARK: - Reveal-on-ready
+
+    /// Invoked by the bridge when the bundle calls `galva.ready()`.
+    /// Idempotent.
+    func revealWebView() {
+        guard !hasRevealed else { return }
+        hasRevealed = true
+        webView.isHidden = false
+        logger.debug(.identity, "iam VC revealed", metadata: ["messageId": messageId])
+    }
+
+    // MARK: - Layout
+
+    private func installWebView() {
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+    }
+}
+
+// MARK: - UIAdaptivePresentationControllerDelegate (swipe-to-dismiss)
+
+extension InAppMessageViewController: UIAdaptivePresentationControllerDelegate {
+    func presentationControllerDidDismiss(
+        _ presentationController: UIPresentationController
+    ) {
+        logger.info(.identity, "iam VC interactively dismissed",
+                    metadata: ["messageId": messageId])
+        delegate?.inAppMessageViewControllerDidInteractivelyDismiss(self)
+    }
+}
+
+// MARK: - WKNavigationDelegate (file:// allowlist + load failures)
+
+extension InAppMessageViewController: WKNavigationDelegate {
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        guard let target = navigationAction.request.url else {
+            decisionHandler(.cancel)
+            return
+        }
+        // Allow only the file URL we loaded. Anything else (network
+        // navigation, deep link tap inside the bundle) is rerouted
+        // through the explicit `galva.openDeepLink` bridge.
+        if target.scheme == "file", target.path == bundleURL.path {
+            decisionHandler(.allow)
+            return
+        }
+        logger.warning(.identity, "webview navigation blocked", metadata: [
+            "url": target.absoluteString,
+        ])
+        decisionHandler(.cancel)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: any Error
+    ) {
+        logger.warning(.identity, "webview navigation failed", error: error)
+        delegate?.inAppMessageViewControllerDidInteractivelyDismiss(self)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: any Error
+    ) {
+        logger.warning(.identity, "webview provisional navigation failed", error: error)
+        delegate?.inAppMessageViewControllerDidInteractivelyDismiss(self)
+    }
+}
+
+// MARK: - WKUIDelegate (suppress bundle-initiated JS alerts)
+
+extension InAppMessageViewController: WKUIDelegate {
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptAlertPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping () -> Void
+    ) {
+        logger.warning(.identity, "bundle attempted JS alert (suppressed)",
+                       metadata: ["message": message])
+        completionHandler()
+    }
+}
+
+#endif // canImport(WebKit) && canImport(UIKit)
