@@ -89,8 +89,12 @@ final class InAppMessageViewController: UIViewController {
         }
     }
 
+    // UIViewController requires `init?(coder:)`; the `@available(*, unavailable)`
+    // annotation blocks compile-time callers, and this VC is never decoded from
+    // a Storyboard / NSCoder. The crash is only reachable via reflection-based
+    // instantiation, which we treat as a programmer error.
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable — use init(webView:bundleURL:messageId:logger:)") } // galva-lint:disable reason="required NSCoding stub, @available(*, unavailable) blocks compile-time use"
 
     // MARK: - Lifecycle
 
