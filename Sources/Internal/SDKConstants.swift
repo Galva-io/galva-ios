@@ -70,6 +70,14 @@ enum SDKConstants {
         "/identities/communications/\(messageId.uuidString)/resolve"
     }
 
+    /// `POST /v1/transactions/observe` — reports
+    /// `(originalTransactionId, userId)` mappings so Galva can join App
+    /// Store Server Notifications that arrive without a matching
+    /// `appAccountToken` (organic purchases, family-shared transactions,
+    /// pre-identify activity). See the Store Notifications docs:
+    /// https://docs.galva.io/integrations/store-notifications/
+    static let transactionsObservePath = "/v1/transactions/observe"
+
     /// Build the file URL for a WebView bundle on the supplied CDN. Used
     /// by `WebViewBundleCache` so the path scheme stays in one place.
     static func webviewBundleURL(version: String, cdn: URL) -> URL {

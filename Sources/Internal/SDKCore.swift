@@ -95,6 +95,16 @@ final class SDKCore {
     var storeKitPrefetcher: StoreKitProductPrefetcher?
     #endif
 
+    /// `Transaction.all` sweeper that posts
+    /// `(originalTransactionId, userId)` mappings to Galva so organic
+    /// purchases (native paywall, restored, family-shared) can be joined
+    /// to the right user even when no `appAccountToken` made it onto the
+    /// App Store receipt. See
+    /// https://docs.galva.io/integrations/store-notifications/#user-mapping
+    #if canImport(StoreKit)
+    var transactionObserver: StoreKitTransactionObserver?
+    #endif
+
     /// Foreground lifecycle observer driving the in-app message poller.
     /// Held to keep the registration alive across the SDK's lifetime.
     /// `nonisolated(unsafe)` because `AppLifecycleObserver` is `@MainActor`
@@ -312,6 +322,17 @@ final class SDKCore {
         if let cached = initManager.current {
             self.storeKitPrefetcher?.prefetch(productIds: cached.storekitProductIds)
         }
+
+        // Transaction observer — non-blocking. The first foreground
+        // hook below kicks off `sweep()` which walks `Transaction.all`
+        // and posts (originalTransactionId, userId) mappings so Galva's
+        // backend can resolve organic / restored / family-shared
+        // purchases that never see `appAccountToken`.
+        self.transactionObserver = StoreKitTransactionObserver(
+            client: apiClient,
+            identity: identity,
+            logger: logger
+        )
         #endif
 
         // Manager — only constructible if both bundleCache and initManager
@@ -327,11 +348,18 @@ final class SDKCore {
         )
         self.inAppMessageManager = manager
 
-        // Foreground observer drives polling on app open + return.
+        // Foreground observer drives BOTH in-app message polling AND
+        // the read-only StoreKit transaction sweep. Both run on every
+        // foreground (cold start + return from background); the sweep
+        // is idempotent server-side and dedupes locally, so re-firing
+        // it is cheap.
         Task { @MainActor [weak self] in
             let observer = AppLifecycleObserver { [weak self] in
                 Task { @GalvaActor in
                     await self?.inAppMessageManager?.poll()
+                    #if canImport(StoreKit)
+                    await self?.transactionObserver?.sweep()
+                    #endif
                 }
             }
             self?.lifecycleObserver = observer
@@ -384,6 +412,9 @@ final class SDKCore {
 
         var mergedTraits = traits ?? [:]
         if let token = appAccountToken {
+            // Persist on the identity store so StoreKit purchases pick
+            // the override up automatically — not just sent as a trait.
+            identity.setAppAccountToken(token)
             mergedTraits["$gv_appAccountToken"] = .string(token.uuidString)
         }
         // Auto-attach device-derived built-in traits on every identify so the
@@ -428,8 +459,36 @@ final class SDKCore {
         identity.setEndUserId(nil)
         identity.rotateAnonymousId()
         setCachedEndUserId(nil)
+        // Clear in-memory caches scoped to the previous identity so the
+        // post-logout anonymous user starts clean. In-app message dedupe
+        // + resolved-payload cache wouldn't apply to the new user; the
+        // transaction-observer dedupe must clear so the new anonymousId
+        // gets the device's full historical mapping re-posted (the
+        // server then aliases them onto whoever calls `identify` next).
+        inAppMessageManager?.reset()
+        #if canImport(StoreKit)
+        transactionObserver?.reset()
+        #endif
         // Seed built-in traits for the freshly-rotated anonymous user.
         await identify(userId: nil, appAccountToken: nil, traits: nil)
+    }
+
+    // MARK: Transaction reconciliation
+
+    /// Force an off-cycle sweep of `Transaction.all` and re-post the
+    /// `(originalTransactionId, userId)` mapping table. Normal operation
+    /// never needs this — the foreground lifecycle covers every
+    /// transaction the device can see. Use it for:
+    ///   • Tight-loop billing flows that complete in the same session
+    ///     a foreground event would naturally cover (e.g. user just
+    ///     finished a host-app paywall checkout and we want the bundle
+    ///     to read fresh entitlement immediately).
+    ///   • Support workflows that need a "Restore Purchases" guarantee.
+    /// Idempotent: safe to call repeatedly.
+    func reconcileTransactions() async {
+        #if canImport(StoreKit)
+        await transactionObserver?.sweep()
+        #endif
     }
 
     // MARK: Track
@@ -512,6 +571,13 @@ final class SDKCore {
         let productsJSON = "{}"
         #endif
 
+        // Snapshot the prefetcher reference too — it crosses the hop as
+        // a sendable reference (GalvaActor-isolated class, but reference
+        // passing is safe; we only call its methods through await).
+        #if canImport(StoreKit)
+        let prefetcher = self.storeKitPrefetcher
+        #endif
+
         // Hop to MainActor to construct / reuse the presenter. The
         // presenter then runs its async show() on the main actor.
         try await MainActor.run {
@@ -519,12 +585,22 @@ final class SDKCore {
             if let existing = self.presenter {
                 presenter = existing
             } else {
+                #if canImport(StoreKit)
+                presenter = InAppMessagePresenter(
+                    messageManager: manager,
+                    identity: identity,
+                    bundleCache: bundleCache,
+                    storeKitPrefetcher: prefetcher,
+                    logger: snapshotLogger
+                )
+                #else
                 presenter = InAppMessagePresenter(
                     messageManager: manager,
                     identity: identity,
                     bundleCache: bundleCache,
                     logger: snapshotLogger
                 )
+                #endif
                 self.presenter = presenter
             }
             return presenter

@@ -47,6 +47,13 @@ final class InAppMessagePresenter: NSObject {
     let bundleCache: WebViewBundleCache
     let logger: any GalvaLogger
 
+    #if canImport(StoreKit)
+    /// Optional StoreKit warm-cache routed into the bridge so a
+    /// `requestPurchase` call can resolve the `Product` without a
+    /// round-trip when the SDK already fetched the SKU.
+    let storeKitPrefetcher: StoreKitProductPrefetcher?
+    #endif
+
     /// Currently-presented VC, if any. Owned strongly so it stays alive
     /// for the lifetime of the presentation; dropped on dismiss.
     private(set) var viewController: InAppMessageViewController?
@@ -65,6 +72,21 @@ final class InAppMessagePresenter: NSObject {
     var webView: WKWebView? { viewController?.webView }
     var window: UIWindow? { viewController?.view.window }
 
+    #if canImport(StoreKit)
+    init(
+        messageManager: InAppMessageManager,
+        identity: IdentityStore,
+        bundleCache: WebViewBundleCache,
+        storeKitPrefetcher: StoreKitProductPrefetcher?,
+        logger: any GalvaLogger
+    ) {
+        self.messageManager = messageManager
+        self.identity = identity
+        self.bundleCache = bundleCache
+        self.storeKitPrefetcher = storeKitPrefetcher
+        self.logger = logger
+    }
+    #else
     init(
         messageManager: InAppMessageManager,
         identity: IdentityStore,
@@ -76,6 +98,7 @@ final class InAppMessagePresenter: NSObject {
         self.bundleCache = bundleCache
         self.logger = logger
     }
+    #endif
 
     // MARK: - Show
 
@@ -183,11 +206,20 @@ final class InAppMessagePresenter: NSObject {
         prefetchedProductsJSON: String
     ) -> (WKWebView, NativeBridge) {
         let config = WKWebViewConfiguration()
+        #if canImport(StoreKit)
+        let bridge = NativeBridge(
+            messageManager: messageManager,
+            identity: identity,
+            storeKitPrefetcher: storeKitPrefetcher,
+            logger: logger
+        )
+        #else
         let bridge = NativeBridge(
             messageManager: messageManager,
             identity: identity,
             logger: logger
         )
+        #endif
         bridge.presenter = self
         config.userContentController.add(bridge, name: kGalvaBridgeHandlerName)
 

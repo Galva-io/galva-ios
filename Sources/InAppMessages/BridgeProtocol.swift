@@ -72,18 +72,42 @@ struct BridgeError: Error, Sendable, Hashable, Codable {
         /// Bundle called a method that requires an active message and there
         /// isn't one (e.g. requestPurchase on a closed overlay).
         case noActiveMessage
-        /// Bundle called requestPurchase with an unknown `productId`.
+        /// Bundle called requestPurchase with a productId the App Store
+        /// doesn't know about (revoked, not approved, wrong storefront).
         case productUnavailable
         /// Bundle requested data the SDK couldn't resolve from its cache.
         case messageDataUnavailable
-        /// Bundle passed a malformed payload.
+        /// Bundle passed a malformed payload (missing productId, malformed
+        /// promotional offer fields, etc.).
         case invalidPayload
         /// SDK exceeded the bridge call timeout.
         case timeout
-        /// StoreKit purchase prompt failed before completion.
+        /// Generic StoreKit / billing failure — used as a catch-all when
+        /// no more specific code applies. Inspect `message` for detail.
         case purchaseFailed
         /// `openManageSubscription` / `openDeepLink` URL couldn't be opened.
         case urlOpenFailed
+
+        // MARK: Purchase-specific (StoreKit 2)
+
+        /// Device-level "purchases are not allowed" (Screen Time / parental
+        /// controls / managed device).
+        case purchaseNotAllowed
+        /// The user is not eligible for the promotional offer (already
+        /// used it, not in the eligible group, etc.). Bundle should hide
+        /// or rebrand the offer surface.
+        case ineligibleForOffer
+        /// Server-supplied promotional offer parameters were rejected by
+        /// StoreKit — bad signature, wrong key id, malformed nonce. The
+        /// Galva backend signed something the App Store wouldn't accept.
+        case invalidOffer
+        /// StoreKit returned an unverified transaction — App Store
+        /// signature didn't validate against the device's trust roots.
+        case verificationFailed
+        /// Generic network / transport problem talking to the App Store.
+        case networkError
+        /// Product is not sold in the user's current storefront.
+        case notAvailableInStorefront
     }
 }
 
@@ -123,6 +147,14 @@ struct BridgePageContext: Sendable, Hashable, Codable {
     let locale: String
     let appColorScheme: AppColorScheme?
     let safeArea: SafeArea
+    /// Apple App Store storefront country code (ISO 3166-1 alpha-3, e.g.
+    /// `"USA"`, `"GBR"`, `"JPN"`). Read from `StoreKit.Storefront.current`.
+    /// Used by the bundle to pick storefront-specific copy (currency
+    /// suffix conventions, regional offer fallbacks) without a separate
+    /// StoreKit round-trip. `nil` when StoreKit isn't reachable (e.g.
+    /// device hasn't signed into the App Store) — the bundle falls back
+    /// to the `locale` region in that case.
+    let storefrontCountryCode: String?
 
     enum PushAuthorization: String, Sendable, Hashable, Codable {
         case notDetermined, denied, authorized, provisional, ephemeral

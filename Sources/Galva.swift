@@ -247,6 +247,34 @@ public enum Galva {
         }
     }
 
+    /// Force an off-cycle reconciliation of the device's StoreKit
+    /// transaction history with Galva's backend.
+    ///
+    /// On every foreground (cold start + return from background) the
+    /// SDK silently sweeps `Transaction.all` and posts
+    /// `(originalTransactionId, userId)` mappings so Galva can resolve
+    /// App Store notifications that arrive without an `appAccountToken`
+    /// (organic purchases, native paywall, family-shared, restored).
+    /// Call this method only when you need to short-circuit that
+    /// foreground cadence — typical cases:
+    ///
+    /// 1. Right after your host-app billing observer acknowledges a
+    ///    transaction inside the same session, and the next code path
+    ///    expects Galva to have the mapping immediately (e.g. opening
+    ///    an in-app message that reads entitlement).
+    /// 2. Hooking into a "Restore Purchases" button in your support
+    ///    flow so the user's historical entitlement aliases back onto
+    ///    the new install / new device.
+    ///
+    /// Fire-and-forget: returns immediately. Idempotent — safe to call
+    /// from anywhere, including duplicated taps. Errors are logged at
+    /// `.info` / `.warning` and never surfaced to the caller.
+    public static func reconcileTransactions() {
+        Task { @GalvaActor in
+            await SDKCore.shared.reconcileTransactions()
+        }
+    }
+
     /// Attach an APNs / FCM device token to outgoing messages. Required if
     /// you intend to register the device for push notifications via
     /// `Communication.registerPushToken(...)`.

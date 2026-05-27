@@ -19,11 +19,19 @@ import Foundation
 @GalvaActor
 final class IdentityStore {
     nonisolated(unsafe) private let defaults: UserDefaults
-    private static let anonymousIdKey = "co.galva.anonymousId"
-    private static let endUserIdKey   = "co.galva.endUserId"
+    private static let anonymousIdKey       = "co.galva.anonymousId"
+    private static let endUserIdKey         = "co.galva.endUserId"
+    private static let appAccountTokenKey   = "co.galva.appAccountToken"
 
     private(set) var anonymousId: String
     private(set) var endUserId: String?
+
+    /// Developer-supplied StoreKit `appAccountToken` override. Set via
+    /// `AppUser.identify(userId:appAccountToken:)`. `nil` when the host
+    /// app hasn't supplied one — the SDK then falls back to deriving the
+    /// attribution token from `anonymousId` (see
+    /// `purchaseAttributionToken` below).
+    private(set) var appAccountToken: UUID?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -37,6 +45,9 @@ final class IdentityStore {
         }
 
         endUserId = defaults.string(forKey: Self.endUserIdKey)
+        if let raw = defaults.string(forKey: Self.appAccountTokenKey) {
+            appAccountToken = UUID(uuidString: raw)
+        }
     }
 
     func setEndUserId(_ id: String?) {
@@ -48,10 +59,47 @@ final class IdentityStore {
         }
     }
 
-    /// Rotate anonymousId. Called after logOut to start a fresh anonymous session.
+    /// Persist (or clear) the developer-supplied `appAccountToken`. Called
+    /// from `SDKCore.identify` so the token survives app restarts and is
+    /// available to `Product.purchase(options:)` without an additional
+    /// identify call.
+    func setAppAccountToken(_ token: UUID?) {
+        appAccountToken = token
+        if let token {
+            defaults.set(token.uuidString, forKey: Self.appAccountTokenKey)
+        } else {
+            defaults.removeObject(forKey: Self.appAccountTokenKey)
+        }
+    }
+
+    /// UUID to attach as `appAccountToken` on every Galva-initiated
+    /// StoreKit purchase. Resolution order:
+    ///
+    ///   1. Developer override set via `identify(userId:appAccountToken:)`.
+    ///   2. The auto-generated `anonymousId` parsed as a UUID — already
+    ///      a valid UUID (we always mint it via `UUIDv7.next()`).
+    ///   3. A freshly-minted UUID — defensive fallback that should never
+    ///      hit in practice; included so the call site can rely on a
+    ///      non-optional value.
+    ///
+    /// Apple silently drops `appAccountToken` values that aren't valid
+    /// UUIDs, so steps 1 + 2 are the only paths that matter. The
+    /// fallback exists so the bridge doesn't have to deal with `nil`
+    /// when wiring up `Product.PurchaseOption.appAccountToken(_:)`.
+    var purchaseAttributionToken: UUID {
+        if let override = appAccountToken { return override }
+        if let parsed = UUID(uuidString: anonymousId) { return parsed }
+        return UUID()
+    }
+
+    /// Rotate anonymousId. Called after logOut to start a fresh anonymous
+    /// session. Also clears the appAccountToken — the override belonged to
+    /// the previous identity and reusing it on the next user would taint
+    /// receipt attribution.
     func rotateAnonymousId() {
         let new = UUIDv7.next().uuidString
         defaults.set(new, forKey: Self.anonymousIdKey)
         anonymousId = new
+        setAppAccountToken(nil)
     }
 }

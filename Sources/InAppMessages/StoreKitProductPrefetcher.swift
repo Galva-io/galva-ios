@@ -95,6 +95,16 @@ final class StoreKitProductPrefetcher {
         }
     }
 
+    // MARK: - Product accessor
+
+    /// Look up a previously-fetched `Product` by SKU. Returns `nil` when
+    /// nothing has been pre-fetched yet — callers should fall back to a
+    /// live `Product.products(for:)` round-trip rather than treating the
+    /// miss as a purchase failure.
+    func currentProduct(productId: String) -> Product? {
+        byId[productId]
+    }
+
     // MARK: - Summary for WebView injection
 
     /// JSON-encoded product summary keyed by productId. Returns the
