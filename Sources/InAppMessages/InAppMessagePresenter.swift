@@ -82,7 +82,21 @@ final class InAppMessagePresenter: NSObject {
     /// Show `message` as a sheet on the topmost VC in `scene`.
     /// Idempotent on the same message id; replaces an in-flight
     /// presentation when called with a different id.
-    func show(message: InAppMessages.Message, in scene: UIWindowScene) async throws {
+    ///
+    /// - Parameters:
+    ///   - message: The message to render.
+    ///   - scene: Foreground scene to attach the sheet to.
+    ///   - prefetchedProductsJSON: JSON object (as a string) keyed by
+    ///     StoreKit `productId`. Injected into the WebView as
+    ///     `window.galvaProducts` at `.atDocumentStart` so the bundle has
+    ///     localized pricing + display copy available before any of its
+    ///     own JavaScript runs. Pass `"{}"` when nothing's been
+    ///     pre-fetched yet — the bundle is expected to handle empty.
+    func show(
+        message: InAppMessages.Message,
+        in scene: UIWindowScene,
+        prefetchedProductsJSON: String = "{}"
+    ) async throws {
         if currentMessageId == message.id {
             logger.debug(.identity, "show(in:) ignored — message already presenting",
                          metadata: ["messageId": message.id])
@@ -117,10 +131,14 @@ final class InAppMessagePresenter: NSObject {
             throw InAppMessageError.bundleUnavailable
         }
 
-        // 3. Build the WebView + bridge + VC.
+        // 3. Build the WebView + bridge + VC. Inject the StoreKit product
+        //    summary as `window.galvaProducts` before any bundle script
+        //    runs so offer screens have pricing without an extra fetch.
         await messageManager.setActiveMessageId(message.id)
         currentMessageId = message.id
-        let (webView, bridge) = makeWebViewAndBridge()
+        let (webView, bridge) = makeWebViewAndBridge(
+            prefetchedProductsJSON: prefetchedProductsJSON
+        )
         self.bridge = bridge
         let vc = InAppMessageViewController(
             webView: webView,
@@ -161,7 +179,9 @@ final class InAppMessagePresenter: NSObject {
 
     // MARK: - Internals
 
-    private func makeWebViewAndBridge() -> (WKWebView, NativeBridge) {
+    private func makeWebViewAndBridge(
+        prefetchedProductsJSON: String
+    ) -> (WKWebView, NativeBridge) {
         let config = WKWebViewConfiguration()
         let bridge = NativeBridge(
             messageManager: messageManager,
@@ -170,6 +190,13 @@ final class InAppMessagePresenter: NSObject {
         )
         bridge.presenter = self
         config.userContentController.add(bridge, name: kGalvaBridgeHandlerName)
+
+        // Inject prefetched StoreKit products as `window.galvaProducts`
+        // BEFORE any bundle script runs. The bundle reads the global
+        // synchronously on boot — no bridge round-trip needed for pricing.
+        config.userContentController.addUserScript(
+            Self.makeProductsInjectionScript(json: prefetchedProductsJSON)
+        )
 
         // Inline media without user gesture for autoplay video components.
         // Bundle authors decide whether to use it.
@@ -187,6 +214,33 @@ final class InAppMessagePresenter: NSObject {
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         return (webView, bridge)
+    }
+
+    /// Build a `WKUserScript` that assigns the prefetched StoreKit
+    /// product summary to `window.galvaProducts` at the very first
+    /// chance (`.atDocumentStart`). The injected source is:
+    ///
+    ///     window.galvaProducts = { … };
+    ///
+    /// Falls back to an empty object literal when nothing has been
+    /// pre-fetched so the bundle can always read `window.galvaProducts`
+    /// without a `typeof` guard.
+    private static func makeProductsInjectionScript(json: String) -> WKUserScript {
+        let safe = json.isEmpty ? "{}" : json
+        // The JSON we pass came from JSONSerialization and is therefore
+        // safe to splice as a JavaScript object literal — JSON is a
+        // subset of JS. We still defensively replace U+2028 / U+2029
+        // since those characters are valid in JSON strings but break out
+        // of inline JS source.
+        let sanitized = safe
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        let source = "window.galvaProducts = \(sanitized);"
+        return WKUserScript(
+            source: source,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
     }
 
     /// `present(_:animated:completion:)` is callback-based — wrap it in a

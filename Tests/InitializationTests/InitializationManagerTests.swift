@@ -148,7 +148,7 @@ private enum InitFixtures {
         InitializationData(
             webviewVersions: ["1.0.0"],
             batchCollection: .init(flushSize: flushSize, flushIntervalMs: 5000),
-            products: []
+            storekitProductIds: []
         )
     }
 

@@ -49,7 +49,7 @@ final class InitializationCacheTests: XCTestCase {
         let updated = InitializationData(
             webviewVersions: ["9.9.9"],
             batchCollection: .init(flushSize: 1, flushIntervalMs: 1),
-            products: []
+            storekitProductIds: ["com.app.solo"]
         )
         try cache.save(updated)
         XCTAssertEqual(cache.load(), updated)
@@ -68,23 +68,7 @@ final class InitializationCacheTests: XCTestCase {
         InitializationData(
             webviewVersions: ["1.0.0", "1.0.1"],
             batchCollection: .init(flushSize: 50, flushIntervalMs: 5000),
-            products: [
-                .init(
-                    id: "prod_1",
-                    name: "Pro",
-                    plans: [
-                        .init(
-                            id: "plan_yearly",
-                            name: "Yearly",
-                            platformSpecs: .init(
-                                appstore: .init(subscriptions: [
-                                    .init(productId: "com.acme.pro.yearly", id: "sub_1")
-                                ])
-                            )
-                        )
-                    ]
-                )
-            ]
+            storekitProductIds: ["com.acme.pro.month", "com.acme.pro.year"]
         )
     }
 }

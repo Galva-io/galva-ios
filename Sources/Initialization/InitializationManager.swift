@@ -64,7 +64,7 @@ final class InitializationManager {
         resolveWaiters(with: cached)
         logger.info(.configuration, "init data loaded from cache", metadata: [
             "webviewVersions": String(cached.webviewVersions.count),
-            "products": String(cached.products.count),
+            "storekitProductIds": String(cached.storekitProductIds.count),
         ])
     }
 
@@ -88,7 +88,7 @@ final class InitializationManager {
             }
             logger.info(.configuration, "init data refreshed", metadata: [
                 "webviewVersions": String(response.data.webviewVersions.count),
-                "products": String(response.data.products.count),
+                "storekitProductIds": String(response.data.storekitProductIds.count),
                 "flushSize": String(Int(response.data.batchCollection.flushSize)),
                 "flushIntervalMs": String(Int(response.data.batchCollection.flushIntervalMs)),
             ])
