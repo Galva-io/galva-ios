@@ -606,6 +606,104 @@ final class SDKCore {
             return presenter
         }.show(message: message, in: scene, prefetchedProductsJSON: productsJSON)
     }
+
+    /// SwiftUI entry point. Resolves the message payload, downloads the
+    /// HTML bundle, snapshots the StoreKit product catalog, and builds
+    /// the `WKWebView` + `NativeBridge` on the main actor — then hands
+    /// them back to the SwiftUI coordinator (which mounts the WebView
+    /// inside `.sheet(item:)` via a `UIViewRepresentable`).
+    ///
+    /// Unlike `showInAppMessage(_:in:)`, this method does NOT call
+    /// UIKit's `present(animated:)` — SwiftUI owns the sheet
+    /// presentation. The `host` is wired into the bridge so
+    /// `galva.ready()` and `galva.dismiss(reason:)` route back into the
+    /// coordinator's `@Published` state and dismissal binding.
+    ///
+    /// Throws `InAppMessages.Error` on failure: `notConfigured`,
+    /// `messageNotFound`, or `bundleUnavailable`. The caller surfaces
+    /// these by clearing the presenting binding (which dismisses the
+    /// sheet).
+    func prepareInAppMessage(
+        _ message: InAppMessages.Message,
+        host: any InAppMessageHost
+    ) async throws -> PreparedInAppMessage {
+        guard configured,
+              let manager = inAppMessageManager,
+              let bundleCache,
+              let identity else {
+            throw InAppMessages.Error.notConfigured
+        }
+        let snapshotLogger = logger
+
+        // 1. Resolve payload — also caches it for the bridge's
+        //    `getMessageData()` to serve immediately.
+        let resolved = try await manager.resolve(messageId: message.id)
+        guard let resolved else {
+            throw InAppMessages.Error.messageNotFound
+        }
+
+        // 2. Resolve / download the bundle file URL.
+        let bundleURL: URL
+        do {
+            bundleURL = try await bundleCache.bundleURL(for: resolved.webviewVersion)
+        } catch {
+            throw InAppMessages.Error.bundleUnavailable
+        }
+
+        // 3. Snapshot StoreKit products + prefetcher reference on the
+        //    GalvaActor before crossing to MainActor.
+        #if canImport(StoreKit)
+        let productsJSON = storeKitPrefetcher?.currentSummaryJSON() ?? "{}"
+        let prefetcher = self.storeKitPrefetcher
+        #else
+        let productsJSON = "{}"
+        #endif
+
+        // 4. Mark active so the bridge's getPageContext / getMessageData
+        //    / requestPurchase calls all see this id. Synchronous —
+        //    we're already on the GalvaActor with the manager.
+        manager.setActiveMessageId(message.id)
+
+        // 5. Build the WebView + bridge on the main actor, load the
+        //    file URL, and hand the pair back. The coordinator retains
+        //    both for the lifetime of the sheet.
+        return await MainActor.run {
+            #if canImport(StoreKit)
+            let (webView, bridge) = InAppMessageWebViewFactory.make(
+                messageManager: manager,
+                identity: identity,
+                storeKitPrefetcher: prefetcher,
+                host: host,
+                prefetchedProductsJSON: productsJSON,
+                logger: snapshotLogger
+            )
+            #else
+            let (webView, bridge) = InAppMessageWebViewFactory.make(
+                messageManager: manager,
+                identity: identity,
+                host: host,
+                prefetchedProductsJSON: productsJSON,
+                logger: snapshotLogger
+            )
+            #endif
+            webView.loadFileURL(
+                bundleURL,
+                allowingReadAccessTo: bundleURL.deletingLastPathComponent()
+            )
+            snapshotLogger.info(.identity, "SwiftUI sheet preparing", metadata: [
+                "messageId": message.id,
+                "version": resolved.webviewVersion,
+            ])
+            return PreparedInAppMessage(webView: webView, bridge: bridge)
+        }
+    }
+
+    /// Clear the active message id. Called by the SwiftUI coordinator on
+    /// dismiss so the bridge doesn't serve stale `getMessageData()` /
+    /// `requestPurchase` calls to a sheet that's already off screen.
+    func clearActiveMessage() async {
+        inAppMessageManager?.setActiveMessageId(nil)
+    }
     #endif
 
     func setPreference(

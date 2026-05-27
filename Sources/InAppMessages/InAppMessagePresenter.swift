@@ -205,74 +205,27 @@ final class InAppMessagePresenter: NSObject {
     private func makeWebViewAndBridge(
         prefetchedProductsJSON: String
     ) -> (WKWebView, NativeBridge) {
-        let config = WKWebViewConfiguration()
+        // Both UIKit and SwiftUI presentation paths share the same
+        // WebView + bridge construction; the factory keeps the two in
+        // lockstep without copy-paste drift.
         #if canImport(StoreKit)
-        let bridge = NativeBridge(
+        return InAppMessageWebViewFactory.make(
             messageManager: messageManager,
             identity: identity,
             storeKitPrefetcher: storeKitPrefetcher,
+            host: self,
+            prefetchedProductsJSON: prefetchedProductsJSON,
             logger: logger
         )
         #else
-        let bridge = NativeBridge(
+        return InAppMessageWebViewFactory.make(
             messageManager: messageManager,
             identity: identity,
+            host: self,
+            prefetchedProductsJSON: prefetchedProductsJSON,
             logger: logger
         )
         #endif
-        bridge.presenter = self
-        config.userContentController.add(bridge, name: kGalvaBridgeHandlerName)
-
-        // Inject prefetched StoreKit products as `window.galvaProducts`
-        // BEFORE any bundle script runs. The bundle reads the global
-        // synchronously on boot — no bridge round-trip needed for pricing.
-        config.userContentController.addUserScript(
-            Self.makeProductsInjectionScript(json: prefetchedProductsJSON)
-        )
-
-        // Inline media without user gesture for autoplay video components.
-        // Bundle authors decide whether to use it.
-        config.allowsInlineMediaPlayback = true
-        config.mediaTypesRequiringUserActionForPlayback = []
-
-        // No DOM persistence — every message boots fresh. Avoids stale
-        // localStorage poisoning future presentations.
-        config.websiteDataStore = .nonPersistent()
-
-        let webView = WKWebView(frame: .zero, configuration: config)
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
-        return (webView, bridge)
-    }
-
-    /// Build a `WKUserScript` that assigns the prefetched StoreKit
-    /// product summary to `window.galvaProducts` at the very first
-    /// chance (`.atDocumentStart`). The injected source is:
-    ///
-    ///     window.galvaProducts = { … };
-    ///
-    /// Falls back to an empty object literal when nothing has been
-    /// pre-fetched so the bundle can always read `window.galvaProducts`
-    /// without a `typeof` guard.
-    private static func makeProductsInjectionScript(json: String) -> WKUserScript {
-        let safe = json.isEmpty ? "{}" : json
-        // The JSON we pass came from JSONSerialization and is therefore
-        // safe to splice as a JavaScript object literal — JSON is a
-        // subset of JS. We still defensively replace U+2028 / U+2029
-        // since those characters are valid in JSON strings but break out
-        // of inline JS source.
-        let sanitized = safe
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
-        let source = "window.galvaProducts = \(sanitized);"
-        return WKUserScript(
-            source: source,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
-        )
     }
 
     /// `present(_:animated:completion:)` is callback-based — wrap it in a
@@ -355,6 +308,20 @@ extension InAppMessagePresenter: InAppMessageViewControllerDelegate {
             await self.teardown(reason: "user_dismissed")
         }
     }
+}
+
+// MARK: - InAppMessageHost
+
+extension InAppMessagePresenter: InAppMessageHost {
+    /// Read insets from the VC's view, which reflects the *presented
+    /// sheet's* safe area (grabber, corner radius, dynamic island, home
+    /// indicator) rather than the under-sheet host window. Returns
+    /// `.zero` before the VC is on screen.
+    var safeAreaInsets: UIEdgeInsets {
+        viewController?.view.safeAreaInsets ?? .zero
+    }
+    // `webView`, `reveal()`, and `dismiss(reason:)` are already defined
+    // on the type above; the host conformance picks them up directly.
 }
 
 #endif // canImport(WebKit) && canImport(UIKit)

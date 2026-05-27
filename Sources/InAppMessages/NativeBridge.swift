@@ -50,7 +50,11 @@ let kGalvaBridgeHandlerName = "galva"
 @MainActor
 final class NativeBridge: NSObject, WKScriptMessageHandler {
 
-    weak var presenter: InAppMessagePresenter?
+    /// Whoever owns the WebView presentation — `InAppMessagePresenter`
+    /// for the UIKit path, `InAppMessageSheetCoordinator` for SwiftUI.
+    /// The bridge stays platform-agnostic by talking through the
+    /// `InAppMessageHost` protocol.
+    weak var host: (any InAppMessageHost)?
     let messageManager: InAppMessageManager
     let identity: IdentityStore
     let logger: any GalvaLogger
@@ -117,14 +121,14 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     private func handle(envelope: BridgeRequest) async -> Result<AnyJSONValue?, BridgeError> {
         switch envelope.name {
         case .ready:
-            presenter?.reveal()
+            host?.reveal()
             return .success(nil)
 
         case .dismiss:
             let reason = envelope.payload?["reason"].flatMap { value -> String? in
                 if case .string(let s) = value { return s } else { return nil }
             }
-            presenter?.dismiss(reason: reason)
+            host?.dismiss(reason: reason)
             return .success(nil)
 
         case .getPageContext:
@@ -483,15 +487,13 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     }
 
     private func safeAreaInsets() -> BridgePageContext.SafeArea {
-        // Read from the VC's view: it reflects the safe area the sheet
-        // is actually drawing into (accounts for the grabber, sheet
-        // chrome, and any presentation adjustments). The host window's
-        // insets would describe the under-sheet content area, which is
-        // not what the bundle needs to pad against.
-        guard let view = presenter?.viewController?.view else {
-            return .init(top: 0, bottom: 0, left: 0, right: 0)
-        }
-        let insets = view.safeAreaInsets
+        // Delegate to the host — each host computes insets from whichever
+        // view it owns (UIKit VC's view, or the SwiftUI sheet's hosting
+        // view). The insets reflect the *presented sheet's* safe area,
+        // which is what the bundle needs to pad against (grabber +
+        // dynamic island + home indicator), NOT the under-sheet host
+        // window's insets.
+        let insets = host?.safeAreaInsets ?? .zero
         return .init(
             top: Double(insets.top),
             bottom: Double(insets.bottom),
@@ -539,7 +541,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         case .failure(let error):
             response = BridgeResponse(requestId: requestId, error: error)
         }
-        guard let presenter, let webView = presenter.webView else { return }
+        guard let webView = host?.webView else { return }
         let encoder = JSONEncoder()
         guard
             let data = try? encoder.encode(response),
