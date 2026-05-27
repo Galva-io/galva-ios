@@ -54,14 +54,19 @@ final class AppLifecycleObserver {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.fire()
+            // `queue: .main` guarantees we're on the main thread, so it's
+            // safe to assert MainActor isolation. Swift 6 can't infer this
+            // from the NotificationCenter Sendable closure signature.
+            MainActor.assumeIsolated { self?.fire() }
         }
         observers.append(token)
         #endif
         // Emit an immediate foreground event so cold-start polling lines up
         // with the rest of the configure() path. Defer one runloop tick so
         // the message manager has a chance to attach its stream consumers.
-        DispatchQueue.main.async { [weak self] in self?.fire() }
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.fire() }
+        }
     }
 
     func stop() {

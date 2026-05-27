@@ -129,12 +129,14 @@ final class InAppMessageViewController: UIViewController {
         presentationController?.delegate = self
     }
 
-    deinit {
-        // Belt-and-suspenders: drop the script-message handler if the
-        // presenter didn't already (e.g. unexpected mid-flight VC drop).
-        let controller = webView.configuration.userContentController
-        controller.removeScriptMessageHandler(forName: kGalvaBridgeHandlerName)
-    }
+    // No deinit cleanup. The presenter's `teardown()` removes the
+    // `WKScriptMessageHandler` on the dismissal path; WKWebView
+    // releases its `WKUserContentController` when the WebView itself
+    // is deallocated, which detaches any lingering handlers naturally.
+    // Avoiding deinit cleanup also keeps Swift 6 strict concurrency
+    // happy — nonisolated deinit cannot touch MainActor state on the
+    // WebView config without an explicit isolation hop we can't safely
+    // make from deinit.
 
     // MARK: - Reveal-on-ready
 
@@ -180,7 +182,11 @@ extension InAppMessageViewController: WKNavigationDelegate {
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
-        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        // `@MainActor` matches the WKNavigationDelegate optional
+        // requirement's closure isolation in iOS 18+ SDKs. Without it
+        // Swift 6 emits a "nearly matches" warning that prevents the
+        // optional-requirement satisfaction from binding cleanly.
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
     ) {
         guard let target = navigationAction.request.url else {
             decisionHandler(.cancel)
@@ -225,7 +231,10 @@ extension InAppMessageViewController: WKUIDelegate {
         _ webView: WKWebView,
         runJavaScriptAlertPanelWithMessage message: String,
         initiatedByFrame frame: WKFrameInfo,
-        completionHandler: @escaping () -> Void
+        // `@MainActor` to match the WKUIDelegate optional requirement's
+        // closure isolation in iOS 18+ SDKs (same reason as the nav
+        // delegate's decisionHandler above).
+        completionHandler: @escaping @MainActor () -> Void
     ) {
         logger.warning(.identity, "bundle attempted JS alert (suppressed)",
                        metadata: ["message": message])

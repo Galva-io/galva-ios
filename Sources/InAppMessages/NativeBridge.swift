@@ -508,7 +508,12 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         }
     }
 
-    private static func mapAuthorization(
+    /// Pure enum mapper — called from the `UNUserNotificationCenter`
+    /// completion handler, which is `@Sendable` and nonisolated. Marking
+    /// the function `nonisolated` drops the `@MainActor` inheritance the
+    /// surrounding class would otherwise impose, so the call site
+    /// doesn't need an isolation hop.
+    nonisolated private static func mapAuthorization(
         _ status: UNAuthorizationStatus
     ) -> BridgePageContext.PushAuthorization {
         switch status {
