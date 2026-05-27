@@ -38,7 +38,7 @@ actor WebViewBundleCache {
     init(
         directoryURL: URL? = nil,
         client: APIClient,
-        cdnBaseURL: URL = SDKConstants.webviewBundleCDN,
+        cdnBaseURL: URL,
         logger: any GalvaLogger
     ) throws {
         self.client = client
@@ -113,7 +113,7 @@ actor WebViewBundleCache {
     }
 
     private func performDownload(version: String) async throws -> URL {
-        let remote = cdnBaseURL.appendingPathComponent("\(version).html")
+        let remote = SDKConstants.webviewBundleURL(version: version, cdn: cdnBaseURL)
         logger.info(.configuration, "downloading bundle", metadata: [
             "version": version,
             "url": remote.absoluteString,

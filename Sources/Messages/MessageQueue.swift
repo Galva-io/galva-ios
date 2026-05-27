@@ -36,7 +36,7 @@ protocol MessageConsumer: Sendable {
 @GalvaActor
 class MessageQueue {
     struct QueueOptions {
-        struct BatchingWindow {
+        struct BatchingWindow: Equatable {
             var timeWindow: TimeInterval
             var maxCount: Int
         }
@@ -61,7 +61,11 @@ class MessageQueue {
 
     private let storage: any MessageStorage
     private let consumer: any MessageConsumer
-    private let options: QueueOptions?
+    /// Mutable so the server can re-tune the batching window at runtime
+    /// (via /sdk/initialize). The `maxStoredCount` cap is set once at
+    /// construction and never changed — it protects the host app from
+    /// disk-exhaustion regardless of server config.
+    private var options: QueueOptions?
     private let logger: any GalvaLogger
     private var state: State = .idle
     private var processingTask: Task<Void, Never>?
@@ -220,6 +224,36 @@ class MessageQueue {
         // Start continuous processing if batching is configured
         if let batchingWindow = options?.batchingWindow {
             startBatchTimer(window: batchingWindow)
+        }
+    }
+
+    /// Re-tune the batching window at runtime. The SDK calls this after
+    /// `/sdk/initialize` returns a server-driven `batchCollection` so the
+    /// flush cadence is genuinely remote-controlled.
+    ///
+    /// - Parameters:
+    ///   - timeWindow: New time-based flush interval in seconds.
+    ///   - maxCount: New count-based flush threshold (messages per batch).
+    ///
+    /// If the queue is currently running, the batch timer restarts with
+    /// the new window. Idempotent when called with the same values.
+    func updateBatchingWindow(timeWindow: TimeInterval, maxCount: Int) {
+        let new = QueueOptions.BatchingWindow(
+            timeWindow: max(0.1, timeWindow), // never below 100ms — guards against bad server config
+            maxCount: max(1, min(maxCount, SDKConstants.maxBatchSize))
+        )
+        if options?.batchingWindow == new {
+            return // no-op
+        }
+        var updated = options ?? QueueOptions()
+        updated.batchingWindow = new
+        options = updated
+        logger.info(.queue, "batching window updated", metadata: [
+            "timeWindow": String(format: "%.2f", new.timeWindow),
+            "maxCount": String(new.maxCount),
+        ])
+        if state == .processing {
+            startBatchTimer(window: new)
         }
     }
 

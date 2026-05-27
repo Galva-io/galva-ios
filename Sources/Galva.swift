@@ -50,6 +50,58 @@ import UIKit
 /// calls. Subsequent calls are ignored with a warning.
 public enum Galva {
 
+    // MARK: Environment
+
+    /// Selects the Galva backend the SDK talks to. Different environments
+    /// are fully isolated — production data never crosses into development
+    /// and vice versa.
+    ///
+    /// Choose your environment per build target (e.g. `.development` for
+    /// in-house TestFlight builds, `.production` for App Store releases).
+    /// The same API key cannot be used across environments — `pk_live_*`
+    /// keys are valid against `.production` only; `pk_test_*` against
+    /// `.development`.
+    public enum Environment: Sendable, Hashable {
+
+        /// `api.galva.io` + `webview.galva.io`. App Store releases ship
+        /// this. **Default** if you don't pass an environment.
+        case production
+
+        /// `api.galva.dev` + `webview.galva.dev`. Used for in-house dev /
+        /// staging builds and local debugging.
+        case development
+
+        /// Custom backend — supply your own API + webview bundle CDN URLs.
+        /// Reserved for on-prem and proxy setups; the standard SaaS path
+        /// is `.production` / `.development`.
+        ///
+        /// - Parameters:
+        ///   - apiBaseURL: Base URL the SDK appends RPC paths to
+        ///     (`/sdk/initialize`, `/identities/batchCollect`, etc.).
+        ///   - webviewBundleCDN: Origin the SDK downloads versioned
+        ///     in-app message HTML bundles from. Each version is fetched
+        ///     as `<webviewBundleCDN>/<version>.html`.
+        case custom(apiBaseURL: URL, webviewBundleCDN: URL)
+
+        /// Resolved API base URL for this environment.
+        public var apiBaseURL: URL {
+            switch self {
+            case .production:   return SDKConstants.productionAPIBaseURL
+            case .development:  return SDKConstants.developmentAPIBaseURL
+            case .custom(let api, _): return api
+            }
+        }
+
+        /// Resolved webview bundle CDN URL for this environment.
+        public var webviewBundleCDN: URL {
+            switch self {
+            case .production:   return SDKConstants.productionWebviewBundleCDN
+            case .development:  return SDKConstants.developmentWebviewBundleCDN
+            case .custom(_, let cdn): return cdn
+            }
+        }
+    }
+
     // MARK: AutoTrack
 
     /// Auto-tracking categories. Pass an `OptionSet` to `configure(...)` to
@@ -145,11 +197,22 @@ public enum Galva {
     ///
     ///     Galva.configure(
     ///         apiKey: "gv_pub_xxx",
+    ///         environment: .production,
     ///         autoTrackCategories: [.lifecycle],
     ///         logLevel: .info
     ///     )
+    ///
+    /// - Parameters:
+    ///   - apiKey: Your Galva publishable API key.
+    ///   - environment: Backend to talk to. Default is `.production`. Use
+    ///     `.development` for staging / TestFlight, or `.custom(...)` for
+    ///     on-prem and proxy setups.
+    ///   - autoTrackCategories: Auto-collected event categories.
+    ///   - logLevel: Minimum severity to log.
+    ///   - logger: Optional custom logger sink.
     public static func configure(
         apiKey: String,
+        environment: Environment = .production,
         autoTrackCategories: AutoTrackCategory = [.lifecycle, .transactions],
         logLevel: LogLevel = .warning,
         logger: (any GalvaLogger)? = nil
@@ -157,6 +220,7 @@ public enum Galva {
         Task { @GalvaActor in
             await SDKCore.shared.configure(
                 apiKey: apiKey,
+                environment: environment,
                 autoTrack: autoTrackCategories,
                 logLevel: logLevel,
                 userLogger: logger

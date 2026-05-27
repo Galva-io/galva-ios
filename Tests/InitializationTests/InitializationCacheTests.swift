@@ -72,17 +72,15 @@ final class InitializationCacheTests: XCTestCase {
                 .init(
                     id: "prod_1",
                     name: "Pro",
-                    type: .renewable,
-                    status: .active,
-                    platformSpecs: .init(appstore: nil, playstore: nil, paddle: nil),
                     plans: [
                         .init(
                             id: "plan_yearly",
-                            status: .active,
                             name: "Yearly",
-                            level: 1,
-                            period: .init(unit: .year, value: 1, humanizedDuration: "1 year"),
-                            platformSpecs: .init(appstore: nil, playstore: nil, paddle: nil)
+                            platformSpecs: .init(
+                                appstore: .init(subscriptions: [
+                                    .init(productId: "com.acme.pro.yearly", id: "sub_1")
+                                ])
+                            )
                         )
                     ]
                 )

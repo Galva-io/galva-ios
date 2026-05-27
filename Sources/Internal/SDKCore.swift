@@ -28,6 +28,9 @@ import UIKit
 #if canImport(WebKit)
 import WebKit
 #endif
+#if canImport(StoreKit)
+import StoreKit
+#endif
 
 @GalvaActor
 final class SDKCore {
@@ -50,6 +53,9 @@ final class SDKCore {
 
     var configured = false
     private var apiKey: String?
+    /// Selected backend (production / development / custom). Drives every
+    /// URL the SDK touches — base API, webview bundle CDN.
+    private(set) var environment: Galva.Environment = .production
     private var autoTrack: Galva.AutoTrackCategory = []
     private var logLevel: Galva.LogLevel = .warning
     private var deviceToken: String?
@@ -80,6 +86,14 @@ final class SDKCore {
 
     /// On-disk cache for WebView HTML bundles.
     var bundleCache: WebViewBundleCache?
+
+    /// StoreKit warm-cache for product metadata referenced by in-app
+    /// message offers. Populated after each successful /sdk/initialize
+    /// refresh; the WebView presenter injects its current snapshot as
+    /// `window.galvaProducts` on every present.
+    #if canImport(StoreKit)
+    var storeKitPrefetcher: StoreKitProductPrefetcher?
+    #endif
 
     /// Foreground lifecycle observer driving the in-app message poller.
     /// Held to keep the registration alive across the SDK's lifetime.
@@ -133,6 +147,7 @@ final class SDKCore {
 
     func configure(
         apiKey: String,
+        environment: Galva.Environment = .production,
         autoTrack: Galva.AutoTrackCategory,
         logLevel: Galva.LogLevel,
         userLogger: (any GalvaLogger)? = nil
@@ -143,6 +158,7 @@ final class SDKCore {
         }
 
         self.apiKey = apiKey
+        self.environment = environment
         self.autoTrack = autoTrack
         self.logLevel = logLevel
         if let userLogger {
@@ -159,7 +175,7 @@ final class SDKCore {
         setCachedEndUserId(identity.endUserId)
 
         let uploader = Uploader(
-            baseURL: SDKConstants.defaultBaseURL,
+            baseURL: environment.apiBaseURL,
             apiKey: apiKey,
             session: .shared,
             logger: logger
@@ -183,7 +199,12 @@ final class SDKCore {
 
         // Build the in-app messaging stack. Failures here log + skip — we
         // never block configure() on optional features.
-        bootstrapInAppMessaging(apiKey: apiKey, identity: identity, logger: logger)
+        bootstrapInAppMessaging(
+            apiKey: apiKey,
+            environment: environment,
+            identity: identity,
+            logger: logger
+        )
 
         await queue.startRunloop()
         configured = true
@@ -197,12 +218,36 @@ final class SDKCore {
         // identify() call.
         await identify(userId: nil, appAccountToken: nil, traits: nil)
 
-        // Kick off async /sdk/initialize refresh. Cached values are already
-        // surfaced (synchronously) inside bootstrapInAppMessaging — this
-        // pulls the freshest data into the cache for next launch.
+        // If we restored cached init data, apply its server-tuned batch
+        // window to the freshly-built queue immediately — that way the
+        // first session honors yesterday's tuning instead of running on
+        // bare defaults until the refresh lands.
+        if let cached = initializationManager?.current {
+            queue.updateBatchingWindow(
+                timeWindow: cached.batchCollection.flushInterval,
+                maxCount: cached.batchCollection.flushAtCount
+            )
+        }
+
+        // Kick off async /sdk/initialize refresh. On success, apply the
+        // server-driven batch window so server-side load management is
+        // genuinely remote-controlled, and warm the StoreKit cache so
+        // offer pricing is ready by the time the first in-app message
+        // opens.
         if let initManager = initializationManager {
-            Task { @GalvaActor in
+            Task { @GalvaActor [weak self] in
                 await initManager.refresh()
+                guard let self,
+                      let live = initManager.current else { return }
+                if let queue = self.queue {
+                    queue.updateBatchingWindow(
+                        timeWindow: live.batchCollection.flushInterval,
+                        maxCount: live.batchCollection.flushAtCount
+                    )
+                }
+                #if canImport(StoreKit)
+                self.storeKitPrefetcher?.prefetch(productIds: live.storekitProductIds)
+                #endif
             }
         }
     }
@@ -213,11 +258,12 @@ final class SDKCore {
     /// pipeline keeps working.
     private func bootstrapInAppMessaging(
         apiKey: String,
+        environment: Galva.Environment,
         identity: IdentityStore,
         logger: any GalvaLogger
     ) {
         let apiClient = APIClient(
-            baseURL: SDKConstants.defaultBaseURL,
+            baseURL: environment.apiBaseURL,
             apiKey: apiKey,
             session: .shared,
             logger: logger
@@ -240,15 +286,33 @@ final class SDKCore {
         initManager.loadCached() // synchronous; primes `current`
         self.initializationManager = initManager
 
-        // Bundle cache — non-fatal if Caches/ isn't writable.
+        // Bundle cache — non-fatal if Caches/ isn't writable. CDN URL
+        // follows the configured environment so production builds never
+        // accidentally pull dev bundles (and vice versa).
         let bundleCache: WebViewBundleCache?
         do {
-            bundleCache = try WebViewBundleCache(client: apiClient, logger: logger)
+            bundleCache = try WebViewBundleCache(
+                client: apiClient,
+                cdnBaseURL: environment.webviewBundleCDN,
+                logger: logger
+            )
         } catch {
             logger.warning(.configuration, "bundle cache disabled (no disk)", error: error)
             bundleCache = nil
         }
         self.bundleCache = bundleCache
+
+        // StoreKit warm-cache. Always available on Apple platforms; the
+        // canImport guard is defensive for non-Apple builds (linux).
+        #if canImport(StoreKit)
+        self.storeKitPrefetcher = StoreKitProductPrefetcher(logger: logger)
+        // Warm immediately if we have cached init data — yesterday's
+        // catalog is a fine starting point on cold start. The refresh
+        // task below will re-prefetch with fresh ids after the network.
+        if let cached = initManager.current {
+            self.storeKitPrefetcher?.prefetch(productIds: cached.storekitProductIds)
+        }
+        #endif
 
         // Manager — only constructible if both bundleCache and initManager
         // came up. Without them in-app messaging cannot function.
@@ -437,11 +501,20 @@ final class SDKCore {
             throw InAppMessages.Error.notConfigured
         }
         let snapshotLogger = logger
+
+        // Snapshot the current StoreKit product summary on the GalvaActor
+        // BEFORE hopping to MainActor — the prefetcher is actor-isolated
+        // and the WebView needs the JSON in hand to install the
+        // `window.galvaProducts` user script at .atDocumentStart.
+        #if canImport(StoreKit)
+        let productsJSON = storeKitPrefetcher?.currentSummaryJSON() ?? "{}"
+        #else
+        let productsJSON = "{}"
+        #endif
+
         // Hop to MainActor to construct / reuse the presenter. The
         // presenter then runs its async show() on the main actor.
         try await MainActor.run {
-            // Reuse the existing presenter if one is already alive so we
-            // dedupe overlays on duplicate show() calls.
             let presenter: InAppMessagePresenter
             if let existing = self.presenter {
                 presenter = existing
@@ -455,7 +528,7 @@ final class SDKCore {
                 self.presenter = presenter
             }
             return presenter
-        }.show(message: message, in: scene)
+        }.show(message: message, in: scene, prefetchedProductsJSON: productsJSON)
     }
     #endif
 

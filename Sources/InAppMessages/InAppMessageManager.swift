@@ -170,8 +170,7 @@ final class InAppMessageManager {
         guard let messageUUID = UUID(uuidString: messageId) else {
             throw InAppMessageError.invalidMessageId
         }
-        let path = SDKConstants.communicationResolvePath
-            .replacingOccurrences(of: "{id}", with: messageUUID.uuidString)
+        let path = SDKConstants.communicationResolvePath(messageId: messageUUID)
         let fallbackVersion = initialization.current?.webviewVersions.last
         let request = ResolveRequest(
             anonymousId: identity.anonymousId,
@@ -184,11 +183,14 @@ final class InAppMessageManager {
         switch response.data {
         case .valid(let valid):
             resolvedPayloads[messageId] = valid
-            guard let chosenVersion = valid.webviewVersion ?? fallbackVersion else {
-                // Server didn't pin a version AND /sdk/initialize hasn't
-                // landed yet — no bundle to load.
-                throw InAppMessageError.bundleUnavailable
-            }
+            // Pick the version: server pin > /sdk/initialize fallback >
+            // hardcoded SDKConstants.fallbackWebviewVersion (used only when
+            // both server config and the resolve response are silent, i.e.
+            // truly offline first launch). This guarantees the show flow
+            // always has a CDN URL to attempt.
+            let chosenVersion = valid.webviewVersion
+                ?? fallbackVersion
+                ?? SDKConstants.fallbackWebviewVersion
             return Resolved(payload: valid, webviewVersion: chosenVersion)
         case .invalid:
             // Drop any stale cached payload — server has revoked.

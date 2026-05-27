@@ -17,32 +17,72 @@ enum SDKConstants {
     /// Value for the `x-sdk-version` header. Format: `ios-X.Y.Z`.
     static let sdkVersionHeader: String = "\(libraryName)-\(version)"
 
-    /// Default Galva API base URL.
-    static let defaultBaseURL = URL(string: "https://api.galva.dev")! // galva-lint:disable reason="hardcoded build-time constant; URL parser cannot fail on this literal"
+    // MARK: - Per-environment URLs
+    //
+    // Exposed as `static let` so `Galva.Environment` can map each case to
+    // its concrete URL without rebuilding URL(string:) on every read. The
+    // `!` is safe — URL(string:) cannot fail on a build-time literal that
+    // we've verified.
 
-    /// CDN that hosts WebView HTML bundles. Bundles are immutable per
-    /// version; the SDK downloads `<bundleCDN>/<version>.html` on first
-    /// encounter and caches under Application Support / Caches.
-    static let webviewBundleCDN = URL(string: "https://webview.galva.io")! // galva-lint:disable reason="hardcoded build-time constant"
+    /// Production Galva API.
+    static let productionAPIBaseURL = URL(string: "https://api.galva.io")! // galva-lint:disable reason="build-time literal"
+    /// Development / staging Galva API.
+    static let developmentAPIBaseURL = URL(string: "https://api.galva.dev")! // galva-lint:disable reason="build-time literal"
+
+    /// Production CDN hosting WebView HTML bundles. Bundles are immutable
+    /// per version; the SDK downloads `<bundleCDN>/<version>.html` on
+    /// first encounter and caches under Application Support / Caches.
+    static let productionWebviewBundleCDN = URL(string: "https://webview.galva.io")! // galva-lint:disable reason="build-time literal"
+    /// Development / staging WebView bundle CDN.
+    static let developmentWebviewBundleCDN = URL(string: "https://webview.galva.dev")! // galva-lint:disable reason="build-time literal"
 
     /// Native ↔ hosted-page bridge contract version. Reported to the server
     /// on /sdk/initialize and to the hosted page via `galva.getPageContext`.
     /// Bump on any breaking change to the bridge wire protocol.
     static let bridgeProtocolVersion = "1.0"
 
-    /// Batch endpoint path.
+    /// Default WebView bundle version the SDK falls back to when neither
+    /// `/sdk/initialize` nor a server resolve has pinned one (typical of
+    /// truly offline first launches). Build with a version known to be
+    /// hosted on every active CDN so the show flow can still load HTML.
+    static let fallbackWebviewVersion = "1.0.0"
+
+    // MARK: - Endpoint paths
+    //
+    // Each path is exposed as either a `static let` (no parameters) or a
+    // `static func ...(...) -> String` for parameterized routes. The
+    // function form prevents the string-templating bugs that
+    // `"/x/{id}/y".replacingOccurrences(of:)` is prone to.
+
+    /// `POST /identities/batchCollect` — event upload batch endpoint.
     static let batchCollectPath = "/identities/batchCollect"
-    /// SDK initialization endpoint path.
+
+    /// `POST /sdk/initialize` — SDK bootstrap config.
     static let sdkInitializePath = "/sdk/initialize"
-    /// Communication list endpoint path.
+
+    /// `GET /identities/communications` — list pending in-app
+    /// communications for the current identity.
     static let communicationListPath = "/identities/communications"
-    /// Communication resolve endpoint path template — `{id}` is replaced at call time.
-    static let communicationResolvePath = "/identities/communications/{id}/resolve"
+
+    /// `POST /identities/communications/{messageId}/resolve` — resolve a
+    /// single communication to its renderable payload.
+    static func communicationResolvePath(messageId: UUID) -> String {
+        "/identities/communications/\(messageId.uuidString)/resolve"
+    }
+
+    /// Build the file URL for a WebView bundle on the supplied CDN. Used
+    /// by `WebViewBundleCache` so the path scheme stays in one place.
+    static func webviewBundleURL(version: String, cdn: URL) -> URL {
+        cdn.appendingPathComponent("\(version).html")
+    }
 
     /// Max messages per batch per OpenAPI spec.
     static let maxBatchSize = 100
 
-    /// Default batching window before forced flush.
+    /// Default batching window before forced flush. Server-driven values
+    /// from `/sdk/initialize` override these at runtime — these only
+    /// apply during the brief window between configure() and the first
+    /// successful init response.
     static let defaultFlushInterval: TimeInterval = 5
     static let defaultFlushAtCount: Int = 50
 
