@@ -9,16 +9,11 @@
 //  The iOS client only uses three pieces of the response:
 //      • `webviewVersions`       — drives bundle prefetch + show fallback
 //      • `batchCollection`       — server-tuned flush window for the queue
-//      • Apple `productId`s      — fed into StoreKit prefetch so offer
+//      • `appstore.productIds`   — fed into StoreKit prefetch so offer
 //                                  pricing is ready before the WebView opens
 //
-//  We DELIBERATELY do not model the server's product / plan / platformSpec
-//  shapes as Swift types. The server keeps full Plan / Product / cross-
-//  platform billing metadata for backend reasons; the iOS client just
-//  walks the raw JSON to pull `productId` strings out and discards
-//  everything else. That keeps the SDK forward-compatible with any server
-//  schema change short of renaming the path
-//  `products[].plans[].platformSpecs.appstore.subscriptions[].productId`.
+//  The server may also return `playstore.productIds` for Android clients;
+//  the iOS SDK ignores that branch entirely.
 //
 //  Cache format
 //  ────────────
@@ -28,9 +23,9 @@
 //        "batchCollection": {...},
 //        "storekitProductIds": [...]
 //      }
-//  The decoder accepts both the wire shape (nested `products`) and the
-//  cache shape (flat `storekitProductIds`), so the same Swift type
-//  round-trips through `/sdk/initialize` and the on-disk cache file.
+//  The decoder accepts both the wire shape (`appstore.productIds`) and the
+//  cache shape (`storekitProductIds`), so the same Swift type round-trips
+//  through `/sdk/initialize` and the on-disk cache file.
 //
 //  Request:
 //      { "bridgeProtocolVersion": "1.0" }
@@ -72,10 +67,11 @@ struct InitializationData: Sendable, Codable, Hashable {
     /// remote-controlled.
     let batchCollection: BatchCollection
 
-    /// Apple StoreKit product identifiers extracted from the server's
-    /// product catalog. Fed into `StoreKit.Product.products(for:)` so
-    /// offer pricing is ready before any in-app message renders.
-    /// De-duped, ordered by first encounter.
+    /// Apple StoreKit product identifiers. Fed into
+    /// `StoreKit.Product.products(for:)` so offer pricing is ready before
+    /// any in-app message renders. Empty when the server doesn't include
+    /// an `appstore` block in the response (the field is optional in the
+    /// `/sdk/initialize` spec).
     let storekitProductIds: [String]
 
     init(
@@ -107,8 +103,15 @@ struct InitializationData: Sendable, Codable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case webviewVersions
         case batchCollection
-        case products            // wire shape
-        case storekitProductIds  // cache shape
+        case appstore            // wire shape: { productIds: [String] }
+        case storekitProductIds  // cache shape: [String] (we wrote this)
+    }
+
+    /// Wire shape for the `appstore` (and `playstore`, ignored on iOS)
+    /// block — `{ productIds: [String] }`. Stays a private nested type
+    /// because nothing outside the decoder cares.
+    private struct PlatformProductIds: Decodable {
+        let productIds: [String]
     }
 
     init(from decoder: Decoder) throws {
@@ -117,19 +120,33 @@ struct InitializationData: Sendable, Codable, Hashable {
         self.batchCollection = try c.decode(BatchCollection.self, forKey: .batchCollection)
 
         // Cache shape wins when present — it's the canonical form we
-        // wrote ourselves and skips the walk over server-side product
-        // metadata we don't care about.
+        // wrote ourselves and doesn't need wire-format mapping.
         if let flat = try c.decodeIfPresent([String].self, forKey: .storekitProductIds) {
-            self.storekitProductIds = flat
+            // Defensive: drop empty entries the server should never send,
+            // matching the cache-write contract.
+            self.storekitProductIds = flat.filter { !$0.isEmpty }
             return
         }
 
-        // Wire shape: walk the raw `products` tree, pulling only
-        // appstore productIds. Missing / malformed branches are skipped
-        // silently — the server can add platforms / restructure plans
-        // without breaking decode.
-        let rawProducts = try c.decodeIfPresent([AnyJSONValue].self, forKey: .products) ?? []
-        self.storekitProductIds = Self.extractAppleProductIds(from: rawProducts)
+        // Wire shape: pull straight from `appstore.productIds`. The block
+        // is optional in the OpenAPI spec — apps with no appstore-billed
+        // products will simply receive no Apple SKUs.
+        if let appstore = try c.decodeIfPresent(
+            PlatformProductIds.self, forKey: .appstore
+        ) {
+            // Filter empty strings + dedupe while preserving order so the
+            // StoreKit prefetcher never asks Apple about an empty product
+            // id and the seen-set in the prefetcher dedupes naturally.
+            var seen: Set<String> = []
+            var ordered: [String] = []
+            for id in appstore.productIds where !id.isEmpty && seen.insert(id).inserted {
+                ordered.append(id)
+            }
+            self.storekitProductIds = ordered
+            return
+        }
+
+        self.storekitProductIds = []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -137,38 +154,7 @@ struct InitializationData: Sendable, Codable, Hashable {
         try c.encode(webviewVersions, forKey: .webviewVersions)
         try c.encode(batchCollection, forKey: .batchCollection)
         // Canonical cache form — flat productId list. We never re-emit
-        // the nested `products` tree.
+        // the wire `appstore` / `playstore` blocks.
         try c.encode(storekitProductIds, forKey: .storekitProductIds)
-    }
-
-    // MARK: Wire extraction
-    //
-    // Walks `products[].plans[].platformSpecs.appstore.subscriptions[]`
-    // pulling out `productId` strings. Tolerant of every branch being
-    // missing or the wrong type — anything unexpected is silently
-    // skipped, never thrown.
-
-    static func extractAppleProductIds(from products: [AnyJSONValue]) -> [String] {
-        var seen: Set<String> = []
-        var ordered: [String] = []
-
-        for product in products {
-            guard case .object(let productObj) = product,
-                  case .array(let plans)? = productObj["plans"] else { continue }
-            for plan in plans {
-                guard case .object(let planObj) = plan,
-                      case .object(let specs)? = planObj["platformSpecs"],
-                      case .object(let appstore)? = specs["appstore"],
-                      case .array(let subs)? = appstore["subscriptions"] else { continue }
-                for sub in subs {
-                    guard case .object(let subObj) = sub,
-                          case .string(let pid)? = subObj["productId"],
-                          !pid.isEmpty,
-                          seen.insert(pid).inserted else { continue }
-                    ordered.append(pid)
-                }
-            }
-        }
-        return ordered
     }
 }

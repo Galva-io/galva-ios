@@ -61,12 +61,32 @@ struct CommunicationItem: Sendable, Codable, Hashable {
 
 // MARK: - Resolve request
 
+/// `POST /identities/communications/{id}/resolve` request body.
+///
+/// The wire schema is `anyOf [ios, android, web]` — each platform gets a
+/// slightly different optional `billingContext` block. Since this SDK
+/// always sends `devicePlatform: .ios`, we model the iOS shape directly:
+/// `billingContext.territory` is the App Store storefront country code
+/// (e.g. `"USA"`, `"GBR"`, `"JPN"`), read from `StoreKit.Storefront.current`
+/// at resolve time. Sent so the server can render storefront-aware copy
+/// / pricing into the offer payload before it hits the bundle.
 struct ResolveRequest: Sendable, Codable, Hashable {
     let anonymousId: String?
     let endUserId: String?
     let devicePlatform: DevicePlatform
     let bridgeProtocolVersion: String?
     let webviewVersion: String?
+    /// Optional billing context — omit (or pass `nil`) when StoreKit
+    /// hasn't surfaced a storefront yet (Simulator without `.storekit`
+    /// config, user not signed into the App Store). The server treats
+    /// missing context as "no storefront-specific rendering needed".
+    let billingContext: BillingContext?
+
+    /// iOS-specific billing context. The `territory` field maps to
+    /// `Storefront.countryCode` (ISO 3166-1 alpha-3).
+    struct BillingContext: Sendable, Codable, Hashable {
+        let territory: String
+    }
 
     enum DevicePlatform: String, Sendable, Codable, Hashable {
         case ios, android, web

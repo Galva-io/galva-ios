@@ -2,15 +2,25 @@
 //  InitializationDataTests.swift
 //  GalvaTests
 //
-//  Covers the dual-shape decoder + tolerant product-id walker on
-//  `InitializationData`, plus the `BatchCollection` ms→s conversion.
+//  Covers the dual-shape decoder on `InitializationData`, plus the
+//  `BatchCollection` ms→s conversion.
 //
-//  The wire shape carries a deeply-nested product / plan / platformSpec
-//  tree the iOS SDK doesn't model; the decoder walks the raw JSON and
-//  pulls only `productId` strings out of
-//  `products[].plans[].platformSpecs.appstore.subscriptions[]`. The cache
-//  shape is a flat `storekitProductIds: [String]` list. Both must decode
-//  to the same Swift value.
+//  Wire shape (server response):
+//      {
+//        "webviewVersions": [...],
+//        "batchCollection": {...},
+//        "appstore":  { "productIds": [...] },   // optional
+//        "playstore": { "productIds": [...] }    // optional — iOS ignores
+//      }
+//
+//  Cache shape (what we write to disk):
+//      {
+//        "webviewVersions": [...],
+//        "batchCollection": {...},
+//        "storekitProductIds": [...]
+//      }
+//
+//  Both shapes must decode to the same Swift value.
 //
 
 import Foundation
@@ -19,129 +29,85 @@ import XCTest
 
 final class InitializationDataTests: XCTestCase {
 
-    // MARK: - Wire decoder
+    // MARK: - Wire decoder (new flat appstore.productIds shape)
 
-    func test_wire_extractsProductIds_fromNestedTree() throws {
+    func test_wire_readsAppstoreProductIds() throws {
         let json = #"""
         {
           "webviewVersions": ["1.0.0"],
           "batchCollection": { "flushSize": 50, "flushIntervalMs": 5000 },
-          "products": [{
-            "id": "prod_1",
-            "name": "Pro",
-            "type": "renewable",
-            "status": "active",
-            "plans": [{
-              "id": "plan_year",
-              "status": "active",
-              "name": "Yearly",
-              "platformSpecs": {
-                "appstore": {
-                  "subscriptions": [
-                    { "id": "sub_a", "productId": "com.app.pro.year" }
-                  ]
-                },
-                "playstore": { "basePlans": [{ "productId": "ignored_google_id" }] }
-              }
-            }, {
-              "id": "plan_month",
-              "platformSpecs": {
-                "appstore": {
-                  "subscriptions": [
-                    { "productId": "com.app.pro.month" }
-                  ]
-                }
-              }
-            }]
-          }]
+          "appstore":  { "productIds": ["com.app.pro.year", "com.app.pro.month"] },
+          "playstore": { "productIds": ["com.app.pro.year.gp"] }
         }
         """#
         let decoded = try JSONDecoder().decode(InitializationData.self, from: Data(json.utf8))
+        // Only the appstore branch is consumed — playstore is ignored.
         XCTAssertEqual(
             decoded.storekitProductIds,
-            ["com.app.pro.year", "com.app.pro.month"],
-            "must extract only Apple appstore product IDs, in encounter order"
+            ["com.app.pro.year", "com.app.pro.month"]
         )
         XCTAssertEqual(decoded.webviewVersions, ["1.0.0"])
     }
 
-    func test_wire_dedupesProductIds_acrossPlansAndProducts() throws {
-        let dup = "com.app.pro.year"
+    func test_wire_dedupesProductIds_preservingOrder() throws {
+        // Defensive — the server shouldn't ship dupes, but we filter
+        // them out so the StoreKit prefetcher doesn't fan out duplicate
+        // `Product.products(for:)` lookups.
         let json = #"""
         {
           "webviewVersions": [],
           "batchCollection": { "flushSize": 50, "flushIntervalMs": 5000 },
-          "products": [
-            {
-              "id": "p1", "name": "Pro",
-              "plans": [
-                { "id": "a", "platformSpecs": { "appstore": { "subscriptions": [{ "productId": "\#(dup)" }] } } },
-                { "id": "b", "platformSpecs": { "appstore": { "subscriptions": [{ "productId": "\#(dup)" }] } } }
-              ]
-            },
-            {
-              "id": "p2", "name": "Family",
-              "plans": [
-                { "id": "c", "platformSpecs": { "appstore": { "subscriptions": [{ "productId": "\#(dup)" }] } } }
-              ]
-            }
-          ]
+          "appstore": { "productIds": ["com.a", "com.b", "com.a", "com.c", "com.b"] }
         }
         """#
         let decoded = try JSONDecoder().decode(InitializationData.self, from: Data(json.utf8))
-        XCTAssertEqual(decoded.storekitProductIds, [dup])
+        XCTAssertEqual(decoded.storekitProductIds, ["com.a", "com.b", "com.c"])
     }
 
-    func test_wire_tolerates_missingBranches_andUnknownFields() throws {
-        // Half the tree is missing / has unexpected fields / wrong types.
-        // The decoder must still succeed and just yield no productIds for
-        // the bad branches.
+    func test_wire_filtersEmptyProductIds() throws {
         let json = #"""
         {
           "webviewVersions": [],
           "batchCollection": { "flushSize": 50, "flushIntervalMs": 5000 },
-          "products": [
-            { "id": "no_plans", "name": "X" },
-            { "id": "weird_plans", "name": "Y", "plans": "not_an_array" },
-            { "id": "no_apple", "name": "Z", "plans": [
-                { "id": "p", "platformSpecs": { "playstore": { "basePlans": [] } } }
-            ]},
-            { "id": "empty_apple", "name": "W", "plans": [
-                { "id": "p", "platformSpecs": { "appstore": {} } }
-            ]},
-            { "id": "ok", "name": "OK", "futureField": 42, "plans": [
-                { "id": "p", "platformSpecs": {
-                    "appstore": { "subscriptions": [
-                        { "productId": "" },
-                        { "productId": "com.app.real" }
-                    ]}
-                }}
-            ]}
-          ]
+          "appstore": { "productIds": ["", "com.real", ""] }
         }
         """#
         let decoded = try JSONDecoder().decode(InitializationData.self, from: Data(json.utf8))
-        XCTAssertEqual(decoded.storekitProductIds, ["com.app.real"],
-                       "must skip malformed / empty / non-Apple branches without throwing")
+        XCTAssertEqual(decoded.storekitProductIds, ["com.real"])
     }
 
-    func test_wire_emptyProducts_yieldsEmptyIdList() throws {
+    func test_wire_appstoreOptional_yieldsEmptyIds() throws {
+        // `appstore` is optional in the OpenAPI spec. Apps with no
+        // appstore-billed products receive a response without that block.
         let json = #"""
         {
-          "webviewVersions": ["v"],
-          "batchCollection": { "flushSize": 10, "flushIntervalMs": 1000 },
-          "products": []
+          "webviewVersions": ["1.0.0"],
+          "batchCollection": { "flushSize": 50, "flushIntervalMs": 5000 }
         }
         """#
         let decoded = try JSONDecoder().decode(InitializationData.self, from: Data(json.utf8))
         XCTAssertEqual(decoded.storekitProductIds, [])
+        XCTAssertEqual(decoded.webviewVersions, ["1.0.0"])
+    }
+
+    func test_wire_ignoresUnknownTopLevelFields() throws {
+        // Forward-compat: server can add new top-level fields without
+        // breaking decode — JSONDecoder ignores unknown keys.
+        let json = #"""
+        {
+          "webviewVersions": [],
+          "batchCollection": { "flushSize": 50, "flushIntervalMs": 5000 },
+          "appstore": { "productIds": ["com.app"] },
+          "futureFeatureKey": { "anything": "ignored" }
+        }
+        """#
+        let decoded = try JSONDecoder().decode(InitializationData.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.storekitProductIds, ["com.app"])
     }
 
     // MARK: - Cache decoder
 
     func test_cache_acceptsFlatProductIdList() throws {
-        // Cache writes flat shape; decoder must accept it without the
-        // nested `products` tree.
         let json = #"""
         {
           "webviewVersions": ["1.0.0"],
@@ -153,31 +119,38 @@ final class InitializationDataTests: XCTestCase {
         XCTAssertEqual(decoded.storekitProductIds, ["com.app.a", "com.app.b"])
     }
 
-    func test_cache_flatListWinsOverNestedProducts() throws {
-        // If both shapes are present (defensive), the flat list — which
-        // is the form we wrote ourselves — wins. The nested products
-        // branch isn't even walked.
+    func test_cache_flatListWinsOverWireAppstore() throws {
+        // If both shapes are present (defensive — shouldn't happen on
+        // either disk or wire), the flat list — which is the form WE
+        // wrote — wins. The wire `appstore` branch is not consulted.
         let json = #"""
         {
           "webviewVersions": [],
           "batchCollection": { "flushSize": 50, "flushIntervalMs": 5000 },
           "storekitProductIds": ["cached_id"],
-          "products": [
-            { "id": "p", "name": "P", "plans": [
-                { "id": "x", "platformSpecs": { "appstore": { "subscriptions": [
-                    { "productId": "wire_id" }
-                ]}}}
-            ]}
-          ]
+          "appstore": { "productIds": ["wire_id"] }
         }
         """#
         let decoded = try JSONDecoder().decode(InitializationData.self, from: Data(json.utf8))
         XCTAssertEqual(decoded.storekitProductIds, ["cached_id"])
     }
 
-    // MARK: - Encode round-trip
+    func test_cache_filtersEmptyEntries_onRead() throws {
+        // Belt-and-suspenders against a tampered or corrupted cache file.
+        let json = #"""
+        {
+          "webviewVersions": [],
+          "batchCollection": { "flushSize": 50, "flushIntervalMs": 5000 },
+          "storekitProductIds": ["", "com.real", ""]
+        }
+        """#
+        let decoded = try JSONDecoder().decode(InitializationData.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.storekitProductIds, ["com.real"])
+    }
 
-    func test_encode_writesFlatShape() throws {
+    // MARK: - Encode round-trip (cache shape)
+
+    func test_encode_writesFlatShape_neverWireShape() throws {
         let data = InitializationData(
             webviewVersions: ["v1"],
             batchCollection: .init(flushSize: 25, flushIntervalMs: 3000),
@@ -188,7 +161,21 @@ final class InitializationDataTests: XCTestCase {
             try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
         )
         XCTAssertNotNil(asJSON["storekitProductIds"])
-        XCTAssertNil(asJSON["products"], "encoder must never emit the nested wire shape")
+        XCTAssertNil(asJSON["appstore"],
+                     "encoder must never emit the wire `appstore` block")
+        XCTAssertNil(asJSON["playstore"],
+                     "encoder must never emit a `playstore` block")
+    }
+
+    func test_encode_decode_roundTrips() throws {
+        let original = InitializationData(
+            webviewVersions: ["1.0.0", "1.0.1"],
+            batchCollection: .init(flushSize: 50, flushIntervalMs: 5000),
+            storekitProductIds: ["com.app.year", "com.app.month"]
+        )
+        let bytes = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(InitializationData.self, from: bytes)
+        XCTAssertEqual(decoded, original)
     }
 
     // MARK: - BatchCollection conversions

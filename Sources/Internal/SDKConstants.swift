@@ -15,7 +15,7 @@ enum SDKConstants {
     static let libraryName = "ios"
 
     /// Value for the `x-sdk-version` header. Format: `ios-X.Y.Z`.
-    static let sdkVersionHeader: String = "\(libraryName)-\(version)"
+    static let sdkVersionHeader: String = "\(libraryName)/\(version)"
 
     // MARK: - Per-environment URLs
     //

@@ -23,6 +23,9 @@
 //
 
 import Foundation
+#if canImport(StoreKit)
+import StoreKit
+#endif
 
 @GalvaActor
 final class InAppMessageManager {
@@ -172,12 +175,20 @@ final class InAppMessageManager {
         }
         let path = SDKConstants.communicationResolvePath(messageId: messageUUID)
         let fallbackVersion = initialization.current?.webviewVersions.last
+
+        // App Store storefront country code (ISO 3166-1 alpha-3) lets the
+        // backend render storefront-aware copy / regional pricing into
+        // the resolved payload. `nil` when StoreKit isn't reachable —
+        // server treats that as "no storefront context".
+        let territory = await currentStorefrontTerritory()
+
         let request = ResolveRequest(
             anonymousId: identity.anonymousId,
             endUserId: identity.endUserId,
             devicePlatform: .ios,
             bridgeProtocolVersion: SDKConstants.bridgeProtocolVersion,
-            webviewVersion: fallbackVersion
+            webviewVersion: fallbackVersion,
+            billingContext: territory.map { ResolveRequest.BillingContext(territory: $0) }
         )
         let response: ResolveResponse = try await client.post(path: path, body: request)
         switch response.data {
@@ -235,6 +246,23 @@ final class InAppMessageManager {
         seenIds.removeAll(keepingCapacity: false)
         resolvedPayloads.removeAll(keepingCapacity: false)
         activeMessageId = nil
+    }
+
+    // MARK: - StoreKit storefront
+
+    /// Read the App Store storefront's country code (ISO 3166-1 alpha-3)
+    /// for inclusion in the resolve request's `billingContext.territory`.
+    /// Returns `nil` when StoreKit can't surface a storefront — Simulator
+    /// without a `.storekit` config, user not signed into the App Store,
+    /// or non-Apple build target. The server treats `nil` as "no
+    /// storefront-specific rendering needed", so callers don't need to
+    /// guard against it.
+    private func currentStorefrontTerritory() async -> String? {
+        #if canImport(StoreKit)
+        return await Storefront.current?.countryCode
+        #else
+        return nil
+        #endif
     }
 }
 
