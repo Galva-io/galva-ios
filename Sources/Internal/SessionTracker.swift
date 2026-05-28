@@ -117,11 +117,14 @@ final class SessionTracker {
         }
 
         // Either cold start (lastSessionStart == nil) or the 30-minute
-        // window has elapsed — emit a fresh session.
+        // window has elapsed — emit a fresh session. Capture the cold-start
+        // state BEFORE the assignment below, otherwise the log always reads
+        // "false" (lastSessionStart is non-nil by the time it's evaluated).
+        let isColdStart = (lastSessionStart == nil)
         lastSessionStart = now
         defaults.set(now, forKey: Self.lastSessionStartKey)
         logger.info(.lifecycle, "session_start", metadata: [
-            "coldStart": lastSessionStart == nil ? "true" : "false",
+            "coldStart": isColdStart ? "true" : "false",
         ])
 
         await trackHandler("session_start", contextProvider.sessionProperties())
