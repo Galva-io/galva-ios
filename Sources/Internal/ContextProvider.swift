@@ -129,6 +129,28 @@ struct ContextProvider: Sendable {
         )
     }
 
+    // MARK: - Session event properties
+
+    /// Property bag for the auto-tracked `session_start` event (see
+    /// `SessionTracker`). Every value is derived from the same snapshot /
+    /// bundle / library constants that feed `currentContext()`, so a
+    /// session_start's custom properties never disagree with the `context`
+    /// envelope on its own message — notably `os_version` here equals
+    /// `context.os.version` (`UIDevice.systemVersion`, e.g. `"17.0"`) rather
+    /// than the differently-formatted `ProcessInfo.operatingSystemVersionString`.
+    ///
+    /// `device_country` is intentionally omitted — the server derives it from
+    /// the request IP, which is more reliable than the device Region setting
+    /// (especially for travelers).
+    func sessionProperties() -> [String: AnyJSONValue] {
+        [
+            "device_locale": .string(Locale.current.identifier),
+            "os_version":    .string(osContext().version ?? ""),
+            "app_version":   .string(appContext().version ?? ""),
+            "sdk_version":   .string(SDKConstants.version),
+        ]
+    }
+
     // MARK: - App (Bundle access — safe from any actor)
 
     private func appContext() -> MessageContext.App {

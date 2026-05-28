@@ -112,6 +112,11 @@ final class SDKCore {
     /// the box is never mutated concurrently.
     nonisolated(unsafe) var lifecycleObserver: AppLifecycleObserver?
 
+    /// Session tracker (auto-emits `session_start`). Created only when
+    /// `autoTrackCategories` includes `.lifecycle` — `nil` otherwise so
+    /// the foreground callback skips the dispatch entirely.
+    var sessionTracker: SessionTracker?
+
     #if canImport(UIKit) && canImport(WebKit)
     /// WebView overlay presenter. Created lazily on first show(in:).
     /// `nonisolated(unsafe)` for the same reason as the lifecycle observer:
@@ -137,6 +142,77 @@ final class SDKCore {
     /// the read path doesn't need to hop onto GalvaActor.
     nonisolated private static let _identifiedUserIdLock = NSLock()
     nonisolated(unsafe) private static var _identifiedUserId: String?
+
+    // MARK: Opt-out
+    //
+    // Persisted "do not track" flag with a lock-protected mirror so the
+    // public `Galva.isOptedOut` accessor can read sync from any thread.
+    // Same shape as `cachedEndUserId` above — load at configure(), mutate
+    // through a GalvaActor-isolated setter, read via the lock.
+    //
+    // When opted out the SDK:
+    //   • drops every `track` / `identify` / `createEndpoint` /
+    //     `deleteEndpoint` / `setPreference` call silently
+    //   • skips the auto-tracked `session_start` emission
+    //   • skips `Transaction.all` sweeps
+    //   • purges the persisted event queue on the false → true transition
+    // In-app message polling + rendering keep working; opt-out blocks
+    // server-bound telemetry, not user-visible feature delivery.
+
+    nonisolated private static let _optedOutLock = NSLock()
+    nonisolated(unsafe) private static var _optedOut: Bool = false
+    /// `nonisolated` so the static load / set helpers (called from non-
+    /// GalvaActor contexts during configure() bootstrap) can reach it.
+    nonisolated static let optedOutDefaultsKey = "co.galva.optedOut"
+
+    /// Lock-protected sync read of the persisted opt-out flag.
+    nonisolated var isOptedOut: Bool {
+        Self._optedOutLock.lock()
+        defer { Self._optedOutLock.unlock() }
+        return Self._optedOut
+    }
+
+    /// Set the cached + persisted opt-out flag. Returns `true` if the
+    /// value actually changed (callers use this to decide whether to
+    /// purge the queue / log).
+    @discardableResult
+    nonisolated static func setOptedOutFlag(
+        _ value: Bool,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        _optedOutLock.lock()
+        let changed = _optedOut != value
+        _optedOut = value
+        _optedOutLock.unlock()
+        defaults.set(value, forKey: optedOutDefaultsKey)
+        return changed
+    }
+
+    /// Load the persisted opt-out flag into the in-memory mirror. Called
+    /// once at `configure()`.
+    nonisolated static func loadOptedOutFlag(defaults: UserDefaults = .standard) {
+        let value = defaults.bool(forKey: optedOutDefaultsKey)
+        _optedOutLock.lock()
+        _optedOut = value
+        _optedOutLock.unlock()
+    }
+
+    /// GalvaActor-isolated entry point used by `Galva.setOptOut(_:)`.
+    /// Persists the flag and purges the queue on the false → true
+    /// transition so pre-existing events don't leak after the user opts
+    /// out.
+    func setOptedOut(_ value: Bool) async {
+        let changed = Self.setOptedOutFlag(value)
+        guard changed else { return }
+        if value {
+            // Drop everything still on disk so opting back in doesn't
+            // resurrect events the user wanted ignored.
+            try? await queue?.clearQueue()
+            logger.info(.configuration, "opted out — event queue purged")
+        } else {
+            logger.info(.configuration, "opted back in")
+        }
+    }
 
     nonisolated var cachedEndUserId: String? {
         Self._identifiedUserIdLock.lock()
@@ -176,6 +252,11 @@ final class SDKCore {
         }
         rebuildLogger()
 
+        // Load persisted opt-out flag into the in-memory mirror so the
+        // public `Galva.isOptedOut` accessor returns the right value
+        // from any thread before the next mutation.
+        Self.loadOptedOutFlag()
+
         let identity = IdentityStore()
         self.identity = identity
 
@@ -209,6 +290,21 @@ final class SDKCore {
 
         // Build the in-app messaging stack. Failures here log + skip — we
         // never block configure() on optional features.
+        // Build the session tracker BEFORE the in-app messaging stack
+        // wires up the foreground observer — that callback fans out to
+        // sessionTracker?.handleForeground() so the tracker must be in
+        // place when the first cold-start event fires.
+        if autoTrack.contains(.lifecycle) {
+            self.sessionTracker = SessionTracker(
+                logger: logger,
+                contextProvider: self.contextProvider ?? ContextProvider(),
+                isOptedOut: { [weak self] in self?.isOptedOut ?? false },
+                trackHandler: { [weak self] event, props in
+                    await self?.track(event: event, properties: props)
+                }
+            )
+        }
+
         bootstrapInAppMessaging(
             apiKey: apiKey,
             environment: environment,
@@ -348,17 +444,29 @@ final class SDKCore {
         )
         self.inAppMessageManager = manager
 
-        // Foreground observer drives BOTH in-app message polling AND
-        // the read-only StoreKit transaction sweep. Both run on every
-        // foreground (cold start + return from background); the sweep
-        // is idempotent server-side and dedupes locally, so re-firing
-        // it is cheap.
+        // Foreground observer fans out to every SDK subsystem that
+        // wakes on foreground: in-app message polling, the read-only
+        // StoreKit transaction sweep, and the session tracker. All
+        // three run on every foreground (cold start + return from
+        // background); each gates internally on the relevant config.
         Task { @MainActor [weak self] in
             let observer = AppLifecycleObserver { [weak self] in
                 Task { @GalvaActor in
-                    await self?.inAppMessageManager?.poll()
+                    guard let self else { return }
+                    // session_start auto-emission (gated internally on
+                    // .lifecycle category — sessionTracker is `nil`
+                    // when the category isn't enabled).
+                    await self.sessionTracker?.handleForeground()
+                    // In-app message polling. Skipping when opted out
+                    // would silently break a user-facing feature, so
+                    // it keeps running.
+                    await self.inAppMessageManager?.poll()
+                    // Transaction observer is server-bound telemetry —
+                    // skip when opted out so we don't leak originalIds.
                     #if canImport(StoreKit)
-                    await self?.transactionObserver?.sweep()
+                    if !self.isOptedOut {
+                        await self.transactionObserver?.sweep()
+                    }
                     #endif
                 }
             }
@@ -396,6 +504,12 @@ final class SDKCore {
         appAccountToken: UUID?,
         traits: [String: AnyJSONValue]?
     ) async {
+        guard !isOptedOut else {
+            logger.debug(.identity, "identify dropped (opted out)", metadata: [
+                "userId": userId ?? "<none>",
+            ])
+            return
+        }
         guard let queue, let identity, let contextProvider else {
             logger.warning(.identity, "identify called before configure() — dropping")
             return
@@ -486,6 +600,10 @@ final class SDKCore {
     ///   • Support workflows that need a "Restore Purchases" guarantee.
     /// Idempotent: safe to call repeatedly.
     func reconcileTransactions() async {
+        guard !isOptedOut else {
+            logger.debug(.identity, "reconcileTransactions skipped (opted out)")
+            return
+        }
         #if canImport(StoreKit)
         await transactionObserver?.sweep()
         #endif
@@ -494,6 +612,10 @@ final class SDKCore {
     // MARK: Track
 
     func track(event: String, properties: [String: AnyJSONValue]?) async {
+        guard !isOptedOut else {
+            logger.debug(.identity, "track dropped (opted out)", metadata: ["event": event])
+            return
+        }
         guard let queue, let identity, let contextProvider else {
             logger.warning(.identity, "track called before configure() — dropping", metadata: ["event": event])
             return
@@ -514,6 +636,12 @@ final class SDKCore {
     // MARK: Communication endpoints
 
     func createEndpoint(_ endpoint: CommunicationEndpoint) async {
+        guard !isOptedOut else {
+            logger.debug(.identity, "createEndpoint dropped (opted out)", metadata: [
+                "channel": endpoint.channelType.rawValue,
+            ])
+            return
+        }
         guard let queue, let identity, let contextProvider else {
             logger.warning(.identity, "createEndpoint called before configure() — dropping")
             return
@@ -531,6 +659,12 @@ final class SDKCore {
     }
 
     func deleteEndpoint(_ endpoint: CommunicationEndpoint) async {
+        guard !isOptedOut else {
+            logger.debug(.identity, "deleteEndpoint dropped (opted out)", metadata: [
+                "channel": endpoint.channelType.rawValue,
+            ])
+            return
+        }
         guard let queue, let identity, let contextProvider else {
             logger.warning(.identity, "deleteEndpoint called before configure() — dropping")
             return
@@ -711,6 +845,12 @@ final class SDKCore {
         disabled: Bool?,
         categories: [String: Bool]?
     ) async {
+        guard !isOptedOut else {
+            logger.debug(.identity, "setPreference dropped (opted out)", metadata: [
+                "channel": channel.rawValue,
+            ])
+            return
+        }
         guard let queue, let identity, let contextProvider else {
             logger.warning(.identity, "setPreference called before configure() — dropping")
             return

@@ -107,17 +107,26 @@ public enum Galva {
     /// Auto-tracking categories. Pass an `OptionSet` to `configure(...)` to
     /// opt into automatic event collection for the listed categories.
     ///
-    /// Default: `[.lifecycle, .transactions]`
+    /// Default: `[.lifecycle]`
     public struct AutoTrackCategory: OptionSet, Sendable {
         public var rawValue: UInt
         public init(rawValue: UInt) { self.rawValue = rawValue }
 
-        /// Automatic app lifecycle events: `app_opened`, `app_backgrounded`,
-        /// `app_foregrounded`. Driven by `UIApplication` notifications.
-        public static let lifecycle:    AutoTrackCategory = .init(rawValue: 1 << 0)
-
-        /// Forward StoreKit 2 transactions automatically as Galva events.
-        public static let transactions: AutoTrackCategory = .init(rawValue: 1 << 1)
+        /// Emit `session_start` events automatically. Driven by
+        /// `UIApplication.didBecomeActive`:
+        ///
+        /// • Cold start always emits a `session_start`.
+        /// • Foreground transition after 30+ minutes of background
+        ///   inactivity emits a fresh `session_start`.
+        /// • Returning to the foreground within 30 minutes does NOT
+        ///   emit — the session continues.
+        /// • There is no `session_end` event — duration is computed
+        ///   server-side from successive `session_start` timestamps.
+        ///
+        /// Each event carries device-context properties:
+        /// `device_locale`, `os_version`, `app_version`, `sdk_version`.
+        /// `device_country` is derived server-side from the request IP.
+        public static let lifecycle: AutoTrackCategory = .init(rawValue: 1 << 0)
     }
 
     // MARK: LogLevel
@@ -213,7 +222,7 @@ public enum Galva {
     public static func configure(
         apiKey: String,
         environment: Environment = .production,
-        autoTrackCategories: AutoTrackCategory = [.lifecycle, .transactions],
+        autoTrackCategories: AutoTrackCategory = [.lifecycle],
         logLevel: LogLevel = .warning,
         logger: (any GalvaLogger)? = nil
     ) {
@@ -273,6 +282,45 @@ public enum Galva {
         Task { @GalvaActor in
             await SDKCore.shared.reconcileTransactions()
         }
+    }
+
+    // MARK: Opt-out
+
+    /// Globally disable / re-enable Galva's server-bound tracking.
+    /// When opted out (`true`):
+    ///   • `AppEvents.track`, `AppUser.identify`, `Communication.*`
+    ///     calls become silent no-ops.
+    ///   • Auto-tracked `session_start` events are suppressed.
+    ///   • `Transaction.all` sweeps are skipped, so Galva doesn't
+    ///     reconcile organic purchases for this device.
+    ///   • The persisted on-disk event queue is purged on the
+    ///     opted-in → opted-out transition so pre-existing events
+    ///     don't leak after the user opts out.
+    ///
+    /// In-app message polling + rendering **continue** to work using
+    /// the anonymous id. Opt-out blocks server-bound telemetry, not
+    /// user-visible feature delivery — give the user the option to
+    /// disable in-app messages separately via
+    /// `Communication.setPreference(channel: .inApp, disabled: true)`.
+    ///
+    /// The flag is persisted in `UserDefaults` (`co.galva.optedOut`) so
+    /// it survives app restarts. Defaults to `false` (tracking enabled)
+    /// on first launch.
+    ///
+    /// Fire-and-forget: returns immediately. Read the current value
+    /// synchronously via `Galva.isOptedOut`.
+    public static func setOptOut(_ enabled: Bool) {
+        Task { @GalvaActor in
+            await SDKCore.shared.setOptedOut(enabled)
+        }
+    }
+
+    /// Current opt-out state. Synchronous read — safe to call from any
+    /// thread, including a SwiftUI view body. Backed by a
+    /// lock-protected mirror of the persisted `UserDefaults` flag, so
+    /// the value is consistent with the most recent `setOptOut` call.
+    public static var isOptedOut: Bool {
+        SDKCore.shared.isOptedOut
     }
 
     /// Attach an APNs / FCM device token to outgoing messages. Required if
