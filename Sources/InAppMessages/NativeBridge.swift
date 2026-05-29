@@ -789,6 +789,11 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         let pushAuth = await currentPushAuthorization()
         let app = appBundleInfo()
         let storefrontCode = await currentStorefrontCountryCode()
+        // Same UUID the SDK attaches to Galva-initiated StoreKit purchases —
+        // override from identify(userId:appAccountToken:) or the anonymousId
+        // as a UUID. Hand it to the bundle so its own purchase/attribution
+        // calls reconcile to the same account.
+        let appAccountToken = await identity.purchaseAttributionToken
         return BridgePageContext(
             messageId: messageId,
             sessionToken: nil, // signed token attaches in a follow-up; bundle reads as-nil-safe
@@ -801,7 +806,8 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             locale: Locale.current.identifier,
             appColorScheme: nil, // SDK doesn't override; bundle falls back to matchMedia
             safeArea: safe,
-            storefrontCountryCode: storefrontCode
+            storefrontCountryCode: storefrontCode,
+            appAccountToken: appAccountToken.uuidString
         )
     }
 

@@ -181,6 +181,15 @@ struct BridgePageContext: Sendable, Hashable, Codable {
     /// device hasn't signed into the App Store) — the bundle falls back
     /// to the `locale` region in that case.
     let storefrontCountryCode: String?
+    /// The SDK-managed StoreKit `appAccountToken` (UUID string) for the
+    /// current identity: the developer override from
+    /// `AppUser.identify(userId:appAccountToken:)` when set, otherwise the
+    /// `anonymousId` rendered as a UUID. The bundle attaches this to its own
+    /// purchase / attribution calls so a bundle-initiated purchase reconciles
+    /// to the same account as a Galva-initiated one. Always populated today;
+    /// typed optional to match the other nullable fields and stay
+    /// forward-compatible.
+    let appAccountToken: String?
 
     enum PushAuthorization: String, Sendable, Hashable, Codable {
         case notDetermined, denied, authorized, provisional, ephemeral

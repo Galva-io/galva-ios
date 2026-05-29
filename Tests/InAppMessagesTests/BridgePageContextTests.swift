@@ -38,6 +38,31 @@ final class BridgePageContextTests: XCTestCase {
         XCTAssertEqual(json["storefrontCountryCode"] as? String, "USA")
     }
 
+    func test_pageContext_encodesAppAccountToken() throws {
+        // The SDK-managed StoreKit appAccountToken (UUID string) is handed to
+        // the bundle so its own purchase calls reconcile to the same account.
+        let context = BridgePageContext(
+            messageId: "msg-1",
+            sessionToken: nil,
+            bridgeProtocol: "1.0",
+            sdkVersion: "1.0.0",
+            platform: "ios",
+            appVersion: nil,
+            appBuild: nil,
+            pushAuthorization: nil,
+            locale: "en_US",
+            appColorScheme: nil,
+            safeArea: .init(top: 0, bottom: 0, left: 0, right: 0),
+            storefrontCountryCode: nil,
+            appAccountToken: "b1fe821d-5597-4abc-87b6-1f9647cffd6e"
+        )
+        let data = try JSONEncoder().encode(context)
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(json["appAccountToken"] as? String, "b1fe821d-5597-4abc-87b6-1f9647cffd6e")
+    }
+
     func test_pageContext_storefrontCountryCodeOmittedWhenNil() throws {
         // When StoreKit can't resolve the storefront (Simulator without
         // a config, user not signed in), we emit nil. JSONEncoder drops
