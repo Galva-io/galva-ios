@@ -28,7 +28,7 @@ final class RequestPurchasePayloadTests: XCTestCase {
         }
         """#
         let req = try JSONDecoder().decode(BridgeRequest.self, from: Data(json.utf8))
-        XCTAssertEqual(req.name, .requestPurchase)
+        XCTAssertEqual(req.method, .requestPurchase)
         XCTAssertEqual(req.payload?["productId"], .string("com.app.pro.year"))
         XCTAssertNil(req.payload?["promotionalOffer"])
     }
@@ -51,7 +51,7 @@ final class RequestPurchasePayloadTests: XCTestCase {
         }
         """#
         let req = try JSONDecoder().decode(BridgeRequest.self, from: Data(json.utf8))
-        XCTAssertEqual(req.name, .requestPurchase)
+        XCTAssertEqual(req.method, .requestPurchase)
         guard case .object(let promo)? = req.payload?["promotionalOffer"] else {
             return XCTFail("expected promotionalOffer object")
         }

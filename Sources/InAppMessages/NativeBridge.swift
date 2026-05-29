@@ -20,8 +20,10 @@
 //  Security
 //      • The script-message handler name is `galva` — that one inbound
 //        channel is the entire native attack surface.
-//      • `BridgeMethod`'s exhaustive `Codable` enum rejects unknown method
-//        names before they reach the dispatcher.
+//      • Unknown method names are never dispatched — they resolve to
+//        `BridgeRequest.method == nil` and are answered with a structured
+//        `unknownMethod` error (carrying the `requestId`) so the bundle's
+//        pending Promise rejects cleanly instead of hanging.
 //      • The response JSON is escaped before being spliced into the
 //        evaluateJavaScript source so payload content cannot break out of
 //        the JS string literal.
@@ -55,6 +57,14 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     /// The bridge stays platform-agnostic by talking through the
     /// `InAppMessageHost` protocol.
     weak var host: (any InAppMessageHost)?
+
+    /// Forwards WebView `console.*` output to the SDK logger when debug
+    /// logging is enabled. Held strongly here — the bridge is retained by the
+    /// host for the presentation's lifetime, whereas
+    /// `WKUserContentController.add(_:name:)` keeps only a weak reference to
+    /// script-message handlers. `nil` outside debug logging.
+    var consoleLogHandler: WebViewConsoleLogHandler?
+
     let messageManager: InAppMessageManager
     let identity: IdentityStore
     let logger: any GalvaLogger
@@ -106,7 +116,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             return
         }
         logger.debug(.identity, "bridge in", metadata: [
-            "name": envelope.name.rawValue,
+            "name": envelope.name,
             "requestId": envelope.requestId,
         ])
         Task { [weak self] in
@@ -119,7 +129,16 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     // MARK: - Dispatch
 
     private func handle(envelope: BridgeRequest) async -> Result<AnyJSONValue?, BridgeError> {
-        switch envelope.name {
+        // Unknown method → structured error (with the requestId, via respond)
+        // so the bundle's pending Promise rejects instead of hanging.
+        guard let method = envelope.method else {
+            logger.warning(.identity, "bridge: unknown method", metadata: ["name": envelope.name])
+            return .failure(BridgeError(
+                code: .unknownMethod,
+                message: "Unknown bridge method: \(envelope.name)"
+            ))
+        }
+        switch method {
         case .ready:
             host?.reveal()
             return .success(nil)
@@ -167,6 +186,9 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
 
         case .apiFetch:
             return await handleAPIFetch(payload: envelope.payload)
+
+        case .showAlert:
+            return await handleShowAlert(payload: envelope.payload)
         }
     }
 
@@ -618,6 +640,146 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             body: body,
             bodyType: bodyType
         )
+    }
+
+    // MARK: - showAlert (system UIAlertController)
+
+    /// Present a system `UIAlertController` on behalf of the hosted page.
+    ///
+    /// Wire payload:
+    ///     {
+    ///       "title":   "Delete draft?",      // optional
+    ///       "message": "This can't be undone", // optional
+    ///       "actions": [                       // required, non-empty
+    ///         { "id": "delete", "title": "Delete", "style": "destructive" },
+    ///         { "id": "cancel", "title": "Cancel", "style": "cancel" }
+    ///       ]
+    ///     }
+    ///
+    /// `style` is `"default"` (the default), `"cancel"`, or `"destructive"`.
+    /// UIKit permits at most one cancel action, so 2+ are rejected as
+    /// `invalidPayload` rather than crashing the host app.
+    ///
+    /// The call suspends until the user taps an action, then resolves with
+    /// `{ "actionId": "<the tapped action's id>" }`.
+    private func handleShowAlert(
+        payload: [String: AnyJSONValue]?
+    ) async -> Result<AnyJSONValue?, BridgeError> {
+        let parsed: ParsedAlert
+        switch Self.parseAlert(payload) {
+        case .success(let value): parsed = value
+        case .failure(let error): return .failure(error)
+        }
+        guard let presenter = presentingViewController() else {
+            return .failure(BridgeError(
+                code: .noActiveMessage,
+                message: "No view controller available to present the alert"
+            ))
+        }
+        logger.info(.identity, "bridge showAlert", metadata: [
+            "actions": String(parsed.actions.count),
+        ])
+        // Suspend until the user taps; each action handler resumes exactly
+        // once (an `.alert` with ≥1 action is only dismissible by a tap).
+        let actionId: String = await withCheckedContinuation { continuation in
+            let alert = UIAlertController(
+                title: parsed.title,
+                message: parsed.message,
+                preferredStyle: .alert
+            )
+            for action in parsed.actions {
+                alert.addAction(UIAlertAction(title: action.title, style: action.style) { _ in
+                    continuation.resume(returning: action.id)
+                })
+            }
+            presenter.present(alert, animated: true)
+        }
+        return .success(.object(Self.toJSON(BridgeAlertResult(actionId: actionId))))
+    }
+
+    /// Parsed, validated `showAlert` request. Internal (not private) so the
+    /// pure parse logic can be unit-tested without presenting UIKit.
+    struct ParsedAlert: Equatable {
+        let title: String?
+        let message: String?
+        let actions: [Action]
+
+        struct Action: Equatable {
+            let id: String
+            let title: String
+            let style: UIAlertAction.Style
+        }
+    }
+
+    static func parseAlert(
+        _ payload: [String: AnyJSONValue]?
+    ) -> Result<ParsedAlert, BridgeError> {
+        guard let payload else {
+            return .failure(BridgeError(code: .invalidPayload,
+                                        message: "showAlert requires a payload"))
+        }
+        // title / message are optional; a non-string value is treated as absent.
+        let title = Self.alertString(payload["title"])
+        let message = Self.alertString(payload["message"])
+
+        guard case .array(let rawActions)? = payload["actions"], !rawActions.isEmpty else {
+            return .failure(BridgeError(code: .invalidPayload,
+                                        message: "showAlert requires a non-empty actions array"))
+        }
+        var actions: [ParsedAlert.Action] = []
+        for raw in rawActions {
+            guard case .object(let object) = raw else {
+                return .failure(BridgeError(code: .invalidPayload,
+                                            message: "showAlert action must be an object"))
+            }
+            guard let id = Self.alertString(object["id"]), !id.isEmpty else {
+                return .failure(BridgeError(code: .invalidPayload,
+                                            message: "showAlert action requires a non-empty id"))
+            }
+            guard let actionTitle = Self.alertString(object["title"]), !actionTitle.isEmpty else {
+                return .failure(BridgeError(code: .invalidPayload,
+                                            message: "showAlert action requires a non-empty title"))
+            }
+            actions.append(.init(id: id, title: actionTitle, style: Self.alertStyle(object["style"])))
+        }
+        // UIKit raises an exception if more than one `.cancel` action is added —
+        // reject that here so a bundle bug can't crash the host app.
+        guard actions.filter({ $0.style == .cancel }).count <= 1 else {
+            return .failure(BridgeError(code: .invalidPayload,
+                                        message: "showAlert allows at most one cancel action"))
+        }
+        return .success(ParsedAlert(title: title, message: message, actions: actions))
+    }
+
+    private static func alertString(_ value: AnyJSONValue?) -> String? {
+        if case .string(let string)? = value { return string } else { return nil }
+    }
+
+    private static func alertStyle(_ value: AnyJSONValue?) -> UIAlertAction.Style {
+        guard case .string(let raw)? = value else { return .default }
+        switch raw.lowercased() {
+        case "cancel":      return .cancel
+        case "destructive": return .destructive
+        default:            return .default
+        }
+    }
+
+    /// The view controller to present an alert from: the WebView's owning VC
+    /// (via the responder chain), descended to its top-most presented VC so
+    /// the alert layers above the in-app message sheet. Works for both the
+    /// UIKit and SwiftUI hosts since both mount the WebView inside a VC.
+    private func presentingViewController() -> UIViewController? {
+        guard let webView = host?.webView else { return nil }
+        var responder: UIResponder? = webView
+        while let current = responder {
+            if let viewController = current as? UIViewController {
+                var top = viewController
+                while let presented = top.presentedViewController { top = presented }
+                return top
+            }
+            responder = current.next
+        }
+        return nil
     }
 
     // MARK: - Page context

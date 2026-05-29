@@ -11,6 +11,9 @@
 import Foundation
 @testable import Galva
 import XCTest
+#if canImport(UIKit)
+import UIKit
+#endif
 
 #if canImport(WebKit)
 
@@ -28,20 +31,26 @@ final class BridgeProtocolTests: XCTestCase {
             .openManageSubscription,
             .openDeepLink,
             .apiFetch,
+            .showAlert,
         ] {
             let json = #"{"name":"\#(method.rawValue)","requestId":"req-1","payload":{}}"#
             let data = Data(json.utf8)
             let request = try JSONDecoder().decode(BridgeRequest.self, from: data)
-            XCTAssertEqual(request.name, method)
+            XCTAssertEqual(request.name, method.rawValue)
+            XCTAssertEqual(request.method, method)
             XCTAssertEqual(request.requestId, "req-1")
         }
     }
 
-    func test_bridgeRequest_rejectsUnknownMethod() {
+    func test_bridgeRequest_unknownMethod_decodesWithNilMethod() throws {
+        // Unknown names must still decode — the dispatcher answers with an
+        // unknownMethod error carrying the requestId rather than dropping the
+        // call (which would hang the bundle's Promise). `method` resolves nil.
         let json = #"{"name":"nope","requestId":"x","payload":{}}"#
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(BridgeRequest.self, from: Data(json.utf8))
-        )
+        let request = try JSONDecoder().decode(BridgeRequest.self, from: Data(json.utf8))
+        XCTAssertEqual(request.name, "nope")
+        XCTAssertNil(request.method)
+        XCTAssertEqual(request.requestId, "x")
     }
 
     func test_bridgeRequest_acceptsPayloadShape() throws {
@@ -280,6 +289,112 @@ final class BridgeAPIFetchMarshalingTests: XCTestCase {
         XCTAssertEqual(json["bodyType"] as? String, "json")
         XCTAssertEqual((json["headers"] as? [String: String])?["content-type"], "application/json")
         XCTAssertEqual((json["body"] as? [String: Any])?["value"] as? Int, 42)
+    }
+}
+
+// MARK: - showAlert marshaling (NativeBridge.parseAlert + BridgeAlertResult)
+
+@MainActor
+final class BridgeShowAlertMarshalingTests: XCTestCase {
+
+    func test_parseAlert_requiresPayload() {
+        guard case .failure(let error) = NativeBridge.parseAlert(nil) else {
+            return XCTFail("expected failure for nil payload")
+        }
+        XCTAssertEqual(error.code, .invalidPayload)
+    }
+
+    func test_parseAlert_requiresNonEmptyActions() {
+        for payload: [String: AnyJSONValue] in [
+            ["title": .string("Hi")],                 // no actions key
+            ["actions": .array([])],                  // empty actions
+        ] {
+            guard case .failure(let error) = NativeBridge.parseAlert(payload) else {
+                return XCTFail("expected failure for \(payload)")
+            }
+            XCTAssertEqual(error.code, .invalidPayload)
+        }
+    }
+
+    func test_parseAlert_parsesTitleMessageAndActions() {
+        let payload: [String: AnyJSONValue] = [
+            "title": .string("Delete draft?"),
+            "message": .string("This can't be undone"),
+            "actions": .array([
+                .object(["id": .string("delete"), "title": .string("Delete"), "style": .string("destructive")]),
+                .object(["id": .string("cancel"), "title": .string("Cancel"), "style": .string("cancel")]),
+            ]),
+        ]
+        guard case .success(let parsed) = NativeBridge.parseAlert(payload) else {
+            return XCTFail("expected success")
+        }
+        XCTAssertEqual(parsed.title, "Delete draft?")
+        XCTAssertEqual(parsed.message, "This can't be undone")
+        XCTAssertEqual(parsed.actions, [
+            .init(id: "delete", title: "Delete", style: .destructive),
+            .init(id: "cancel", title: "Cancel", style: .cancel),
+        ])
+    }
+
+    func test_parseAlert_defaultsStyleWhenMissingOrUnknown() {
+        let payload: [String: AnyJSONValue] = [
+            "actions": .array([
+                .object(["id": .string("a"), "title": .string("A")]),                       // no style
+                .object(["id": .string("b"), "title": .string("B"), "style": .string("???")]), // unknown
+            ]),
+        ]
+        guard case .success(let parsed) = NativeBridge.parseAlert(payload) else {
+            return XCTFail("expected success")
+        }
+        XCTAssertEqual(parsed.actions.map(\.style), [.default, .default])
+    }
+
+    func test_parseAlert_omitsNonStringTitle() {
+        // A non-string title is treated as absent (optional), not an error.
+        let payload: [String: AnyJSONValue] = [
+            "title": .int(7),
+            "actions": .array([.object(["id": .string("ok"), "title": .string("OK")])]),
+        ]
+        guard case .success(let parsed) = NativeBridge.parseAlert(payload) else {
+            return XCTFail("expected success")
+        }
+        XCTAssertNil(parsed.title)
+    }
+
+    func test_parseAlert_rejectsActionMissingIdOrTitle() {
+        let cases: [[String: AnyJSONValue]] = [
+            ["actions": .array([.object(["title": .string("OK")])])],          // missing id
+            ["actions": .array([.object(["id": .string("ok")])])],             // missing title
+            ["actions": .array([.object(["id": .string(""), "title": .string("OK")])])], // empty id
+            ["actions": .array([.string("not-an-object")])],                   // wrong shape
+        ]
+        for payload in cases {
+            guard case .failure(let error) = NativeBridge.parseAlert(payload) else {
+                return XCTFail("expected failure for \(payload)")
+            }
+            XCTAssertEqual(error.code, .invalidPayload)
+        }
+    }
+
+    func test_parseAlert_rejectsMultipleCancelActions() {
+        // UIKit crashes on a second .cancel action — we must reject it.
+        let payload: [String: AnyJSONValue] = [
+            "actions": .array([
+                .object(["id": .string("c1"), "title": .string("Cancel"), "style": .string("cancel")]),
+                .object(["id": .string("c2"), "title": .string("Nope"), "style": .string("cancel")]),
+            ]),
+        ]
+        guard case .failure(let error) = NativeBridge.parseAlert(payload) else {
+            return XCTFail("expected failure for two cancel actions")
+        }
+        XCTAssertEqual(error.code, .invalidPayload)
+    }
+
+    func test_alertResult_encodesToActionId() throws {
+        let data = try JSONEncoder().encode(BridgeAlertResult(actionId: "delete"))
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["actionId"] as? String, "delete")
+        XCTAssertEqual(json.count, 1)
     }
 }
 #endif

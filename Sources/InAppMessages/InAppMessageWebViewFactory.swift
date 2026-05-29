@@ -103,6 +103,24 @@ enum InAppMessageWebViewFactory {
             makeProductsInjectionScript(json: prefetchedProductsJSON)
         )
 
+        // When debug logging is on, forward the WebView's console output (and
+        // uncaught errors) to the SDK logger so integrators can debug the
+        // bundle without attaching Safari Web Inspector. Gated on the log
+        // level so production builds neither pay the per-call bridge hop nor
+        // surface bundle internals over the channel.
+        if bridge.logger.isEnabled(.debug) {
+            let consoleHandler = WebViewConsoleLogHandler(logger: bridge.logger)
+            config.userContentController.add(
+                consoleHandler,
+                name: WebViewConsoleLogHandler.handlerName
+            )
+            config.userContentController.addUserScript(makeConsoleForwardingScript())
+            // `add(_:name:)` only weakly retains the handler — park it on the
+            // bridge (which the host retains strongly) so it lives as long as
+            // the WebView.
+            bridge.consoleLogHandler = consoleHandler
+        }
+
         // Inline media without user gesture for autoplay video components.
         // Bundle authors decide whether to use it.
         config.allowsInlineMediaPlayback = true
@@ -141,6 +159,61 @@ enum InAppMessageWebViewFactory {
             .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
             .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
         let source = "window.galvaProducts = \(sanitized);"
+        return WKUserScript(
+            source: source,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+    }
+
+    /// `WKUserScript` (main frame, document-start) that wraps the page's
+    /// `console.*` methods to forward `{ level, message }` to the
+    /// `galvaConsole` handler, then calls the originals so Safari Web
+    /// Inspector output is unchanged. Also reports uncaught errors and
+    /// unhandled promise rejections — the failures hardest to spot in a
+    /// hosted bundle. The script is static (no interpolation), so there's
+    /// nothing to escape.
+    private static func makeConsoleForwardingScript() -> WKUserScript {
+        let source = #"""
+        (function () {
+          var bridge = window.webkit
+            && window.webkit.messageHandlers
+            && window.webkit.messageHandlers.galvaConsole;
+          if (!bridge) { return; }
+          function post(level, args) {
+            try {
+              var parts = [];
+              for (var i = 0; i < args.length; i++) {
+                var a = args[i];
+                if (typeof a === 'string') { parts.push(a); }
+                else {
+                  try { parts.push(JSON.stringify(a)); }
+                  catch (e) { parts.push(String(a)); }
+                }
+              }
+              bridge.postMessage({ level: level, message: parts.join(' ') });
+            } catch (e) { /* never let logging break the page */ }
+          }
+          ['log', 'info', 'warn', 'error', 'debug'].forEach(function (level) {
+            var original = (typeof console[level] === 'function')
+              ? console[level].bind(console)
+              : function () {};
+            console[level] = function () {
+              post(level, arguments);
+              original.apply(console, arguments);
+            };
+          });
+          window.addEventListener('error', function (e) {
+            post('error', [
+              (e && e.message) || 'Script error',
+              (e && e.filename) ? ('(' + e.filename + ':' + (e.lineno || 0) + ')') : ''
+            ]);
+          });
+          window.addEventListener('unhandledrejection', function (e) {
+            post('error', ['Unhandled promise rejection:', (e && e.reason) ? String(e.reason) : '']);
+          });
+        })();
+        """#
         return WKUserScript(
             source: source,
             injectionTime: .atDocumentStart,

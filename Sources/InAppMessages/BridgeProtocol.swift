@@ -31,9 +31,18 @@ import Foundation
 
 /// Outbound (bundle → native) envelope.
 struct BridgeRequest: Sendable, Hashable, Codable {
-    let name: BridgeMethod
+    /// Raw method name as sent by the bundle. Decoded as a `String` (not a
+    /// `BridgeMethod`) so an unrecognized name still produces a valid
+    /// envelope — the dispatcher then replies with an `unknownMethod` error
+    /// carrying this `requestId`, instead of failing to decode and silently
+    /// dropping the call (which would hang the bundle's pending Promise).
+    let name: String
     let requestId: String
     let payload: [String: AnyJSONValue]?
+
+    /// The recognized method, or `nil` when `name` is outside the allowlist.
+    /// `nil` is handled at dispatch as an `unknownMethod` error.
+    var method: BridgeMethod? { BridgeMethod(rawValue: name) }
 }
 
 /// Inbound (native → bundle) response envelope. `result` is always present
@@ -118,8 +127,11 @@ struct BridgeError: Error, Sendable, Hashable, Codable {
     }
 }
 
-/// Strict allowlist of native bridge methods. The decoder rejects any
-/// unknown value so a malicious bundle can't probe the dispatch surface.
+/// Strict allowlist of native bridge methods. A name outside this set
+/// resolves to `BridgeRequest.method == nil` and is answered with an
+/// `unknownMethod` error rather than dispatched — so an out-of-date or
+/// malicious bundle can probe but never invoke an unknown surface, while
+/// still getting a clean Promise rejection (with its `requestId`).
 enum BridgeMethod: String, Sendable, Hashable, Codable {
     /// Anti-FOUC: reveal the overlay window after the bundle's first paint.
     case ready
@@ -139,6 +151,9 @@ enum BridgeMethod: String, Sendable, Hashable, Codable {
     /// supplies a relative `path` only; the SDK prepends the API base URL
     /// and injects the API key. See `NativeBridge.handleAPIFetch`.
     case apiFetch
+    /// Present a system `UIAlertController`. Resolves with the id of the
+    /// action the user tapped. See `NativeBridge.handleShowAlert`.
+    case showAlert
 }
 
 // MARK: - Page context (returned by `getPageContext`)
@@ -215,4 +230,14 @@ struct BridgeAPIFetchResult: Sendable, Hashable, Codable {
         /// `body` is a base64 string of non-UTF-8 (binary) bytes.
         case base64
     }
+}
+
+// MARK: - showAlert result (returned by `showAlert`)
+
+/// Bridge response body for `galva.showAlert(...)` — the id of the action
+/// the user tapped (from the `actions[].id` values the bundle supplied).
+/// The SDK encodes this struct straight to JSON, so the wire key is exactly
+/// `actionId`.
+struct BridgeAlertResult: Sendable, Hashable, Codable {
+    let actionId: String
 }
