@@ -53,9 +53,16 @@ jobs:
           ref: ${{ steps.tag.outputs.tag }}
 
       - name: Select Xcode
-        # Xcode 16.2 ships Swift 6.0 — matches Package.swift's floor.
-        # Bump in lockstep when we raise the Swift floor.
-        run: sudo xcode-select -switch /Applications/Xcode_16.2.app
+        # The shipped XCFramework must build with the iOS 26 SDK: the
+        # StoreKit offer path uses promotionalOffer(_:compactJWS:), an
+        # iOS 26 symbol (back-deployed to iOS 15 at runtime, but Xcode 26
+        # to compile). Select the newest Xcode 26; fall back to newest installed.
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          [ -z "$XCODE" ] && XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "Selecting $XCODE"
+          sudo xcode-select -switch "$XCODE"
+          xcodebuild -version
 
       # ---- Re-run gates against the tagged commit ---------------------
       # Cheap insurance: catches the rare case where main passed CI but

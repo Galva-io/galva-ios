@@ -35,12 +35,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # macOS runners ship multiple Xcodes; pick a known-good one so
-      # builds are reproducible. Xcode 16.2 ships Swift 6.0 — matches
-      # the minimum declared in Package.swift. Bump in lockstep when
-      # we raise the Swift floor.
+      # The StoreKit promotional-offer path calls
+      # `Product.PurchaseOption.promotionalOffer(_:compactJWS:)`, an iOS 26
+      # SDK symbol (`@backDeployed(before: iOS 26.0)` — it RUNS on iOS 15+
+      # but only COMPILES with Xcode 26), plus the `.unsupported`
+      # StoreKitError case. Select the newest Xcode 26 on the runner;
+      # fall back to the newest installed Xcode if none is present.
       - name: Select Xcode
-        run: sudo xcode-select -switch /Applications/Xcode_16.2.app
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          [ -z "$XCODE" ] && XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "Selecting $XCODE"
+          sudo xcode-select -switch "$XCODE"
+          xcodebuild -version
 
       - name: Cache SPM build artefacts
         uses: actions/cache@v4
