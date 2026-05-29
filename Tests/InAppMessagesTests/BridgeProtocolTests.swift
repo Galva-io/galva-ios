@@ -27,6 +27,7 @@ final class BridgeProtocolTests: XCTestCase {
             .requestPurchase,
             .openManageSubscription,
             .openDeepLink,
+            .apiFetch,
         ] {
             let json = #"{"name":"\#(method.rawValue)","requestId":"req-1","payload":{}}"#
             let data = Data(json.utf8)
@@ -86,6 +87,14 @@ final class BridgeProtocolTests: XCTestCase {
         XCTAssertEqual(errDict["code"], "productUnavailable")
         XCTAssertEqual(errDict["message"], "unknown sku")
     }
+
+    func test_bridgeError_apiRequestFailed_roundTrips() throws {
+        let err = BridgeError(code: .apiRequestFailed, message: "offline")
+        let data = try JSONEncoder().encode(err)
+        let decoded = try JSONDecoder().decode(BridgeError.self, from: data)
+        XCTAssertEqual(decoded.code, .apiRequestFailed)
+        XCTAssertEqual(decoded.message, "offline")
+    }
 }
 
 // MARK: - JS string escape (NativeBridge.escapeForJSStringLiteral)
@@ -122,6 +131,155 @@ final class BridgeJSEscapeTests: XCTestCase {
             NativeBridge.escapeForJSStringLiteral(raw),
             "before\\u2028after\\u2029end"
         )
+    }
+}
+
+// MARK: - apiFetch request/response marshaling (NativeBridge static helpers)
+
+@MainActor
+final class BridgeAPIFetchMarshalingTests: XCTestCase {
+
+    // MARK: parseAPIFetch — validation
+
+    func test_parse_requiresNonEmptyPath() {
+        for payload: [String: AnyJSONValue]? in [nil, [:], ["path": .string("  ")]] {
+            guard case .failure(let error) = NativeBridge.parseAPIFetch(payload) else {
+                return XCTFail("expected failure for payload \(String(describing: payload))")
+            }
+            XCTAssertEqual(error.code, .invalidPayload)
+        }
+    }
+
+    func test_parse_defaultsMethodToGET() {
+        guard case .success(let parsed) = NativeBridge.parseAPIFetch(["path": .string("/x")]) else {
+            return XCTFail("expected success")
+        }
+        XCTAssertEqual(parsed.method, "GET")
+        XCTAssertNil(parsed.body)
+        XCTAssertEqual(parsed.path, "/x")
+    }
+
+    func test_parse_upperCasesMethod() {
+        guard case .success(let parsed) = NativeBridge.parseAPIFetch([
+            "path": .string("/x"), "method": .string("post"),
+        ]) else { return XCTFail("expected success") }
+        XCTAssertEqual(parsed.method, "POST")
+    }
+
+    func test_parse_rejectsDisallowedMethod() {
+        guard case .failure(let error) = NativeBridge.parseAPIFetch([
+            "path": .string("/x"), "method": .string("TRACE"),
+        ]) else { return XCTFail("expected failure") }
+        XCTAssertEqual(error.code, .invalidPayload)
+    }
+
+    // MARK: parseAPIFetch — body / headers
+
+    func test_parse_stringBody_isRawUTF8_noContentTypeAdded() {
+        guard case .success(let parsed) = NativeBridge.parseAPIFetch([
+            "path": .string("/x"), "method": .string("POST"), "body": .string("raw text"),
+        ]) else { return XCTFail("expected success") }
+        XCTAssertEqual(parsed.body, Data("raw text".utf8))
+        XCTAssertNil(parsed.headers["Content-Type"])
+    }
+
+    func test_parse_objectBody_isJSONEncoded_withDefaultContentType() throws {
+        guard case .success(let parsed) = NativeBridge.parseAPIFetch([
+            "path": .string("/x"),
+            "method": .string("POST"),
+            "body": .object(["hello": .string("world")]),
+        ]) else { return XCTFail("expected success") }
+        XCTAssertEqual(parsed.headers["Content-Type"], "application/json")
+        let body = try XCTUnwrap(parsed.body)
+        let decoded = try JSONDecoder().decode(AnyJSONValue.self, from: body)
+        XCTAssertEqual(decoded, .object(["hello": .string("world")]))
+    }
+
+    func test_parse_objectBody_doesNotOverrideCallerContentType() {
+        // Caller's content-type (any case) wins — we don't force JSON on top.
+        guard case .success(let parsed) = NativeBridge.parseAPIFetch([
+            "path": .string("/x"),
+            "method": .string("POST"),
+            "body": .object(["a": .int(1)]),
+            "headers": .object(["content-type": .string("application/vnd.api+json")]),
+        ]) else { return XCTFail("expected success") }
+        XCTAssertEqual(parsed.headers["content-type"], "application/vnd.api+json")
+        XCTAssertNil(parsed.headers["Content-Type"])
+    }
+
+    func test_parse_headers_keepStringsDropOthers() {
+        guard case .success(let parsed) = NativeBridge.parseAPIFetch([
+            "path": .string("/x"),
+            "headers": .object(["Accept": .string("application/json"), "X-Num": .int(7)]),
+        ]) else { return XCTFail("expected success") }
+        XCTAssertEqual(parsed.headers["Accept"], "application/json")
+        XCTAssertNil(parsed.headers["X-Num"])
+    }
+
+    func test_parse_nullBody_isNil() {
+        guard case .success(let parsed) = NativeBridge.parseAPIFetch([
+            "path": .string("/x"), "body": .null,
+        ]) else { return XCTFail("expected success") }
+        XCTAssertNil(parsed.body)
+    }
+
+    // MARK: encodeAPIResponse → typed BridgeAPIFetchResult
+
+    func test_encode_jsonResponse_parsesBody() {
+        let response = APIClient.ProxyResponse(
+            status: 200,
+            headers: ["content-type": "application/json; charset=utf-8"],
+            body: Data(#"{"value":42}"#.utf8)
+        )
+        let result = NativeBridge.encodeAPIResponse(response)
+        XCTAssertEqual(result.status, 200)
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.bodyType, .json)
+        XCTAssertEqual(result.body, .object(["value": .int(42)]))
+    }
+
+    func test_encode_non2xxText_setsOkFalseAndTextBody() {
+        let response = APIClient.ProxyResponse(
+            status: 404,
+            headers: ["content-type": "text/plain"],
+            body: Data("nope".utf8)
+        )
+        let result = NativeBridge.encodeAPIResponse(response)
+        XCTAssertEqual(result.status, 404)
+        XCTAssertFalse(result.ok)
+        XCTAssertEqual(result.bodyType, .text)
+        XCTAssertEqual(result.body, .string("nope"))
+    }
+
+    func test_encode_binaryBody_fallsBackToBase64() {
+        // Invalid UTF-8 bytes — neither JSON nor text-decodable.
+        let raw = Data([0xFF, 0xFE, 0xFD])
+        let response = APIClient.ProxyResponse(
+            status: 200,
+            headers: ["content-type": "application/octet-stream"],
+            body: raw
+        )
+        let result = NativeBridge.encodeAPIResponse(response)
+        XCTAssertEqual(result.bodyType, .base64)
+        XCTAssertEqual(result.body, .string(raw.base64EncodedString()))
+    }
+
+    /// Locks the JSON the hosted page actually receives — the keys come
+    /// straight from `BridgeAPIFetchResult`'s Codable synthesis, not a
+    /// hand-built dictionary.
+    func test_encode_resultEncodesToExpectedWireShape() throws {
+        let result = NativeBridge.encodeAPIResponse(APIClient.ProxyResponse(
+            status: 200,
+            headers: ["content-type": "application/json"],
+            body: Data(#"{"value":42}"#.utf8)
+        ))
+        let data = try JSONEncoder().encode(result)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["status"] as? Int, 200)
+        XCTAssertEqual(json["ok"] as? Bool, true)
+        XCTAssertEqual(json["bodyType"] as? String, "json")
+        XCTAssertEqual((json["headers"] as? [String: String])?["content-type"], "application/json")
+        XCTAssertEqual((json["body"] as? [String: Any])?["value"] as? Int, 42)
     }
 }
 #endif

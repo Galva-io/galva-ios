@@ -117,6 +117,104 @@ actor APIClient {
         }
     }
 
+    // MARK: - Generic proxy (WebView `apiFetch` bridge)
+
+    /// Raw HTTP outcome of `proxyRequest`. Unlike `get` / `post`, a non-2xx
+    /// status is NOT an error here — it's returned verbatim so the in-app
+    /// message WebView can read `status` + `body` and do its own handling
+    /// (fetch-style). Only validation / transport failures throw.
+    struct ProxyResponse: Sendable, Hashable {
+        let status: Int
+        let headers: [String: String]
+        let body: Data
+    }
+
+    /// Proxy an arbitrary request from the in-app message WebView to the
+    /// Galva API. The hosted page supplies only a relative `path`; the SDK
+    /// resolves it against `baseURL`, injects the API key, and refuses any
+    /// path that would escape the API origin. That same-origin guard is the
+    /// security boundary — the bundle can reach our API and nothing else.
+    ///
+    /// - Parameters:
+    ///   - path: Relative path (`/x/y`, `x/y`, optionally with `?query`).
+    ///           Absolute or scheme-relative URLs are rejected.
+    ///   - method: HTTP method, already validated / upper-cased by the caller.
+    ///   - body: Pre-serialized request body, or `nil`.
+    ///   - additionalHeaders: Caller-supplied headers. Applied first; the
+    ///           SDK-managed auth / version headers are set last so the
+    ///           bundle can never spoof or override them.
+    func proxyRequest(
+        path: String,
+        method: String,
+        body: Data?,
+        additionalHeaders: [String: String]
+    ) async throws -> ProxyResponse {
+        guard let url = Self.resolveProxyURL(path: path, base: baseURL) else {
+            throw APIError.malformedURL(path)
+        }
+        var req = URLRequest(url: url, timeoutInterval: SDKConstants.rpcTimeout)
+        req.httpMethod = method
+        // Drop any caller attempt to set a reserved header — case-insensitive,
+        // so a lowercase `x-api-key` can't slip a second auth header past the
+        // override below. Then set the SDK-managed headers ourselves: the
+        // bundle must never be able to spoof auth or version.
+        let reserved: Set<String> = ["x-api-key", "x-sdk-version"]
+        for (key, value) in additionalHeaders where !reserved.contains(key.lowercased()) {
+            req.setValue(value, forHTTPHeaderField: key)
+        }
+        req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        req.setValue(SDKConstants.sdkVersionHeader, forHTTPHeaderField: "x-sdk-version")
+        req.httpBody = body
+
+        logger.debug(.uploader, "proxy \(method)", metadata: ["url": url.absoluteString])
+        do {
+            let (data, response) = try await session.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                throw APIError.invalidResponse
+            }
+            var headers: [String: String] = [:]
+            headers.reserveCapacity(http.allHeaderFields.count)
+            for (key, value) in http.allHeaderFields {
+                if let key = key as? String, let value = value as? String {
+                    headers[key.lowercased()] = value
+                }
+            }
+            return ProxyResponse(status: http.statusCode, headers: headers, body: data)
+        } catch let error as APIError {
+            throw error
+        } catch {
+            throw APIError.transport(error)
+        }
+    }
+
+    /// Resolve a bundle-supplied relative `path` against the API `base`,
+    /// returning `nil` when the result would target a different origin.
+    /// Blocks SSRF: absolute URLs (`https://evil.com`), scheme-relative
+    /// references (`//evil.com`), and anything whose resolved
+    /// scheme / host / port doesn't match `base`.
+    static func resolveProxyURL(path: String, base: URL) -> URL? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        // Contract is "relative path only" — reject absolute and
+        // scheme-relative references outright.
+        guard !trimmed.contains("://"), !trimmed.hasPrefix("//") else { return nil }
+        // Normalize to an absolute-path reference so it replaces base's path
+        // rather than resolving relative to base's last path segment.
+        let reference = trimmed.hasPrefix("/") ? trimmed : "/" + trimmed
+        guard let resolved = URL(string: reference, relativeTo: base)?.absoluteURL else {
+            return nil
+        }
+        // Defense in depth: the resolved request must still target the API
+        // origin. A leading-slash reference can't change host today, but
+        // keeping the check local makes the guarantee auditable.
+        guard resolved.scheme == base.scheme,
+              resolved.host == base.host,
+              resolved.port == base.port else {
+            return nil
+        }
+        return resolved
+    }
+
     // MARK: - Request builder + perform
 
     private func makeRequest(url: URL, method: String) -> URLRequest {

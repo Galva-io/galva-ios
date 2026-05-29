@@ -264,6 +264,28 @@ final class InAppMessageManager {
         return nil
         #endif
     }
+
+    // MARK: - WebView API proxy (`apiFetch` bridge)
+
+    /// Forward an `apiFetch` bridge call to the API client, which owns the
+    /// base URL + API key and enforces the relative-path / same-origin
+    /// guard. This lives on the manager because the bridge already routes
+    /// every call through it and the manager holds the only `APIClient` the
+    /// in-app stack has — no extra wiring through the WebView factory.
+    /// Returns the raw HTTP outcome; the bridge maps it to the wire shape.
+    func apiProxyFetch(
+        path: String,
+        method: String,
+        body: Data?,
+        additionalHeaders: [String: String]
+    ) async throws -> APIClient.ProxyResponse {
+        try await client.proxyRequest(
+            path: path,
+            method: method,
+            body: body,
+            additionalHeaders: additionalHeaders
+        )
+    }
 }
 
 // MARK: - Errors

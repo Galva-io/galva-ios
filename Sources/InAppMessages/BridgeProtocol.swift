@@ -87,6 +87,13 @@ struct BridgeError: Error, Sendable, Hashable, Codable {
         case purchaseFailed
         /// `openManageSubscription` / `openDeepLink` URL couldn't be opened.
         case urlOpenFailed
+        /// `apiFetch` couldn't complete the round-trip: the supplied path was
+        /// rejected (absolute URL / wrong origin → `invalidPayload` instead)
+        /// or the request failed at the transport layer (offline, DNS, TLS).
+        /// NOTE: HTTP responses — including 4xx / 5xx — are NOT errors here.
+        /// They resolve successfully with `ok:false` so the page can read
+        /// `status` + `body`.
+        case apiRequestFailed
 
         // MARK: Purchase-specific (StoreKit 2)
 
@@ -128,6 +135,10 @@ enum BridgeMethod: String, Sendable, Hashable, Codable {
     case openManageSubscription
     /// Hand a deep link back to the host app.
     case openDeepLink
+    /// Proxy an authenticated HTTP request to the Galva API. The bundle
+    /// supplies a relative `path` only; the SDK prepends the API base URL
+    /// and injects the API key. See `NativeBridge.handleAPIFetch`.
+    case apiFetch
 }
 
 // MARK: - Page context (returned by `getPageContext`)
@@ -169,5 +180,39 @@ struct BridgePageContext: Sendable, Hashable, Codable {
         let bottom: Double
         let left: Double
         let right: Double
+    }
+}
+
+// MARK: - apiFetch result (returned by `apiFetch`)
+
+/// Bridge response body for `galva.apiFetch(...)`. Mirrors the `fetch`-style
+/// shape the hosted page expects: ANY completed HTTP round-trip (including
+/// 4xx / 5xx) resolves with this object so the page can read `status` +
+/// `body`. Only transport / validation failures reject with a `BridgeError`.
+///
+/// The SDK encodes this struct straight to JSON (no hand-built
+/// `[String: AnyJSONValue]`), so the wire keys are exactly the stored
+/// property names — do NOT rename without coordinating a
+/// `bridgeProtocolVersion` bump.
+struct BridgeAPIFetchResult: Sendable, Hashable, Codable {
+    /// HTTP status code (e.g. `200`, `404`).
+    let status: Int
+    /// Convenience flag — true when `status` is in `200..<300`.
+    let ok: Bool
+    /// Response headers with lowercased field names.
+    let headers: [String: String]
+    /// The response payload, shaped per `bodyType`: a parsed JSON value, a
+    /// decoded UTF-8 string, or a base64 string of the raw bytes.
+    let body: AnyJSONValue
+    /// Tells the page how to read `body`.
+    let bodyType: BodyType
+
+    enum BodyType: String, Sendable, Hashable, Codable {
+        /// `body` is the parsed JSON value of the response.
+        case json
+        /// `body` is the response decoded as a UTF-8 string.
+        case text
+        /// `body` is a base64 string of non-UTF-8 (binary) bytes.
+        case base64
     }
 }
