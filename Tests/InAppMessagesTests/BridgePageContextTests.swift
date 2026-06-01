@@ -29,7 +29,8 @@ final class BridgePageContextTests: XCTestCase {
             locale: "en_US",
             appColorScheme: .dark,
             safeArea: .init(top: 47, bottom: 34, left: 0, right: 0),
-            storefrontCountryCode: "USA"
+            storefrontCountryCode: "USA",
+            appAccountToken: nil
         )
         let data = try JSONEncoder().encode(context)
         let json = try XCTUnwrap(
@@ -80,7 +81,8 @@ final class BridgePageContextTests: XCTestCase {
             locale: "en_US",
             appColorScheme: nil,
             safeArea: .init(top: 0, bottom: 0, left: 0, right: 0),
-            storefrontCountryCode: nil
+            storefrontCountryCode: nil,
+            appAccountToken: nil
         )
         let data = try JSONEncoder().encode(context)
         let json = try XCTUnwrap(
@@ -102,7 +104,8 @@ final class BridgePageContextTests: XCTestCase {
             locale: "ja_JP",
             appColorScheme: .light,
             safeArea: .init(top: 47, bottom: 34, left: 0, right: 0),
-            storefrontCountryCode: "JPN"
+            storefrontCountryCode: "JPN",
+            appAccountToken: "b1fe821d-5597-4abc-87b6-1f9647cffd6e"
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(BridgePageContext.self, from: data)

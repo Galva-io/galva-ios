@@ -87,11 +87,13 @@ final class SDKCoreIdentityTests: XCTestCase {
         defer { harness.cleanup() }
 
         await harness.consumer.reset()
-        let uuid = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        // Letter-bearing UUID so the lowercase wire convention is observable;
+        // `UUID.uuidString` returns uppercase by default.
+        let uuid = UUID(uuidString: "B1FE821D-5597-4ABC-87B6-1F9647CFFD6E")!
         await harness.core.identify(userId: "u", appAccountToken: uuid, traits: nil)
 
         guard let traits = await firstIdentifyTraits(in: harness) else { return }
-        XCTAssertEqual(traits["$gv_appAccountToken"], .string(uuid.uuidString))
+        XCTAssertEqual(traits["$gv_appAccountToken"], .string("b1fe821d-5597-4abc-87b6-1f9647cffd6e"))
     }
 
     // MARK: - logOut

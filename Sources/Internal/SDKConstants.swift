@@ -67,7 +67,7 @@ enum SDKConstants {
     /// `POST /identities/communications/{messageId}/resolve` — resolve a
     /// single communication to its renderable payload.
     static func communicationResolvePath(messageId: UUID) -> String {
-        "/identities/communications/\(messageId.uuidString)/resolve"
+        "/identities/communications/\(messageId.uuidString.lowercased())/resolve"
     }
 
     /// `POST /v1/transactions/observe` — reports

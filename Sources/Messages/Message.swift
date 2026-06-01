@@ -49,7 +49,7 @@ struct Message: Sendable, Hashable, Codable {
     }
 
     /// Stable per-record id (string form of `messageId`) used by storage layer.
-    var id: String { messageId.uuidString }
+    var id: String { messageId.uuidString.lowercased() }
 
     // MARK: - Body
 

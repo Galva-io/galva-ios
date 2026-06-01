@@ -68,6 +68,36 @@ final class IdentityStoreTokenTests: XCTestCase {
         }
     }
 
+    // MARK: - Lowercase canonicalization (Galva wire convention)
+
+    func test_init_migratesUppercaseAnonymousIdToLowercase() async {
+        // Pre-seed the suite with an uppercase anonymousId — the form older
+        // installs persisted via `UUID.uuidString`'s default. The new init
+        // must lowercase it (in-memory + on disk) so the wire sees a single
+        // canonical case.
+        let upper = "B1FE821D-5597-4ABC-87B6-1F9647CFFD6E"
+        let lower = upper.lowercased()
+        let name = suiteName!
+        guard let seed = UserDefaults(suiteName: name) else {
+            return XCTFail("failed to allocate UserDefaults suite")
+        }
+        seed.set(upper, forKey: "co.galva.anonymousId")
+
+        await Self.runOnActor(suiteName: name) { store in
+            XCTAssertEqual(store.anonymousId, lower,
+                           "loaded id must be lowercased on init")
+        }
+        XCTAssertEqual(seed.string(forKey: "co.galva.anonymousId"), lower,
+                       "init must persist the lowercased form back to UserDefaults")
+    }
+
+    func test_init_freshInstall_generatesLowercaseAnonymousId() async {
+        await Self.runOnActor(suiteName: suiteName) { store in
+            XCTAssertEqual(store.anonymousId, store.anonymousId.lowercased(),
+                           "newly-minted anonymousId must be lowercase from the start")
+        }
+    }
+
     // MARK: - logout / rotation clears override
 
     func test_rotateAnonymousId_alsoClearsAppAccountToken() async {

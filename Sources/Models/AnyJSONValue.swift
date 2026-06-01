@@ -50,7 +50,7 @@ extension AnyJSONValue {
         case let v as String:  self = .string(v)
         case let v as Date:    self = .string(ISO8601DateFormatter.galva.string(from: v))
         case let v as URL:     self = .string(v.absoluteString)
-        case let v as UUID:    self = .string(v.uuidString)
+        case let v as UUID:    self = .string(v.uuidString.lowercased())
         default:
             // Codable fallback: encode then decode through JSONSerialization.
             if let data = try? JSONEncoder().encode(value),

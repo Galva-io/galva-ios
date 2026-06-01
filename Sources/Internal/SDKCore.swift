@@ -529,7 +529,7 @@ final class SDKCore {
             // Persist on the identity store so StoreKit purchases pick
             // the override up automatically — not just sent as a trait.
             identity.setAppAccountToken(token)
-            mergedTraits["$gv_appAccountToken"] = .string(token.uuidString)
+            mergedTraits["$gv_appAccountToken"] = .string(token.uuidString.lowercased())
         }
         // Auto-attach device-derived built-in traits on every identify so the
         // server sees them for both anonymous and identified users. Caller-

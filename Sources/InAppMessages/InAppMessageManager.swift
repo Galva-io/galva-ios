@@ -127,7 +127,7 @@ final class InAppMessageManager {
         // server order to avoid second-guessing the priority resolution.
         var emitted: [InAppMessages.Message] = []
         for item in items where item.type == .trialRescueInApp {
-            let key = item.id.uuidString
+            let key = item.id.uuidString.lowercased()
             if seenIds.contains(key) { continue }
             seenIds.insert(key)
             let message = item.toPublicMessage()

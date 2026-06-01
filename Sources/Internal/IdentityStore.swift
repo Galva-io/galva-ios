@@ -37,9 +37,16 @@ final class IdentityStore {
         self.defaults = defaults
 
         if let existing = defaults.string(forKey: Self.anonymousIdKey) {
-            anonymousId = existing
+            // Canonicalize to lowercase (RFC 4122 / Galva wire convention) and
+            // migrate older installs that persisted `UUID.uuidString`'s default
+            // uppercase form. Same logical UUID, single case on the wire.
+            let canonical = existing.lowercased()
+            if canonical != existing {
+                defaults.set(canonical, forKey: Self.anonymousIdKey)
+            }
+            anonymousId = canonical
         } else {
-            let new = UUIDv7.next().uuidString
+            let new = UUIDv7.next().uuidString.lowercased()
             defaults.set(new, forKey: Self.anonymousIdKey)
             anonymousId = new
         }
@@ -66,7 +73,7 @@ final class IdentityStore {
     func setAppAccountToken(_ token: UUID?) {
         appAccountToken = token
         if let token {
-            defaults.set(token.uuidString, forKey: Self.appAccountTokenKey)
+            defaults.set(token.uuidString.lowercased(), forKey: Self.appAccountTokenKey)
         } else {
             defaults.removeObject(forKey: Self.appAccountTokenKey)
         }
@@ -97,7 +104,7 @@ final class IdentityStore {
     /// the previous identity and reusing it on the next user would taint
     /// receipt attribution.
     func rotateAnonymousId() {
-        let new = UUIDv7.next().uuidString
+        let new = UUIDv7.next().uuidString.lowercased()
         defaults.set(new, forKey: Self.anonymousIdKey)
         anonymousId = new
         setAppAccountToken(nil)

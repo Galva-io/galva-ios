@@ -46,7 +46,7 @@ struct DeviceSnapshot: Sendable, Hashable {
 
         #if canImport(UIKit)
         let d = UIDevice.current
-        snap.deviceId = d.identifierForVendor?.uuidString
+        snap.deviceId = d.identifierForVendor?.uuidString.lowercased()
         snap.deviceName = d.name
         snap.deviceType = Self.deviceType(for: d.userInterfaceIdiom)
         snap.osName = d.systemName

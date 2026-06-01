@@ -182,9 +182,12 @@ final class AnyJSONValueCoercionTests: XCTestCase {
         XCTAssertEqual(AnyJSONValue(url), .string("https://example.com/path?q=1"))
     }
 
-    func test_uuid_coercesToUUIDString() {
-        let uuid = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-        XCTAssertEqual(AnyJSONValue(uuid), .string(uuid.uuidString))
+    func test_uuid_coercesToLowercasedUUIDString() {
+        // Letter-bearing UUID so the lowercase canonicalization is observable;
+        // `UUID.uuidString` returns uppercase by default but Galva ships UUIDs
+        // lowercased on every wire payload.
+        let uuid = UUID(uuidString: "B1FE821D-5597-4ABC-87B6-1F9647CFFD6E")!
+        XCTAssertEqual(AnyJSONValue(uuid), .string("b1fe821d-5597-4abc-87b6-1f9647cffd6e"))
     }
 
     func test_date_coercesToISO8601StringWithFractionalSeconds() {

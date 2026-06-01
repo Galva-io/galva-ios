@@ -397,7 +397,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
                 transaction["expirationDate"] = .string(ISO8601DateFormatter.galva.string(from: exp))
             }
             if let tok = appAccountToken {
-                transaction["appAccountToken"] = .string(tok.uuidString)
+                transaction["appAccountToken"] = .string(tok.uuidString.lowercased())
             }
             return [
                 "outcome": .string("completed"),
@@ -807,7 +807,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             appColorScheme: nil, // SDK doesn't override; bundle falls back to matchMedia
             safeArea: safe,
             storefrontCountryCode: storefrontCode,
-            appAccountToken: appAccountToken.uuidString
+            appAccountToken: appAccountToken.uuidString.lowercased()
         )
     }
 

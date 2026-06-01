@@ -113,7 +113,7 @@ extension CommunicationItem {
     /// type so future channels don't crash an older SDK.
     func toPublicMessage() -> InAppMessages.Message {
         InAppMessages.Message(
-            id: id.uuidString,
+            id: id.uuidString.lowercased(),
             workflowType: workflowType?.toPublic(),
             createdAt: createdAt,
             rawType: type.rawValue

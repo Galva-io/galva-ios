@@ -47,10 +47,12 @@ final class EnvironmentTests: XCTestCase {
     // MARK: - SDKConstants endpoint builders
 
     func test_communicationResolvePath_buildsExpectedString() {
-        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000abc")!
+        // Construct with mixed case to verify the path builder lowercases the
+        // UUID (Galva wire convention — RFC 4122 canonical form).
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000ABC")!
         XCTAssertEqual(
             SDKConstants.communicationResolvePath(messageId: id),
-            "/identities/communications/00000000-0000-0000-0000-000000000ABC/resolve"
+            "/identities/communications/00000000-0000-0000-0000-000000000abc/resolve"
         )
     }
 
