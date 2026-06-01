@@ -117,13 +117,10 @@ struct StoreKitPurchaser {
         options.insert(.appAccountToken(appAccountToken))
 
         if let promo = promotionalOffer {
-            // Throws Failure.invalidOffer on OSes that lack the JWS API —
-            // we don't silently downgrade to a list-price purchase, since
-            // the user expected the discounted offer. The new
-            // `promotionalOffer(_:compactJWS:)` API returns a *set* of
-            // purchase options (StoreKit unpacks JWS claims into multiple
-            // internal flags), so we union them in.
-            options.formUnion(try makePromotionalOptions(promo))
+            makePromotionalOptions(promo)
+                .forEach {
+                    options.insert($0)
+                }
         }
 
         let result: Product.PurchaseResult
@@ -225,7 +222,7 @@ struct StoreKitPurchaser {
     /// every call site.
     private func makePromotionalOptions(
         _ promo: PromotionalOffer
-    ) throws -> [Product.PurchaseOption] {
+    ) -> [Product.PurchaseOption] {
         // Explicit type prefix because dot-shorthand resolves against the
         // return type (`[Product.PurchaseOption]`); the static factory
         // lives on the element type, not the array.
