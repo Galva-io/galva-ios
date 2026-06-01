@@ -346,33 +346,10 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             return .failure(BridgeError(code: .invalidPayload,
                                         message: "promotionalOffer.signature missing (JWS compact string)"))
         }
-        // Light sanity check on the JWS shape — three non-empty base64url
-        // segments. Catching obvious junk here gives the bundle a precise
-        // error instead of letting StoreKit surface a generic
-        // invalidOfferSignature failure deep in the purchase flow.
-        guard Self.isLikelyJWS(jws) else {
-            return .failure(BridgeError(code: .invalidPayload,
-                                        message: "promotionalOffer.signature is not a JWS compact string"))
-        }
+        
         return .success(.init(offerId: offerId, compactJWS: jws))
     }
-
-    /// True when `s` looks like a JWS compact serialization
-    /// (`<header>.<payload>.<signature>` — three non-empty base64url
-    /// segments separated by `.`). Conservative — we don't try to decode
-    /// or validate the cryptography here.
-    static func isLikelyJWS(_ s: String) -> Bool {
-        let parts = s.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3 else { return false }
-        let allowed = CharacterSet(charactersIn:
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
-        for part in parts where part.isEmpty
-            || part.unicodeScalars.contains(where: { !allowed.contains($0) }) {
-            return false
-        }
-        return true
-    }
-
+    
     // MARK: - StoreKit outcome / failure encoding
 
     private static func encodeOutcome(
