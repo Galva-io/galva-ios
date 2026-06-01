@@ -4,24 +4,27 @@
 //
 //  SwiftUI integration for in-app messaging. Two public modifiers:
 //
-//      • `.inAppMessageSheet($message)` — present the WebView sheet
-//        driven by a `Binding<InAppMessages.Message?>`. Mirrors SwiftUI's
-//        own `.sheet(item:)` semantics — non-nil presents, nil dismisses,
-//        and the SDK clears the binding when the bundle calls
-//        `galva.dismiss()` or the user swipes the sheet down.
+//      • `.inAppMessageSheet($message)` — present the WebView sheet driven
+//        by a `Binding<InAppMessages.Message?>`. The SDK resolves + downloads
+//        the HTML bundle OFF-SCREEN first; the sheet is presented only when
+//        the WebView is ready. A failed resolve / download is silent — no
+//        sheet ever appears, no spinner flashes, the caller's binding is
+//        cleared.
 //
 //      • `.autoDisplayInAppMessages()` — convenience that iterates
-//        `InAppMessages.messages` internally and feeds each value into
-//        an `.inAppMessageSheet`. Drop on any root view to enable
-//        zero-config rendering.
+//        `InAppMessages.messages` internally and feeds each value into an
+//        `.inAppMessageSheet`. Drop on any root view for zero-config
+//        rendering.
 //
-//  Architecture: SwiftUI owns the sheet presentation lifecycle. The
-//  `InAppMessageSheetCoordinator` (`ObservableObject` + `InAppMessageHost`)
-//  resolves the payload, downloads the bundle, and builds the
-//  `WKWebView` + `NativeBridge`. The WebView is mounted via
-//  `UIViewRepresentable`. The bundle's `galva.ready()` flips the
-//  coordinator's `@Published isRevealed` flag; `galva.dismiss()` calls
-//  back into the binding-clearing closure passed at init time.
+//  Architecture: the modifier owns a coordinator (`@StateObject`) that
+//  resolves the payload, downloads the bundle, and builds the `WKWebView` +
+//  `NativeBridge` BEFORE the binding that drives `.sheet(item:)` is set.
+//  Caller-facing `presentingMessage` tracks "what to show"; the coordinator's
+//  `readyMessage` tracks "what's actually ready to render" — and only that
+//  drives the sheet, so a failed bundle download never flashes a sheet open
+//  and closed. The coordinator conforms to `InAppMessageHost` so the bridge
+//  can call `reveal()` / `dismiss(reason:)` without caring whether it's
+//  running under UIKit or SwiftUI.
 //
 
 import Foundation
@@ -41,10 +44,11 @@ import UIKit
 
 public extension View {
 
-    /// Present the supplied `InAppMessages.Message` as a sheet. When
-    /// `message` becomes non-nil the sheet appears; when the user
-    /// dismisses (swipe-down or bundle-driven `galva.dismiss()`) the SDK
-    /// clears the binding, which dismisses the sheet.
+    /// Present the supplied `InAppMessages.Message` as a sheet. The SDK
+    /// resolves + downloads the HTML bundle off-screen first; the sheet is
+    /// presented **only** when the WebView is ready. If resolve or bundle
+    /// download fails, the binding is cleared silently and no sheet is shown
+    /// — the user never sees a sheet flash open and close.
     ///
     /// Use this when you want full control over which messages render —
     /// e.g. queueing, filtering by workflow, gating on app state.
@@ -87,26 +91,49 @@ public extension View {
 
 // MARK: - Modifier implementations
 
-/// Bridges `Binding<InAppMessages.Message?>` to SwiftUI's
-/// `.sheet(item:)`. The sheet's content view (`InAppMessageSheetView`)
-/// owns the coordinator that drives resolve / bundle download / WebView
-/// rendering.
+/// Bridges `Binding<InAppMessages.Message?>` to SwiftUI's `.sheet(item:)`
+/// with a prepare-before-present pipeline. The caller-facing binding tracks
+/// "what to show"; the coordinator's `readyMessage` tracks "what's actually
+/// ready to render" — and only that drives the sheet, so a failed bundle
+/// download never flashes a sheet.
 private struct InAppMessageSheetModifier: ViewModifier {
     @Binding var presentingMessage: InAppMessages.Message?
+    @StateObject private var coordinator = InAppMessagePresentationCoordinator()
 
     func body(content: Content) -> some View {
-        content.sheet(item: $presentingMessage) { message in
-            InAppMessageSheetView(
-                message: message,
-                onDismiss: { presentingMessage = nil }
-            )
-        }
+        content
+            .sheet(
+                item: $coordinator.readyMessage,
+                onDismiss: coordinator.handleSheetDismissed
+            ) { _ in
+                InAppMessageSheetView(coordinator: coordinator)
+            }
+            // Caller set a new message — kick off prepare off-screen. Silent
+            // failure clears the caller's binding and presents nothing.
+            .onChange(of: presentingMessage?.id) { _ in
+                if let target = presentingMessage {
+                    coordinator.prepare(target) {
+                        // Resolve / bundle download failed — clear the
+                        // caller's binding so it can try again later; no
+                        // sheet is ever shown.
+                        presentingMessage = nil
+                    }
+                } else {
+                    coordinator.dismissCurrent()
+                }
+            }
+            // Coordinator cleared its ready state (sheet dismissed by swipe
+            // OR by the bundle's `galva.dismiss()`) — clear the caller's
+            // binding too so the next message can flow in.
+            .onChange(of: coordinator.readyMessage?.id) { newValue in
+                if newValue == nil { presentingMessage = nil }
+            }
     }
 }
 
 /// `for await` consumer of `InAppMessages.messages` + automatic
-/// `.inAppMessageSheet` plumbing. The consumer task lives for the
-/// lifetime of the view (cancelled on disappear by `.task`).
+/// `.inAppMessageSheet` plumbing. Latest message wins — `inAppMessageSheet`
+/// handles the prepare-before-present pipeline for each one.
 private struct AutoDisplayInAppMessagesModifier: ViewModifier {
     @State private var presenting: InAppMessages.Message?
 
@@ -115,10 +142,6 @@ private struct AutoDisplayInAppMessagesModifier: ViewModifier {
             .inAppMessageSheet($presenting)
             .task {
                 for await message in InAppMessages.messages {
-                    // Latest message wins — if the SDK delivers a new
-                    // one while a previous sheet is still on screen,
-                    // SwiftUI's sheet(item:) dismisses the old and
-                    // presents the new (item identity changes).
                     presenting = message
                 }
             }
@@ -127,146 +150,145 @@ private struct AutoDisplayInAppMessagesModifier: ViewModifier {
 
 // MARK: - Sheet content view
 
-/// SwiftUI view that lives inside `.sheet(item:)`. Owns the
-/// `InAppMessageSheetCoordinator` via `@StateObject` so its lifecycle
-/// is tied to the sheet's appearance.
+/// Mounts the already-prepared WebView inside the sheet and respects the
+/// bundle's `galva.ready()` flag for first-paint timing. No prepare logic
+/// lives here — by the time this view appears, the coordinator already
+/// holds a ready WebView, so there's no spinner to show.
 @MainActor
 private struct InAppMessageSheetView: View {
-    let message: InAppMessages.Message
-    let onDismiss: () -> Void
-
-    @StateObject private var coordinator: InAppMessageSheetCoordinator
-
-    init(message: InAppMessages.Message, onDismiss: @escaping () -> Void) {
-        self.message = message
-        self.onDismiss = onDismiss
-        // `@StateObject` requires the wrappedValue to be set in init.
-        _coordinator = StateObject(
-            wrappedValue: InAppMessageSheetCoordinator(
-                message: message,
-                onDismiss: onDismiss
-            )
-        )
-    }
+    @ObservedObject var coordinator: InAppMessagePresentationCoordinator
 
     var body: some View {
         ZStack {
-            // Loading state — shown until the bundle finishes its first
-            // paint and the bridge invokes `galva.ready()`. We don't
-            // gate on resolve / bundle-download completion separately
-            // because the WebView paints over the spinner once the
-            // bundle is mounted; the spinner is mostly for the case
-            // where the bundle is still being downloaded from the CDN.
-            if !coordinator.isRevealed {
-                ProgressView()
-                    .controlSize(.large)
-            }
-
-            // WebView — present as soon as it's been constructed. Stays
-            // invisible (`.opacity(0)`) until `isRevealed` flips, so the
-            // bundle controls its own first-paint timing.
-            if let webView = coordinator.preparedWebView {
+            if let webView = coordinator.webView {
                 InAppMessageWebViewRepresentable(webView: webView)
                     .opacity(coordinator.isRevealed ? 1 : 0)
             }
+            // No spinner: the sheet is only presented once the WebView is
+            // ready. The brief gap between `present` and the bundle's first
+            // paint is hidden by the bundle's own `ready()` anti-flash gate
+            // (drives `.opacity` above).
         }
         .ignoresSafeArea()
-        .task {
-            await coordinator.prepare()
-        }
-        .onChange(of: coordinator.failed) { failed in
-            // Resolve / bundle download failed — close the sheet so the
-            // user isn't staring at an empty spinner forever.
-            if failed { onDismiss() }
-        }
-        .onDisappear {
-            coordinator.cleanup()
-        }
         .applySheetChrome()
     }
 }
 
 // MARK: - Coordinator (ObservableObject + InAppMessageHost)
 
-/// Drives the SwiftUI sheet's lifecycle. Resolves the payload, downloads
-/// the bundle, builds the `WKWebView` + `NativeBridge`, and wires bridge
-/// callbacks to SwiftUI state. Conforms to `InAppMessageHost` so the
-/// bridge can call `reveal()` / `dismiss(reason:)` without caring whether
-/// it's running under UIKit or SwiftUI.
+/// Owns the prepare-before-present pipeline + bridge callbacks. Lives on
+/// the modifier as a `@StateObject` so its lifetime matches the surrounding
+/// view, not the (intermittently presented) sheet content.
 @MainActor
-private final class InAppMessageSheetCoordinator: ObservableObject {
+private final class InAppMessagePresentationCoordinator: ObservableObject {
 
-    let message: InAppMessages.Message
-    private let onDismiss: () -> Void
+    /// Drives `.sheet(item:)`. Non-nil only once the WebView is prepared
+    /// (resolve + bundle download complete) — so the sheet never appears
+    /// while loading and never flashes on failure.
+    @Published var readyMessage: InAppMessages.Message?
 
-    /// WebView mounted in the sheet via `UIViewRepresentable`. `nil`
-    /// while `prepare()` is still resolving + downloading.
-    @Published private(set) var preparedWebView: WKWebView?
-
-    /// Flips to `true` when the bundle calls `galva.ready()` — drives the
-    /// WebView's `.opacity` so the bundle controls first-paint timing.
+    /// Flipped by the bundle's `galva.ready()`. Drives the WebView's
+    /// `.opacity` so the bundle controls first-paint timing.
     @Published private(set) var isRevealed: Bool = false
 
-    /// Set when resolve or bundle download fails. The view's `onChange`
-    /// fires `onDismiss` to close the sheet cleanly.
-    @Published private(set) var failed: Bool = false
+    /// Prepared WebView. Retained through the sheet's presentation; cleared
+    /// on real teardown (not on a "replace" mid-show, where a newer message
+    /// hot-swaps the prepared bundle).
+    private(set) var webView: WKWebView?
 
-    /// Bridge held strongly for the lifetime of the sheet —
-    /// `WKUserContentController.add(_:name:)` only takes a weak ref, so
-    /// the bridge dies the moment we drop it otherwise.
+    /// Bridge held strongly — `WKUserContentController.add(_:name:)` only
+    /// keeps a weak ref, so the channel dies the moment we drop the bridge.
     private var bridge: NativeBridge?
 
-    /// One-shot guard so concurrent `prepare()` invocations (re-entrancy
-    /// from `.task` re-firing on view identity changes) don't double-
-    /// resolve the same message.
-    private var didPrepare: Bool = false
+    /// In-flight prepare. Cancelled if a newer message arrives so we never
+    /// race two preparations against each other.
+    private var prepareTask: Task<Void, Never>?
 
-    init(
-        message: InAppMessages.Message,
-        onDismiss: @escaping () -> Void
-    ) {
-        self.message = message
-        self.onDismiss = onDismiss
-    }
-
-    /// Run the full SDK preparation flow. Idempotent — repeated calls
-    /// short-circuit once the first run completes.
-    func prepare() async {
-        guard !didPrepare else { return }
-        didPrepare = true
-        do {
-            let prepared = try await SDKCore.shared.prepareInAppMessage(
-                message,
-                host: self
-            )
-            self.preparedWebView = prepared.webView
-            self.bridge = prepared.bridge
-        } catch {
-            self.failed = true
+    /// Resolve + bundle-download `message` off-screen. On success, publishes
+    /// `readyMessage` (which presents the sheet). On failure, invokes
+    /// `onFail` — the sheet is never presented and no UI is shown.
+    ///
+    /// Idempotent for the same message id. A new id while a previous sheet
+    /// is on screen prepares the new bundle without tearing the old one
+    /// down; the swap happens atomically when the new prepare succeeds, so
+    /// the user never sees a gap. Failures of a *new* prepare leave the
+    /// current sheet intact (the failure is silent and scoped to the new
+    /// message).
+    func prepare(_ message: InAppMessages.Message, onFail: @escaping () -> Void) {
+        if readyMessage?.id == message.id { return }
+        prepareTask?.cancel()
+        prepareTask = Task { [weak self] in
+            guard let host = self else { return }
+            do {
+                let prepared = try await SDKCore.shared.prepareInAppMessage(message, host: host)
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    guard let self else { return }
+                    // Atomically swap to the new prepared bundle. SwiftUI's
+                    // `sheet(item:)` handles the visual transition because
+                    // the item identity changes — no manual dismiss/present
+                    // dance. The new bundle hasn't called `ready()` yet, so
+                    // reset the reveal flag.
+                    self.webView = prepared.webView
+                    self.bridge = prepared.bridge
+                    self.isRevealed = false
+                    self.readyMessage = message
+                }
+            } catch {
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    guard let self else { return }
+                    // Drop any prepared state for this message (there shouldn't
+                    // be any since we failed before the assignment), schedule
+                    // GalvaActor cleanup, and let the caller know the binding
+                    // can be cleared. No sheet was ever presented.
+                    self.tearDown()
+                    onFail()
+                }
+            }
         }
     }
 
-    /// Called from the view's `onDisappear`. Clears the active-message
-    /// id on the GalvaActor so the bridge doesn't serve stale
-    /// `getMessageData()` / `requestPurchase` calls. Idempotent.
-    func cleanup() {
+    /// Caller cleared its binding before any sheet went up — drop the
+    /// in-flight prepare. Distinct from `handleSheetDismissed`, which runs
+    /// only AFTER a sheet was presented and is now gone.
+    func dismissCurrent() {
+        tearDown()
+    }
+
+    /// SwiftUI's `.sheet(onDismiss:)` callback. Runs when the sheet that WAS
+    /// on screen finishes dismissing — by user swipe OR by the bundle's
+    /// `galva.dismiss()`. Guarded so a mid-show *replace* (readyMessage
+    /// already swapped to a new value) doesn't tear down the replacement.
+    func handleSheetDismissed() {
+        guard readyMessage == nil else {
+            // A newer message took over: the old sheet's `onDismiss` fired
+            // after `readyMessage` was already pointed at the replacement.
+            // The new sheet keeps the prepared WebView; don't touch it.
+            return
+        }
+        tearDown()
+    }
+
+    /// Idempotent state reset. Cancels any in-flight prepare, drops the
+    /// WebView + bridge + reveal flag, and asks the SDK to forget the
+    /// active message id on the GalvaActor.
+    private func tearDown() {
+        prepareTask?.cancel()
+        prepareTask = nil
+        readyMessage = nil
+        webView = nil
+        bridge = nil
+        isRevealed = false
         Task { @GalvaActor in
             await SDKCore.shared.clearActiveMessage()
         }
     }
 }
 
-extension InAppMessageSheetCoordinator: InAppMessageHost {
-    var webView: WKWebView? { preparedWebView }
-
-    /// Insets reflect the *presented sheet's* safe area, which is what
-    /// the bundle needs to pad against (sheet grabber, dynamic island,
-    /// home indicator). We pull from the WebView's window when mounted;
-    /// before mount, return `.zero` — the bundle's first
-    /// `getPageContext()` call only fires after the WebView is in the
-    /// view hierarchy.
+extension InAppMessagePresentationCoordinator: InAppMessageHost {
     var safeAreaInsets: UIEdgeInsets {
-        preparedWebView?.window?.safeAreaInsets ?? .zero
+        webView?.window?.safeAreaInsets ?? .zero
     }
 
     func reveal() {
@@ -274,11 +296,12 @@ extension InAppMessageSheetCoordinator: InAppMessageHost {
     }
 
     func dismiss(reason: String?) {
-        // Clear the binding — SwiftUI dismisses the sheet, which
-        // tears down the view + coordinator. `reason` is forwarded by
-        // the bundle's analytics POST (we don't need it native-side).
         _ = reason
-        onDismiss()
+        // Clearing readyMessage tells SwiftUI to dismiss the sheet, which
+        // fires `.sheet(onDismiss: handleSheetDismissed)` — that's where
+        // GalvaActor cleanup runs. The modifier's `onChange(of: readyMessage)`
+        // then clears the caller's binding.
+        readyMessage = nil
     }
 }
 
