@@ -315,6 +315,7 @@ final class SDKCore {
         await queue.startRunloop()
         configured = true
         logger.info(.configuration, "SDK configured", metadata: [
+            "environment": String(describing: environment),
             "logLevel": String(describing: logLevel),
             "anonymousId": identity.anonymousId,
         ])
@@ -520,6 +521,17 @@ final class SDKCore {
             "hasAccountToken": appAccountToken == nil ? "false" : "true",
         ])
         if let userId {
+            // Emit a higher-level state-transition log when the end-user
+            // binding actually changes (was nil → now set, or switched users)
+            // so the default-level trace can distinguish a real identify from
+            // the per-trait-update calls that also flow through here.
+            let previous = identity.endUserId
+            if previous != userId {
+                logger.info(.identity, "endUserId changed", metadata: [
+                    "from": previous ?? "<anonymous>",
+                    "to": userId,
+                ])
+            }
             identity.setEndUserId(userId)
             setCachedEndUserId(userId)
         }

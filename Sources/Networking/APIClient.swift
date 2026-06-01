@@ -179,6 +179,13 @@ actor APIClient {
                     headers[key.lowercased()] = value
                 }
             }
+            // Log every completed proxy round-trip (success OR non-2xx). The
+            // bridge surfaces non-2xx to the bundle as `ok:false` rather than
+            // throwing, so the SDK trace is the only place to see the status.
+            logger.debug(.uploader, "proxy result", metadata: [
+                "status": String(http.statusCode),
+                "url": url.absoluteString,
+            ])
             return ProxyResponse(status: http.statusCode, headers: headers, body: data)
         } catch let error as APIError {
             throw error
@@ -244,6 +251,13 @@ actor APIClient {
                 ])
                 throw APIError.http(status: http.statusCode, body: data)
             }
+            // Symmetric "request OK" log so the request/response pair is
+            // visible end-to-end at .debug — the start log alone leaves a
+            // dangling trace if you're checking whether a response ever came.
+            logger.debug(.uploader, "rpc OK", metadata: [
+                "status": String(http.statusCode),
+                "url": req.url?.absoluteString ?? "<nil>",
+            ])
             do {
                 return try decoder.decode(Response.self, from: data)
             } catch {

@@ -119,7 +119,9 @@ actor Uploader: MessageUploader {
                 logger.debug(.uploader, "request cancelled")
                 return .retryable(UploadError.cancelled)
             }
-            logger.warning(.uploader, "transport error", error: error)
+            logger.warning(.uploader, "transport error", metadata: [
+                "url": url.absoluteString,
+            ], error: error)
             return .retryable(UploadError.transport(error))
         }
     }

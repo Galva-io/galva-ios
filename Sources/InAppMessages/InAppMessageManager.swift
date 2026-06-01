@@ -202,10 +202,17 @@ final class InAppMessageManager {
             let chosenVersion = valid.webviewVersion
                 ?? fallbackVersion
                 ?? SDKConstants.fallbackWebviewVersion
+            logger.debug(.identity, "in-app resolve OK", metadata: [
+                "messageId": messageId,
+                "version": chosenVersion,
+            ])
             return Resolved(payload: valid, webviewVersion: chosenVersion)
         case .invalid:
             // Drop any stale cached payload — server has revoked.
             resolvedPayloads[messageId] = nil
+            logger.info(.identity, "in-app resolve invalidated by server", metadata: [
+                "messageId": messageId,
+            ])
             return nil
         }
     }
