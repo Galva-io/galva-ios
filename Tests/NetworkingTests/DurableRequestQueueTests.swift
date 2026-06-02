@@ -184,7 +184,96 @@ final class DurableRequestQueueTests: XCTestCase {
         }
     }
 
+    // MARK: - GalvaActor is not blocked by the `while true` drain loop
+
+    func test_drain_returnsPromptlyWhenEmpty() async {
+        // The clearest termination check: draining an empty queue must return,
+        // not spin forever in `while true`. If the loop didn't `return` on an
+        // empty fetch, this test would hang (and time out).
+        await Harness.run { queue, _ in
+            await queue.drain(force: true)
+            let pending = await queue.pendingCount
+            XCTAssertEqual(pending, 0)
+        }
+    }
+
+    func test_drain_doesNotBlockActor_whileNetworkInFlight() async {
+        // Proof that the `while true` loop releases the GalvaActor at its
+        // `await` points: hold a replay parked inside the loop (the stub blocks
+        // on a gate), then issue another GalvaActor-isolated call. If the loop
+        // monopolized the actor, that call could not complete until drain
+        // finished — but drain can't finish until we open the gate, so the
+        // call returning here proves the actor stayed responsive mid-loop.
+        let gate = Gate()
+        URLProtocolStub.handler = { _ in
+            gate.entered.signal()      // a replay is now in flight (drain parked at await)
+            gate.release.wait()        // hold it there until the test says go
+            return (URLProtocolStub.httpResponse(url: Self.base, status: 200), Data())
+        }
+
+        await Harness.run { queue, store in
+            // Seed directly (not via enqueue — enqueue would await the blocked drain).
+            try? await store.store(
+                DurableProxyRequest(path: "/x", method: "POST", body: nil, headers: [:])
+            )
+
+            // Start the drain; it parks inside `while true` at the network await.
+            let drainTask = Task { @GalvaActor in await queue.drain(force: true) }
+
+            // Wait (off the actor) until the replay is actually in flight.
+            let entered = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                DispatchQueue.global().async {
+                    cont.resume(returning: gate.entered.wait(timeout: .now() + 3) == .success)
+                }
+            }
+            XCTAssertTrue(entered, "replay should be in flight (drain parked mid-loop)")
+
+            // THE ASSERTION: a GalvaActor call returns while the drain loop is
+            // parked and the gate is still closed (so drain provably hasn't
+            // finished). A blocked actor would make this hang.
+            let pendingDuringDrain = await queue.pendingCount
+            XCTAssertEqual(pendingDuringDrain, 1,
+                           "actor stayed responsive while the drain loop was in flight")
+
+            // Let it finish.
+            gate.release.signal()
+            await drainTask.value
+            let pendingAfter = await queue.pendingCount
+            XCTAssertEqual(pendingAfter, 0)
+        }
+    }
+
+    func test_concurrentDrains_doNotDeadlock() async {
+        // Two overlapping drains: the `isDraining` guard makes one bail
+        // immediately while the other runs. Both must return (no deadlock),
+        // and everything drains.
+        URLProtocolStub.handler = { _ in
+            (URLProtocolStub.httpResponse(url: Self.base, status: 200), Data())
+        }
+        await Harness.run { queue, store in
+            for i in 0..<3 {
+                try? await store.store(
+                    DurableProxyRequest(path: "/x\(i)", method: "POST", body: nil, headers: [:])
+                )
+            }
+            async let first: Void = queue.drain(force: true)
+            async let second: Void = queue.drain(force: true)
+            _ = await (first, second)
+            let pending = await queue.pendingCount
+            XCTAssertEqual(pending, 0, "overlapping drains must both return and deliver everything")
+        }
+    }
+
     // MARK: - Helpers
+
+    /// Two-phase gate the `@Sendable` stub handler uses to park a replay
+    /// in flight: `entered` fires when the request reaches the stub,
+    /// `release` holds it there until the test opens it. `@unchecked
+    /// Sendable` — `DispatchSemaphore` is itself thread-safe.
+    private final class Gate: @unchecked Sendable {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+    }
 
     /// Lock-protected hit counter the `@Sendable` URLProtocolStub handler can
     /// safely bump from whatever queue URLSession calls it on.
