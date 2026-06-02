@@ -79,6 +79,11 @@ final class SDKCore {
     /// fan-out. `nil` before configure() lands.
     var inAppMessageManager: InAppMessageManager?
 
+    /// Guaranteed-delivery queue for `shouldRetry` apiFetch requests from
+    /// the in-app message bundle. `nil` before configure() lands. Drained on
+    /// configure (flush survivors) and every foreground.
+    var durableRequestQueue: DurableRequestQueue?
+
     /// Broadcast hub for the `InAppMessages.messages` AsyncStream. Held
     /// here because `InAppMessages.messages` (a `static var`) needs a
     /// stable per-SDK reference across calls.
@@ -432,6 +437,18 @@ final class SDKCore {
         )
         #endif
 
+        // Durable retry queue for `shouldRetry` apiFetch requests. Owns its
+        // own SQLite store (separate failure domain from the event queue) and
+        // guarantees eventual delivery across outages + launches.
+        let durableRequestQueue = DurableRequestQueue.makeDefault(
+            client: apiClient,
+            logger: logger
+        )
+        self.durableRequestQueue = durableRequestQueue
+        // Flush any requests that survived the previous launch. Forced — a
+        // fresh launch is a good moment to attempt immediately.
+        Task { @GalvaActor in await durableRequestQueue.drain(force: true) }
+
         // Manager — only constructible if both bundleCache and initManager
         // came up. Without them in-app messaging cannot function.
         guard let bundleCache else { return }
@@ -441,7 +458,8 @@ final class SDKCore {
             stream: inAppMessageStream,
             bundleCache: bundleCache,
             initialization: initManager,
-            logger: logger
+            logger: logger,
+            durableRequestQueue: durableRequestQueue
         )
         self.inAppMessageManager = manager
 
@@ -469,6 +487,13 @@ final class SDKCore {
                         await self.transactionObserver?.sweep()
                     }
                     #endif
+                    // Retry any durable apiFetch requests that failed earlier
+                    // (network was down, app was killed mid-flight). Forced —
+                    // foreground is a good moment to retry sooner than the
+                    // backoff window, and it's naturally rate-limited. Not
+                    // opt-out gated — these are bundle-initiated user actions,
+                    // consistent with in-app messaging continuing under opt-out.
+                    await self.durableRequestQueue?.drain(force: true)
                 }
             }
             self?.lifecycleObserver = observer

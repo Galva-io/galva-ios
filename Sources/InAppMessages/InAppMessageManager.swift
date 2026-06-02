@@ -37,6 +37,11 @@ final class InAppMessageManager {
     private let initialization: InitializationManager
     private let logger: any GalvaLogger
 
+    /// Guaranteed-delivery queue for `shouldRetry` apiFetch requests. `nil`
+    /// when in-app messaging came up without it (shouldn't happen in
+    /// production; nil-safe so tests can omit it).
+    private let durableRequestQueue: DurableRequestQueue?
+
     /// Drop duplicate messages observed within the lifetime of the SDK
     /// process. Prevents a rapid background/foreground toggle from
     /// emitting the same message twice. Bounded — see prune below.
@@ -58,7 +63,8 @@ final class InAppMessageManager {
         stream: InAppMessageStream,
         bundleCache: WebViewBundleCache,
         initialization: InitializationManager,
-        logger: any GalvaLogger
+        logger: any GalvaLogger,
+        durableRequestQueue: DurableRequestQueue? = nil
     ) {
         self.client = client
         self.identity = identity
@@ -66,6 +72,7 @@ final class InAppMessageManager {
         self.bundleCache = bundleCache
         self.initialization = initialization
         self.logger = logger
+        self.durableRequestQueue = durableRequestQueue
     }
 
     // MARK: - Polling
@@ -292,6 +299,34 @@ final class InAppMessageManager {
             body: body,
             additionalHeaders: additionalHeaders
         )
+    }
+
+    /// Persist a `shouldRetry` apiFetch for guaranteed eventual delivery and
+    /// kick off a delivery attempt. Fire-and-forget — returns once the
+    /// request is durably stored, not once it's delivered. Returns `false`
+    /// when the durable queue isn't available (in-app messaging degraded),
+    /// so the bridge can tell the bundle the request wasn't accepted.
+    @discardableResult
+    func enqueueDurableProxyRequest(
+        path: String,
+        method: String,
+        body: Data?,
+        additionalHeaders: [String: String]
+    ) async -> Bool {
+        guard let durableRequestQueue else {
+            logger.warning(.uploader, "durable proxy unavailable — request not queued", metadata: [
+                "method": method,
+                "path": path,
+            ])
+            return false
+        }
+        await durableRequestQueue.enqueue(
+            path: path,
+            method: method,
+            body: body,
+            headers: additionalHeaders
+        )
+        return true
     }
 }
 

@@ -483,7 +483,28 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         logger.debug(.identity, "bridge apiFetch", metadata: [
             "method": parsed.method,
             "path": parsed.path,
+            "shouldRetry": parsed.shouldRetry ? "true" : "false",
         ])
+
+        // Fire-and-forget durable path: persist for guaranteed eventual
+        // delivery (retries across network loss + app launches) and ack the
+        // bundle immediately — it does NOT wait for the HTTP response.
+        if parsed.shouldRetry {
+            let queued = await messageManager.enqueueDurableProxyRequest(
+                path: parsed.path,
+                method: parsed.method,
+                body: parsed.body,
+                additionalHeaders: parsed.headers
+            )
+            guard queued else {
+                return .failure(BridgeError(
+                    code: .apiRequestFailed,
+                    message: "Durable request queue unavailable"
+                ))
+            }
+            return .success(.object(["queued": .bool(true)]))
+        }
+
         do {
             let response = try await messageManager.apiProxyFetch(
                 path: parsed.path,
@@ -522,6 +543,10 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         let method: String
         let body: Data?
         let headers: [String: String]
+        /// When `true`, the bundle is firing-and-forgetting: the SDK persists
+        /// the request and guarantees eventual delivery (retries across
+        /// network outages and app launches) rather than awaiting it inline.
+        let shouldRetry: Bool
     }
 
     /// HTTP methods the bundle may proxy. Conservative allowlist — anything
@@ -581,7 +606,15 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             if !hasContentType { headers["Content-Type"] = "application/json" }
         }
 
-        return .success(ParsedAPIFetch(path: path, method: method, body: body, headers: headers))
+        // shouldRetry — opt-in durable, fire-and-forget delivery. Default false
+        // (normal inline request the bundle awaits). Only an explicit `true`
+        // boolean enables it.
+        var shouldRetry = false
+        if case .bool(let flag)? = payload["shouldRetry"] { shouldRetry = flag }
+
+        return .success(ParsedAPIFetch(
+            path: path, method: method, body: body, headers: headers, shouldRetry: shouldRetry
+        ))
     }
 
     /// Map a raw `APIClient.ProxyResponse` into the typed `BridgeAPIFetchResult`.

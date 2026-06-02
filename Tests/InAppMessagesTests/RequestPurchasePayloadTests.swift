@@ -64,43 +64,11 @@ final class RequestPurchasePayloadTests: XCTestCase {
                        "signature must be a JWS compact serialization")
     }
 
-    // MARK: - JWS shape sanity check (NativeBridge.isLikelyJWS)
-    //
-    // NativeBridge is gated on UIKit (it implements WKScriptMessageHandler
-    // which is iOS-only in the WebKit headers we depend on), so these
-    // tests only run on iOS / Mac Catalyst targets.
-
-    #if canImport(UIKit)
-    @MainActor
-    func test_isLikelyJWS_acceptsValidCompactJWS() {
-        XCTAssertTrue(NativeBridge.isLikelyJWS(
-            "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJnYWx2YSJ9.MEUCIQDsig"
-        ))
-    }
-
-    @MainActor
-    func test_isLikelyJWS_rejectsWrongSegmentCount() {
-        XCTAssertFalse(NativeBridge.isLikelyJWS("one"))
-        XCTAssertFalse(NativeBridge.isLikelyJWS("one.two"))
-        XCTAssertFalse(NativeBridge.isLikelyJWS("one.two.three.four"))
-    }
-
-    @MainActor
-    func test_isLikelyJWS_rejectsEmptySegment() {
-        XCTAssertFalse(NativeBridge.isLikelyJWS(".header.signature"))
-        XCTAssertFalse(NativeBridge.isLikelyJWS("header..signature"))
-        XCTAssertFalse(NativeBridge.isLikelyJWS("header.payload."))
-    }
-
-    @MainActor
-    func test_isLikelyJWS_rejectsNonBase64URLCharacters() {
-        // Plus and slash are valid in standard base64 but NOT base64url —
-        // JWS compact serialization is strictly base64url-encoded.
-        XCTAssertFalse(NativeBridge.isLikelyJWS("a+b.c.d"))
-        XCTAssertFalse(NativeBridge.isLikelyJWS("a.b/c.d"))
-        XCTAssertFalse(NativeBridge.isLikelyJWS("a.b=.c"))
-    }
-    #endif
+    // NOTE: the client-side `isLikelyJWS` shape check was removed from
+    // NativeBridge (commit "Remove JWS validation checks from promotional
+    // offer handling") — StoreKit re-validates the signature at purchase
+    // time, so the SDK no longer pre-screens it. Tests for it were dropped
+    // with the function.
 
     // MARK: - BridgeError purchase codes round-trip
 

@@ -168,6 +168,29 @@ final class BridgeAPIFetchMarshalingTests: XCTestCase {
         XCTAssertEqual(parsed.path, "/x")
     }
 
+    func test_parse_shouldRetryDefaultsFalse() {
+        guard case .success(let parsed) = NativeBridge.parseAPIFetch(["path": .string("/x")]) else {
+            return XCTFail("expected success")
+        }
+        XCTAssertFalse(parsed.shouldRetry, "shouldRetry must default to false (normal inline request)")
+    }
+
+    func test_parse_shouldRetryTrue() {
+        guard case .success(let parsed) = NativeBridge.parseAPIFetch([
+            "path": .string("/x"), "method": .string("POST"), "shouldRetry": .bool(true),
+        ]) else { return XCTFail("expected success") }
+        XCTAssertTrue(parsed.shouldRetry)
+    }
+
+    func test_parse_shouldRetryNonBoolIgnored() {
+        // Only an explicit boolean true enables durable retry; a stray string
+        // must not accidentally opt in.
+        guard case .success(let parsed) = NativeBridge.parseAPIFetch([
+            "path": .string("/x"), "shouldRetry": .string("true"),
+        ]) else { return XCTFail("expected success") }
+        XCTAssertFalse(parsed.shouldRetry)
+    }
+
     func test_parse_upperCasesMethod() {
         guard case .success(let parsed) = NativeBridge.parseAPIFetch([
             "path": .string("/x"), "method": .string("post"),
