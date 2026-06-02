@@ -40,7 +40,7 @@ Three steps, ~5 minutes.
 **1. Add the package** — in Xcode: **File → Add Package Dependencies…**
 
 ```
-https://github.com/nicegalva/galva-ios
+https://github.com/Galva-io/galva-ios
 ```
 
 **2. Configure once at launch**, then identify your user:
@@ -83,14 +83,14 @@ That's the whole integration. Every call returns synchronously — your UI threa
 In Xcode: **File → Add Package Dependencies** and paste the repo URL, then pick **Up to Next Major Version**:
 
 ```
-https://github.com/nicegalva/galva-ios
+https://github.com/Galva-io/galva-ios
 ```
 
 Or in `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/nicegalva/galva-ios", from: "1.0.0"),
+    .package(url: "https://github.com/Galva-io/galva-ios", from: "1.0.0"),
 ],
 targets: [
     .target(
@@ -104,7 +104,7 @@ targets: [
 
 For teams that vendor binaries (no SPM resolution at build time, mixed-build pipelines):
 
-1. Download `Galva.xcframework.zip` from the [latest release](https://github.com/nicegalva/galva-ios/releases).
+1. Download `Galva.xcframework.zip` from the [latest release](https://github.com/Galva-io/galva-ios/releases).
 2. Unzip and drag `Galva.xcframework` into your project.
 3. Under your app target's **General → Frameworks, Libraries, and Embedded Content**, set it to **Embed & Sign**.
 
@@ -198,7 +198,9 @@ AppEvents.track("Purchase", attributes: [
 ])
 ```
 
-For events you emit a lot, define a typed struct so the call site is a one-liner:
+Attributes are a loose `[String: Any]` — pass any dictionary (even one you already have from JSON) without converting values yourself. The SDK keeps everything JSON-compatible and **silently drops** anything that isn't. Kept: `String`, `Bool`, `Int`/`Int64`, `Double`/`Float`, `Decimal`, `Date`, `URL`, `UUID`, any custom `Codable` `GalvaCompatibleValue`, `NSNumber`/`NSString`/`NSNull`, and nested arrays/dictionaries of those. Dropped: custom classes, closures, and other non-JSON values.
+
+For events you emit a lot, define a typed struct — the call site is a one-liner and the attributes are compile-time-checked (nothing is filtered):
 
 ```swift
 struct PurchaseEvent: AppEvents.Event {
@@ -211,7 +213,7 @@ struct PurchaseEvent: AppEvents.Event {
 AppEvents.track(PurchaseEvent(sku: "pro_yearly", price: 9.99))
 ```
 
-Attribute values can be any `GalvaCompatibleValue`: `String`, `Int`, `Int64`, `Double`, `Float`, `Bool`, `Date`, `URL`, `UUID`, `Decimal`, or any custom `Codable & Sendable` type. Events are persisted to disk before they leave the SDK, so they survive crashes, kills, and offline windows, and retry with exponential backoff.
+`EventAttributes` is `[String: any GalvaCompatibleValue]` (`String`, `Int`, `Int64`, `Double`, `Float`, `Bool`, `Date`, `URL`, `UUID`, `Decimal`, or any custom `Codable & Sendable` type). Events are persisted to disk before they leave the SDK, so they survive crashes, kills, and offline windows, and retry with exponential backoff.
 
 ---
 
@@ -269,7 +271,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession,
                options: UIScene.ConnectionOptions) {
-        messageTask = Task {
+        messageTask = Task { @MainActor in
             for await message in InAppMessages.messages {
                 guard let windowScene = UIApplication.shared.connectedScenes
                     .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene
@@ -288,15 +290,19 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 Each message carries the workflow that triggered it, so you can theme, gate, or log per campaign:
 
 ```swift
-for await message in InAppMessages.messages {
-    switch message.workflowType {
-    case .trialRescue?:     break   // trial-to-paid nudge
-    case .paymentRecovery?: break   // failed renewal
-    case .prechurnSave?:    break   // about to cancel
-    case nil:               break   // broadcast / manual send
-    @unknown default:       break   // future workflow types
+// `InAppMessages.messages` is MainActor-isolated — iterate from a MainActor
+// context so each message (and your UI work below) lands on the main thread.
+Task { @MainActor in
+    for await message in InAppMessages.messages {
+        switch message.workflowType {
+        case .trialRescue?:     break   // trial-to-paid nudge
+        case .paymentRecovery?: break   // failed renewal
+        case .prechurnSave?:    break   // about to cancel
+        case nil:               break   // broadcast / manual send
+        @unknown default:       break   // future workflow types
+        }
+        // …then present via .inAppMessageSheet($message) or message.show(in: scene)
     }
-    // …then present via .inAppMessageSheet($message) or message.show(in: scene)
 }
 ```
 
@@ -448,7 +454,7 @@ Every guarantee is locked in by contract tests in CI.
 ## Links
 
 - **Galva platform** — [galva.io](https://galva.io)
-- **Releases** — [GitHub Releases](https://github.com/nicegalva/galva-ios/releases)
+- **Releases** — [GitHub Releases](https://github.com/Galva-io/galva-ios/releases)
 - **Contributing** — [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License

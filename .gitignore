@@ -34,3 +34,4 @@ default.profraw
 # Local environment overrides
 .env
 .env.local
+*.UserInterfaceState.xcuserstate

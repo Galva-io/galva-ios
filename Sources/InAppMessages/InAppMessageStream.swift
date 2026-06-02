@@ -12,10 +12,18 @@
 //  Per-consumer terminations are handled by `onTermination` — when a
 //  consumer cancels its iteration, its continuation is removed.
 //
+//  Isolation: the broadcaster is `@MainActor`. `yield` runs on the main
+//  actor, and `InAppMessages.messages` is `@MainActor` too, so the natural
+//  `for await` (SwiftUI `.task`, `Task { @MainActor in … }`) delivers each
+//  message on the main thread — callers can update UI in the loop body
+//  without a manual hop. (AsyncStream resumes on the *consumer's* executor,
+//  so this guarantee holds for the standard MainActor-isolated consumption
+//  the SDK documents and uses.)
+//
 
 import Foundation
 
-@GalvaActor
+@MainActor
 final class InAppMessageStream {
 
     private struct Subscriber: Identifiable {
@@ -54,12 +62,12 @@ final class InAppMessageStream {
     nonisolated func makeStream() -> AsyncStream<InAppMessages.Message> {
         let id = UUID()
         return AsyncStream { continuation in
-            Task { @GalvaActor in
+            Task { @MainActor in
                 self.register(Subscriber(id: id, continuation: continuation))
             }
             continuation.onTermination = { @Sendable [weak self] _ in
                 guard let self else { return }
-                Task { @GalvaActor in
+                Task { @MainActor in
                     self.unregister(id: id)
                 }
             }

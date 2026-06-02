@@ -84,13 +84,15 @@ public extension InAppMessages.Message {
     /// Use this from your `for await message in InAppMessages.messages`
     /// loop:
     ///
-    ///     for await message in InAppMessages.messages {
-    ///         guard let scene = UIApplication.shared
-    ///             .connectedScenes
-    ///             .first(where: { $0.activationState == .foregroundActive })
-    ///             as? UIWindowScene
-    ///         else { continue }
-    ///         try? await message.show(in: scene)
+    ///     Task { @MainActor in
+    ///         for await message in InAppMessages.messages {
+    ///             guard let scene = UIApplication.shared
+    ///                 .connectedScenes
+    ///                 .first(where: { $0.activationState == .foregroundActive })
+    ///                 as? UIWindowScene
+    ///             else { continue }
+    ///             try? await message.show(in: scene)
+    ///         }
     ///     }
     ///
     /// - Throws: `InAppMessages.Error.notConfigured` if `Galva.configure`

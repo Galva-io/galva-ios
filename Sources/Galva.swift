@@ -402,12 +402,25 @@ public enum AppEvents {
         var attributes: EventAttributes? { get }
     }
 
-    /// Track an event with a string name and optional attributes.
+    /// Track an event with a string name and an optional loose attribute bag.
+    ///
+    /// Attributes are `[String: Any]` for ergonomics — pass any dictionary
+    /// (including one you already have, e.g. from JSON) without converting
+    /// each value yourself. The SDK keeps everything JSON-compatible and
+    /// **silently drops** anything that isn't:
+    ///   • Kept: `String`, `Bool`, `Int`/`Int64`, `Double`/`Float`, `Decimal`,
+    ///     `Date`, `URL`, `UUID`, any custom `Codable` `GalvaCompatibleValue`,
+    ///     `NSNumber`/`NSString`/`NSNull`, and nested arrays/dictionaries of
+    ///     those.
+    ///   • Dropped: custom classes, closures, and other non-JSON values.
+    ///
+    /// For compile-time-checked attributes, define an `AppEvents.Event` and
+    /// use the `track(_:)` overload instead.
     ///
     /// - Parameters:
     ///   - eventName: Wire name. Use a stable, snake_case or PascalCase
     ///     string from your taxonomy.
-    ///   - attributes: Optional payload. Values must be `GalvaCompatibleValue`.
+    ///   - attributes: Optional loose payload; incompatible values are filtered.
     ///
     /// Example:
     ///
@@ -417,16 +430,23 @@ public enum AppEvents {
     ///         "price": 9.99,
     ///         "currency": "USD"
     ///     ])
-    public static func track(_ eventName: String, attributes: EventAttributes? = nil) {
-        let props = attributes?.mapValues { AnyJSONValue($0) }
+    public static func track(_ eventName: String, attributes: [String: Any]? = nil) {
+        let props = attributes.flatMap { dict -> [String: AnyJSONValue]? in
+            let coerced = AnyJSONValue.coercing(dictionary: dict)
+            return coerced.isEmpty ? nil : coerced
+        }
         Task { @GalvaActor in
             await SDKCore.shared.track(event: eventName, properties: props)
         }
     }
 
-    /// Track a strongly-typed `AppEvents.Event` value.
+    /// Track a strongly-typed `AppEvents.Event` value. Attributes flow through
+    /// the typed `GalvaCompatibleValue` path — lossless, nothing is filtered.
     public static func track<E: Event>(_ event: E) {
-        track(event.eventName, attributes: event.attributes)
+        let props = event.attributes?.mapValues { AnyJSONValue($0) }
+        Task { @GalvaActor in
+            await SDKCore.shared.track(event: event.eventName, properties: props)
+        }
     }
 }
 
@@ -744,7 +764,7 @@ public enum Communication {
 ///
 /// Example:
 ///
-///     Task {
+///     Task { @MainActor in
 ///         for await message in InAppMessages.messages {
 ///             guard let scene = UIApplication.shared
 ///                 .connectedScenes
@@ -762,6 +782,13 @@ public enum InAppMessages {
     /// Async stream of pending in-app messages addressed to the current
     /// identity. The SDK publishes the winning message after each
     /// foreground poll; multiple consumers may iterate concurrently.
+    ///
+    /// `@MainActor`: the stream is main-actor-isolated, so when you iterate
+    /// it from a MainActor context — a SwiftUI `.task { … }` or
+    /// `Task { @MainActor in … }` — each message is delivered on the main
+    /// thread and you can drive UI (present a sheet, call `show(in:)`) in the
+    /// loop body without a manual hop.
+    @MainActor
     public static var messages: AsyncStream<InAppMessages.Message> {
         SDKCore.shared.inAppMessageStream.makeStream()
     }

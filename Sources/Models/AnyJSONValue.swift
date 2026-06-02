@@ -63,6 +63,67 @@ extension AnyJSONValue {
     }
 }
 
+// MARK: - Best-effort coercion from untyped `Any`
+
+extension AnyJSONValue {
+
+    /// Best-effort coercion from an untyped `Any`, returning `nil` for values
+    /// that can't be represented as JSON. Lets the public `[String: Any]`
+    /// event/track API accept a loose dictionary and silently drop anything
+    /// that isn't JSON-compatible, so integrators don't have to pre-convert.
+    ///
+    /// Handles, in order:
+    ///   • an already-built `AnyJSONValue` (pass-through),
+    ///   • any `GalvaCompatibleValue` — every Swift scalar the SDK supports
+    ///     (`Bool`/`Int`/`Int64`/`Double`/`Float`/`String`/`Date`/`URL`/
+    ///     `UUID`/`Decimal`) plus custom `Codable` conformers,
+    ///   • Foundation/JSON-sourced values: `NSNull`, `NSNumber`
+    ///     (bool vs. integer vs. floating distinguished correctly), `NSString`,
+    ///   • nested `[Any]` / `[String: Any]` (recursively coerced; incompatible
+    ///     elements/entries are dropped).
+    /// Anything else (custom classes, closures, …) returns `nil`.
+    static func coercing(_ value: Any) -> AnyJSONValue? {
+        switch value {
+        case let v as AnyJSONValue:
+            return v
+        case let v as any GalvaCompatibleValue:
+            // Covers all Swift-native scalars + custom Codable conformers with
+            // correct typing (e.g. Decimal → string to preserve precision).
+            return AnyJSONValue(v)
+        case is NSNull:
+            return .null
+        case let v as NSNumber:
+            // JSON-sourced numbers arrive as NSNumber. A boolean NSNumber is a
+            // CFBoolean — distinguish it so `true` doesn't become `1`.
+            if CFGetTypeID(v) == CFBooleanGetTypeID() { return .bool(v.boolValue) }
+            let objCType = String(cString: v.objCType)
+            if objCType == "f" || objCType == "d" { return .double(v.doubleValue) }
+            return .int(v.int64Value)
+        case let v as String:
+            // Catches `NSString` (bridges to `String`); native `String` was
+            // already handled by the `GalvaCompatibleValue` case above.
+            return .string(v)
+        case let v as [Any]:
+            return .array(v.compactMap { coercing($0) })
+        case let v as [String: Any]:
+            return .object(coercing(dictionary: v))
+        default:
+            return nil
+        }
+    }
+
+    /// Coerce every entry of a `[String: Any]` to `AnyJSONValue`, dropping keys
+    /// whose value isn't JSON-compatible. Used by the `[String: Any]` track API.
+    static func coercing(dictionary raw: [String: Any]) -> [String: AnyJSONValue] {
+        var out: [String: AnyJSONValue] = [:]
+        out.reserveCapacity(raw.count)
+        for (key, value) in raw {
+            if let coerced = coercing(value) { out[key] = coerced }
+        }
+        return out
+    }
+}
+
 // MARK: - Codable
 
 extension AnyJSONValue: Codable {

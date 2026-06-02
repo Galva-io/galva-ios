@@ -139,7 +139,9 @@ final class InAppMessageManager {
             seenIds.insert(key)
             let message = item.toPublicMessage()
             emitted.append(message)
-            stream.yield(message)
+            // Hop to the MainActor stream — keeps message delivery on the
+            // main thread for the SDK's MainActor-isolated consumers.
+            await stream.yield(message)
             prefetchBundleIfPossible()
         }
         pruneSeenIfNeeded()

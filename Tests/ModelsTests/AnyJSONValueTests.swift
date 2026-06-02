@@ -224,4 +224,77 @@ final class AnyJSONValueCoercionTests: XCTestCase {
         XCTAssertEqual(dict["name"], .string("x"))
         XCTAssertEqual(dict["count"], .int(3))
     }
+
+    // MARK: - Coercion from untyped `Any` (the [String: Any] track path)
+
+    func test_coercing_swiftScalars() {
+        XCTAssertEqual(AnyJSONValue.coercing(true), .bool(true))
+        XCTAssertEqual(AnyJSONValue.coercing(42), .int(42))
+        XCTAssertEqual(AnyJSONValue.coercing(9.99), .double(9.99))
+        XCTAssertEqual(AnyJSONValue.coercing("hi"), .string("hi"))
+    }
+
+    func test_coercing_decimal_preservesPrecisionAsString() {
+        // Routed through the GalvaCompatibleValue path → string, not a lossy
+        // double.
+        XCTAssertEqual(AnyJSONValue.coercing(Decimal(string: "9.99")!), .string("9.99"))
+    }
+
+    func test_coercing_incompatibleValue_returnsNil() {
+        final class NotCompatible {}
+        XCTAssertNil(AnyJSONValue.coercing(NotCompatible()))
+        XCTAssertNil(AnyJSONValue.coercing({ () -> Void in }))
+    }
+
+    func test_coercing_nsNull_becomesNull() {
+        XCTAssertEqual(AnyJSONValue.coercing(NSNull()), .null)
+    }
+
+    func test_coercing_nsNumber_distinguishesBoolIntDouble() {
+        // JSON-sourced numbers arrive as NSNumber; bool must not become 1.
+        XCTAssertEqual(AnyJSONValue.coercing(NSNumber(value: true)), .bool(true))
+        XCTAssertEqual(AnyJSONValue.coercing(NSNumber(value: 7)), .int(7))
+        XCTAssertEqual(AnyJSONValue.coercing(NSNumber(value: 1.5)), .double(1.5))
+    }
+
+    func test_coercing_nestedCollections_recurseAndDropIncompatible() {
+        final class NotCompatible {}
+        let nested: [String: Any] = [
+            "tags": ["a", "b"],
+            "meta": ["n": 1, "bad": NotCompatible()],
+        ]
+        guard case .object(let obj)? = AnyJSONValue.coercing(nested) else {
+            return XCTFail("expected nested object")
+        }
+        XCTAssertEqual(obj["tags"], .array([.string("a"), .string("b")]))
+        guard case .object(let meta)? = obj["meta"] else {
+            return XCTFail("expected nested meta object")
+        }
+        XCTAssertEqual(meta["n"], .int(1))
+        XCTAssertNil(meta["bad"], "incompatible nested value must be dropped")
+    }
+
+    func test_coercingDictionary_keepsCompatibleDropsIncompatible() {
+        final class NotCompatible {}
+        let raw: [String: Any] = [
+            "sku": "pro_yearly",
+            "price": 9.99,
+            "count": 3,
+            "enabled": true,
+            "junk": NotCompatible(),
+        ]
+        let out = AnyJSONValue.coercing(dictionary: raw)
+        XCTAssertEqual(out["sku"], .string("pro_yearly"))
+        XCTAssertEqual(out["price"], .double(9.99))
+        XCTAssertEqual(out["count"], .int(3))
+        XCTAssertEqual(out["enabled"], .bool(true))
+        XCTAssertNil(out["junk"], "incompatible value must be filtered out")
+        XCTAssertEqual(out.count, 4)
+    }
+
+    func test_coercingDictionary_customCodableConformer() {
+        let raw: [String: Any] = ["custom": Custom(name: "x", count: 3)]
+        let out = AnyJSONValue.coercing(dictionary: raw)
+        XCTAssertEqual(out["custom"], .object(["name": .string("x"), "count": .int(3)]))
+    }
 }
