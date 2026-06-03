@@ -562,6 +562,14 @@ final class SDKCore {
         }
 
         var mergedTraits = traits ?? [:]
+        // Reject an invalid email profile trait ($gv_email — set via
+        // AppUser.set(.email, …)) at ingestion: drop just that key so a bad
+        // address never reaches the server, while the rest of the identify
+        // (userId, other traits) still goes through.
+        if case .string(let email)? = mergedTraits["$gv_email"], !EmailValidator.isValid(email) {
+            logger.warning(.identity, "identify — dropped invalid $gv_email trait")
+            mergedTraits["$gv_email"] = nil
+        }
         if let token = appAccountToken {
             // Persist on the identity store so StoreKit purchases pick
             // the override up automatically — not just sent as a trait.
@@ -683,6 +691,12 @@ final class SDKCore {
             logger.warning(.identity, "createEndpoint called before configure() — dropping")
             return
         }
+        // Reject an invalid email at ingestion so it never reaches the server
+        // (mirrors the backend's validation). Don't log the address itself — PII.
+        if case .email(let address) = endpoint, !EmailValidator.isValid(address) {
+            logger.warning(.identity, "createEndpoint dropped — invalid email address")
+            return
+        }
         logger.debug(.identity, "createEndpoint", metadata: [
             "channel": endpoint.channelType.rawValue,
         ])
@@ -704,6 +718,11 @@ final class SDKCore {
         }
         guard let queue, let identity, let contextProvider else {
             logger.warning(.identity, "deleteEndpoint called before configure() — dropping")
+            return
+        }
+        // Same validation as create — never send a malformed address upstream.
+        if case .email(let address) = endpoint, !EmailValidator.isValid(address) {
+            logger.warning(.identity, "deleteEndpoint dropped — invalid email address")
             return
         }
         logger.debug(.identity, "deleteEndpoint", metadata: [

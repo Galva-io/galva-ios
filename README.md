@@ -333,7 +333,10 @@ Using Firebase? Pass the FCM token with `Communication.registerPushToken(fcmToke
 Give users control over which channels and workflows can reach them:
 
 ```swift
-Communication.registerEmail("user@example.com")
+// Validate first if you want to show the user an error — registerEmail also
+// validates internally and never sends an invalid address to the server.
+guard Communication.isValidEmail(input) else { /* show error */ return }
+Communication.registerEmail(input)
 
 // Per-workflow opt-in / opt-out:
 Communication.setPreference(
@@ -349,6 +352,8 @@ Communication.setPreference(channel: .inApp, disabled: true)
 ```
 
 Channels: `.email`, `.pushNotification`, `.inApp`.
+
+Email addresses are validated client-side (basic RFC 5322: exactly one `@` with non-empty local + domain, a dotted domain, no whitespace). An invalid address — whether via `registerEmail(_:)` or the `.email` user trait — is dropped before it reaches the server. Use `Communication.isValidEmail(_:)` to check input up front.
 
 ---
 

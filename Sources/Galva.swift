@@ -680,7 +680,29 @@ public enum Communication {
         case inApp
     }
 
+    /// Validate an email address against Galva's basic ingestion rules:
+    /// exactly one `@` with non-empty local and domain parts, a dotted domain,
+    /// no whitespace, and a basic RFC 5322 character set.
+    ///
+    /// `registerEmail(_:)` already validates internally and silently skips
+    /// invalid addresses so they never reach the server. Call this first when
+    /// you want to surface a validation error in your own UI:
+    ///
+    ///     guard Communication.isValidEmail(input) else {
+    ///         showError("Please enter a valid email address")
+    ///         return
+    ///     }
+    ///     Communication.registerEmail(input)
+    public static func isValidEmail(_ email: String) -> Bool {
+        EmailValidator.isValid(email)
+    }
+
     /// Register an email address as a reachable endpoint for the current user.
+    ///
+    /// The address is validated client-side first (see `isValidEmail(_:)`);
+    /// an invalid address is **not** sent to the server — it's dropped with a
+    /// warning log. Validate up front with `isValidEmail(_:)` if you need to
+    /// tell the user.
     ///
     /// Example:
     ///
