@@ -10,12 +10,13 @@
 //      • UIKit's modal presentation lifecycle (viewWillAppear,
 //        viewDidDisappear, presentationControllerDidDismiss) gives us
 //        clean hooks for setup + teardown.
-//      • Sheets render with the system's standard chrome (grabber,
-//        corner radius, dim-out behind) without us re-implementing any
-//        of it.
-//      • Interactive dismissal (the user swiping the sheet down) is
-//        free — we observe it through the adaptive-presentation
-//        delegate and tear down the same way as a bridge-driven dismiss.
+//      • Sheets render with the system's standard chrome (corner
+//        radius, dim-out behind) without us re-implementing any of it.
+//        The grabber is suppressed and swipe-to-dismiss is disabled
+//        (`isModalInPresentation = true`) so the bundle's own CTA /
+//        `galva.dismiss()` is the only path out — the
+//        adaptive-presentation delegate stays wired for WebView
+//        navigation-failure teardown.
 //      • Lives in the host scene's window hierarchy, so accessibility
 //        focus and system gestures (Reachability, Stage Manager) behave
 //        the same as any other app modal.
@@ -31,9 +32,10 @@ import UIKit
 
 #if canImport(WebKit) && canImport(UIKit)
 
-/// Notified by the VC when the user interactively dismisses the sheet
-/// (swipe-down). The presenter uses this to tear down state that wasn't
-/// caused by a programmatic `dismiss(reason:)`.
+/// Notified by the VC when the sheet goes away outside the
+/// programmatic `dismiss(reason:)` path — only WebView load failures,
+/// now that swipe-to-dismiss is blocked by `isModalInPresentation`.
+/// The presenter uses it to clean up state on those failure paths.
 @MainActor
 protocol InAppMessageViewControllerDelegate: AnyObject {
     func inAppMessageViewControllerDidInteractivelyDismiss(
@@ -79,12 +81,15 @@ final class InAppMessageViewController: UIViewController {
         self.logger = logger
         super.init(nibName: nil, bundle: nil)
         self.modalPresentationStyle = .pageSheet
+        // Block swipe-to-dismiss: the bundle owns the dismiss surface
+        // (CTA, close button, `galva.dismiss()`), so the system swipe
+        // shouldn't take the message down out from under it.
+        self.isModalInPresentation = true
         if let sheet = sheetPresentationController {
             // Single large detent keeps the bundle in charge of its own
             // layout — multi-detent sheets force the bundle to redo its
             // layout mid-gesture, which the v1 bundle isn't designed for.
             sheet.detents = [.large()]
-            sheet.prefersGrabberVisible = true
             sheet.preferredCornerRadius = 16
         }
     }

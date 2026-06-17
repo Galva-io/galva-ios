@@ -295,15 +295,15 @@ final class InAppMessagePresenter: NSObject {
     }
 }
 
-// MARK: - InAppMessageViewControllerDelegate (interactive dismiss)
+// MARK: - InAppMessageViewControllerDelegate (non-programmatic dismiss)
 
 extension InAppMessagePresenter: InAppMessageViewControllerDelegate {
     func inAppMessageViewControllerDidInteractivelyDismiss(
         _ controller: InAppMessageViewController
     ) {
-        // User swiped the sheet down (or navigation failed). UIKit has
-        // already removed the sheet from the window hierarchy — we just
-        // need to clean up our state.
+        // Swipe-to-dismiss is blocked via `isModalInPresentation`, so the
+        // only path here is a WebView navigation failure. Treat it like
+        // any other unsolicited teardown.
         Task { @MainActor in
             await self.teardown(reason: "user_dismissed")
         }

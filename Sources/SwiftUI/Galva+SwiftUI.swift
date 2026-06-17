@@ -318,22 +318,26 @@ private struct InAppMessageWebViewRepresentable: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) { /* no-op */ }
 }
 
-// MARK: - Sheet chrome (iOS 16+ presentationDetents + drag indicator)
+// MARK: - Sheet chrome (iOS 16+ presentationDetents; interactive dismiss off)
 
 private extension View {
     /// Apply the visual chrome the UIKit path configures explicitly on
-    /// `InAppMessageViewController`'s `sheetPresentationController` —
-    /// a single large detent + visible grabber. SwiftUI 16+ has direct
-    /// API for both; on iOS 15 we fall through to the platform default
-    /// (full-screen-style sheet on iPhone), which is acceptable.
+    /// `InAppMessageViewController` — a single large detent, no grabber,
+    /// and no swipe-to-dismiss (the bundle's own CTA / `galva.dismiss()`
+    /// is the only path out). SwiftUI 16+ has the detents API; on iOS 15
+    /// we fall through to the platform default (full-screen-style sheet
+    /// on iPhone). `interactiveDismissDisabled()` is iOS 15+ so it
+    /// applies on both paths.
     @ViewBuilder
     func applySheetChrome() -> some View {
         if #available(iOS 16.0, *) {
             self
                 .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
+                .presentationDragIndicator(.hidden)
+                .interactiveDismissDisabled()
         } else {
             self
+                .interactiveDismissDisabled()
         }
     }
 }
