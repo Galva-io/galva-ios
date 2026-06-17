@@ -28,8 +28,8 @@ final class MessageWireFormatTests: XCTestCase {
 
     func test_identify_wireShape() throws {
         let traits: [String: AnyJSONValue] = [
-            "$gv_email": .string("a@b.co"),
-            "$gv_country": .string("US"),
+            BuiltInTraitKey.email: .string("a@b.co"),
+            BuiltInTraitKey.country: .string("US"),
         ]
         let msg = Message(
             messageId: UUID(uuidString: "01890000-0000-7000-8000-000000000001")!,
@@ -48,8 +48,8 @@ final class MessageWireFormatTests: XCTestCase {
         XCTAssertNotNil(dict["messageId"] as? String)
 
         let onTheWireTraits = try XCTUnwrap(dict["traits"] as? [String: Any])
-        XCTAssertEqual(onTheWireTraits["$gv_email"] as? String, "a@b.co")
-        XCTAssertEqual(onTheWireTraits["$gv_country"] as? String, "US")
+        XCTAssertEqual(onTheWireTraits[BuiltInTraitKey.email] as? String, "a@b.co")
+        XCTAssertEqual(onTheWireTraits[BuiltInTraitKey.country] as? String, "US")
 
         try assertRoundTripsToEqual(msg)
     }

@@ -566,15 +566,15 @@ final class SDKCore {
         // AppUser.set(.email, …)) at ingestion: drop just that key so a bad
         // address never reaches the server, while the rest of the identify
         // (userId, other traits) still goes through.
-        if case .string(let email)? = mergedTraits["$gv_email"], !EmailValidator.isValid(email) {
+        if case .string(let email)? = mergedTraits[BuiltInTraitKey.email], !EmailValidator.isValid(email) {
             logger.warning(.identity, "identify — dropped invalid $gv_email trait")
-            mergedTraits["$gv_email"] = nil
+            mergedTraits[BuiltInTraitKey.email] = nil
         }
         if let token = appAccountToken {
             // Persist on the identity store so StoreKit purchases pick
             // the override up automatically — not just sent as a trait.
             identity.setAppAccountToken(token)
-            mergedTraits["$gv_appAccountToken"] = .string(token.uuidString.lowercased())
+            mergedTraits[BuiltInTraitKey.appAccountToken] = .string(token.uuidString.lowercased())
         }
         // Auto-attach device-derived built-in traits on every identify so the
         // server sees them for both anonymous and identified users. Caller-
@@ -595,14 +595,15 @@ final class SDKCore {
         await queue.emit(msg)
     }
 
-    /// Built-in traits sourced from the device on every identify. Keys must
-    /// match the `$gv_*` taxonomy in the OpenAPI spec.
+    /// Built-in traits sourced from the device on every identify. Keys come
+    /// from `BuiltInTraitKey` so they stay in sync with the OpenAPI `$gv_*`
+    /// taxonomy and the typed `AppUserTraits` setters.
     private static func deviceTraits() -> [String: AnyJSONValue] {
         var out: [String: AnyJSONValue] = [
-            "$gv_timezone": .string(TimeZone.current.identifier)
+            BuiltInTraitKey.timezone: .string(TimeZone.current.identifier)
         ]
         if let lang = Locale.current.languageCode, !lang.isEmpty {
-            out["$gv_languageCode"] = .string(lang)
+            out[BuiltInTraitKey.languageCode] = .string(lang)
         }
         return out
     }

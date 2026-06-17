@@ -34,7 +34,7 @@ final class SDKCoreIdentityTests: XCTestCase {
         guard let traits = await firstIdentifyTraits(in: harness) else { return }
         let endUserId = await harness.consumer.allMessages.first?.endUserId
         XCTAssertEqual(endUserId, "user_42")
-        XCTAssertNotNil(traits["$gv_timezone"], "Device traits must still be auto-attached")
+        XCTAssertNotNil(traits[BuiltInTraitKey.timezone], "Device traits must still be auto-attached")
     }
 
     func test_identify_updatesCachedEndUserIdSynchronously() async {
@@ -57,13 +57,13 @@ final class SDKCoreIdentityTests: XCTestCase {
         defer { harness.cleanup() }
 
         await harness.consumer.reset()
-        let caller: [String: AnyJSONValue] = ["$gv_email": .string("a@b.co")]
+        let caller: [String: AnyJSONValue] = [BuiltInTraitKey.email: .string("a@b.co")]
         await harness.core.identify(userId: nil, appAccountToken: nil, traits: caller)
 
         guard let traits = await firstIdentifyTraits(in: harness) else { return }
-        XCTAssertEqual(traits["$gv_email"], .string("a@b.co"))
-        XCTAssertNotNil(traits["$gv_timezone"])
-        XCTAssertNotNil(traits["$gv_languageCode"])
+        XCTAssertEqual(traits[BuiltInTraitKey.email], .string("a@b.co"))
+        XCTAssertNotNil(traits[BuiltInTraitKey.timezone])
+        XCTAssertNotNil(traits[BuiltInTraitKey.languageCode])
     }
 
     func test_identify_callerSuppliedTraitWinsOverAutoAttached() async {
@@ -71,12 +71,12 @@ final class SDKCoreIdentityTests: XCTestCase {
         defer { harness.cleanup() }
 
         await harness.consumer.reset()
-        let caller: [String: AnyJSONValue] = ["$gv_timezone": .string("Antarctica/South_Pole")]
+        let caller: [String: AnyJSONValue] = [BuiltInTraitKey.timezone: .string("Antarctica/South_Pole")]
         await harness.core.identify(userId: nil, appAccountToken: nil, traits: caller)
 
         guard let traits = await firstIdentifyTraits(in: harness) else { return }
         XCTAssertEqual(
-            traits["$gv_timezone"],
+            traits[BuiltInTraitKey.timezone],
             .string("Antarctica/South_Pole"),
             "Caller-supplied trait must win over auto-attached value"
         )
@@ -93,7 +93,7 @@ final class SDKCoreIdentityTests: XCTestCase {
         await harness.core.identify(userId: "u", appAccountToken: uuid, traits: nil)
 
         guard let traits = await firstIdentifyTraits(in: harness) else { return }
-        XCTAssertEqual(traits["$gv_appAccountToken"], .string("b1fe821d-5597-4abc-87b6-1f9647cffd6e"))
+        XCTAssertEqual(traits[BuiltInTraitKey.appAccountToken], .string("b1fe821d-5597-4abc-87b6-1f9647cffd6e"))
     }
 
     // MARK: - logOut

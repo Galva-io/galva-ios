@@ -69,7 +69,7 @@ final class SDKCoreEmailValidationTests: XCTestCase {
         await harness.core.identify(
             userId: nil,
             appAccountToken: nil,
-            traits: ["$gv_email": .string("bad@"), "plan_tier": .string("pro")]
+            traits: [BuiltInTraitKey.email: .string("bad@"), "plan_tier": .string("pro")]
         )
         await eventually {
             await Self.identifyTraits(harness).contains { $0["plan_tier"] == .string("pro") }
@@ -77,7 +77,7 @@ final class SDKCoreEmailValidationTests: XCTestCase {
 
         let ours = await Self.identifyTraits(harness).first { $0["plan_tier"] == .string("pro") }
         XCTAssertNotNil(ours)
-        XCTAssertNil(ours?["$gv_email"], "invalid $gv_email must be dropped")
+        XCTAssertNil(ours?[BuiltInTraitKey.email], "invalid $gv_email must be dropped")
         XCTAssertEqual(ours?["plan_tier"], .string("pro"), "other traits must survive")
     }
 
@@ -88,14 +88,14 @@ final class SDKCoreEmailValidationTests: XCTestCase {
         await harness.core.identify(
             userId: nil,
             appAccountToken: nil,
-            traits: ["$gv_email": .string("good@example.com"), "plan_tier": .string("vip")]
+            traits: [BuiltInTraitKey.email: .string("good@example.com"), "plan_tier": .string("vip")]
         )
         await eventually {
             await Self.identifyTraits(harness).contains { $0["plan_tier"] == .string("vip") }
         }
 
         let ours = await Self.identifyTraits(harness).first { $0["plan_tier"] == .string("vip") }
-        XCTAssertEqual(ours?["$gv_email"], .string("good@example.com"))
+        XCTAssertEqual(ours?[BuiltInTraitKey.email], .string("good@example.com"))
     }
 
     // MARK: - Helpers

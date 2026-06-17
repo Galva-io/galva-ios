@@ -488,31 +488,31 @@ public enum AppUserTraits {
     /// Email trait. Server key: `$gv_email`.
     public struct Email: Sendable, AppUserAttribute {
         public typealias Value = String
-        public let attributeName = "$gv_email"
+        public let attributeName = BuiltInTraitKey.email
     }
 
     /// Full-name trait. Server key: `$gv_fullName`.
     public struct FullName: Sendable, AppUserAttribute {
         public typealias Value = String
-        public let attributeName = "$gv_fullName"
+        public let attributeName = BuiltInTraitKey.fullName
     }
 
     /// First-name trait. Server key: `$gv_firstName`.
     public struct FirstName: Sendable, AppUserAttribute {
         public typealias Value = String
-        public let attributeName = "$gv_firstName"
+        public let attributeName = BuiltInTraitKey.firstName
     }
 
     /// Last-name trait. Server key: `$gv_lastName`.
     public struct LastName: Sendable, AppUserAttribute {
         public typealias Value = String
-        public let attributeName = "$gv_lastName"
+        public let attributeName = BuiltInTraitKey.lastName
     }
 
     /// Country trait (ISO 3166 alpha-2). Server key: `$gv_country`.
     public struct Country: Sendable, AppUserAttribute {
         public typealias Value = String
-        public let attributeName = "$gv_country"
+        public let attributeName = BuiltInTraitKey.country
     }
 
     /// Timezone trait (IANA name). Server key: `$gv_timezone`.
@@ -520,7 +520,7 @@ public enum AppUserTraits {
     /// only to override (e.g. host app exposes its own picker).
     public struct Timezone: Sendable, AppUserAttribute {
         public typealias Value = String
-        public let attributeName = "$gv_timezone"
+        public let attributeName = BuiltInTraitKey.timezone
     }
 
     /// Language code trait (BCP 47 tag). Server key: `$gv_languageCode`.
@@ -528,14 +528,14 @@ public enum AppUserTraits {
     /// only to override.
     public struct LanguageCode: Sendable, AppUserAttribute {
         public typealias Value = String
-        public let attributeName = "$gv_languageCode"
+        public let attributeName = BuiltInTraitKey.languageCode
     }
 
     /// Total lifetime value trait (currency, `Double`).
     /// Server key: `$gv_totalLifetimeValue`.
     public struct TotalLifetimeValue: Sendable, AppUserAttribute {
         public typealias Value = Double
-        public let attributeName = "$gv_totalLifetimeValue"
+        public let attributeName = BuiltInTraitKey.totalLifetimeValue
     }
 }
 

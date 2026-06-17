@@ -99,7 +99,7 @@ final class SDKCoreEventTrackingTests: XCTestCase {
             return XCTFail("Expected .track body")
         }
         XCTAssertEqual(props?["foo"], .string("bar"))
-        XCTAssertNil(props?["$gv_timezone"], "Device traits are identify-only, not track")
-        XCTAssertNil(props?["$gv_languageCode"], "Device traits are identify-only, not track")
+        XCTAssertNil(props?[BuiltInTraitKey.timezone], "Device traits are identify-only, not track")
+        XCTAssertNil(props?[BuiltInTraitKey.languageCode], "Device traits are identify-only, not track")
     }
 }

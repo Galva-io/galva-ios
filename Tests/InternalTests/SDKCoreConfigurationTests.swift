@@ -69,8 +69,8 @@ final class SDKCoreConfigurationTests: XCTestCase {
               let traits = traits else {
             return XCTFail("Expected an identify message with non-nil traits")
         }
-        XCTAssertNotNil(traits["$gv_timezone"], "Device timezone should be auto-attached")
-        XCTAssertNotNil(traits["$gv_languageCode"], "Device language code should be auto-attached")
+        XCTAssertNotNil(traits[BuiltInTraitKey.timezone], "Device timezone should be auto-attached")
+        XCTAssertNotNil(traits[BuiltInTraitKey.languageCode], "Device language code should be auto-attached")
     }
 
     // MARK: - Pre-configure safety
