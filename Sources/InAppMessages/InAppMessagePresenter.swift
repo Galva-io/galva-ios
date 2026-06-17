@@ -258,14 +258,18 @@ final class InAppMessagePresenter: NSObject {
     }
 
     /// Drop every reference to the active presentation. Idempotent.
+    ///
+    /// Calls `InAppMessageWebViewFactory.tearDown(webView:bridge:)` first
+    /// so every native-side edge into the WebView (both script-message
+    /// handlers, navigation/UI delegates, the bridge's strong console-
+    /// handler ref) is gone before we drop our strong refs to the VC and
+    /// bridge. That guarantees the WebView — the heaviest object in the
+    /// presentation — is releasable the instant UIKit lets go of the VC,
+    /// even if a bridge dispatch Task is still in flight elsewhere.
     private func teardown(reason: String?) async {
-        let webView = viewController?.webView
-        // Remove the script handler explicitly; the VC's deinit does the
-        // same as a fallback, but tearing it down here lets the bridge
-        // object release ahead of any retain cycles from in-flight
-        // evaluateJavaScript completion handlers.
-        webView?.configuration.userContentController
-            .removeScriptMessageHandler(forName: kGalvaBridgeHandlerName)
+        if let webView = viewController?.webView {
+            InAppMessageWebViewFactory.tearDown(webView: webView, bridge: bridge)
+        }
         viewController = nil
         bridge = nil
         currentMessageId = nil

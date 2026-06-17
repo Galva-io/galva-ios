@@ -59,10 +59,13 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     weak var host: (any InAppMessageHost)?
 
     /// Forwards WebView `console.*` output to the SDK logger when debug
-    /// logging is enabled. Held strongly here — the bridge is retained by the
-    /// host for the presentation's lifetime, whereas
-    /// `WKUserContentController.add(_:name:)` keeps only a weak reference to
-    /// script-message handlers. `nil` outside debug logging.
+    /// logging is enabled. Held strongly here so
+    /// `InAppMessageWebViewFactory.tearDown(webView:bridge:)` has one place
+    /// to release the handler alongside its
+    /// `removeScriptMessageHandler(forName:)` call — without this property,
+    /// an in-flight bridge dispatch Task keeping the bridge alive past
+    /// dismiss would also keep the console handler alive. `nil` outside
+    /// debug logging.
     var consoleLogHandler: WebViewConsoleLogHandler?
 
     let messageManager: InAppMessageManager
@@ -671,7 +674,12 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     /// `invalidPayload` rather than crashing the host app.
     ///
     /// The call suspends until the user taps an action, then resolves with
-    /// `{ "actionId": "<the tapped action's id>" }`.
+    /// `{ "actionId": "<the tapped action's id>" }`. If the in-app message
+    /// sheet is dismissed while the alert is up — UIKit cascades the
+    /// dismiss to the alert without firing any action handler — the
+    /// continuation still resumes (via `AlertContinuationGate`'s deinit)
+    /// with a `noActiveMessage` failure, so the bridge's dispatch Task
+    /// never hangs and the bundle's Promise rejects cleanly.
     private func handleShowAlert(
         payload: [String: AnyJSONValue]?
     ) async -> Result<AnyJSONValue?, BridgeError> {
@@ -689,9 +697,13 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         logger.info(.identity, "bridge showAlert", metadata: [
             "actions": String(parsed.actions.count),
         ])
-        // Suspend until the user taps; each action handler resumes exactly
-        // once (an `.alert` with ≥1 action is only dismissible by a tap).
-        let actionId: String = await withCheckedContinuation { continuation in
+        // `AlertContinuationGate` ties the continuation's lifetime to the
+        // alert's action closures — when the alert dies (user tap OR
+        // cascade-dismiss by the parent sheet), the gate's deinit ensures
+        // the continuation is resumed exactly once. Returns `nil` only if
+        // the alert went away without an action firing.
+        let actionId: String? = await withCheckedContinuation { continuation in
+            let gate = AlertContinuationGate(continuation: continuation)
             let alert = UIAlertController(
                 title: parsed.title,
                 message: parsed.message,
@@ -699,10 +711,19 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             )
             for action in parsed.actions {
                 alert.addAction(UIAlertAction(title: action.title, style: action.style) { _ in
-                    continuation.resume(returning: action.id)
+                    gate.resume(with: action.id)
                 })
             }
             presenter.present(alert, animated: true)
+            // `gate` is captured by each action closure; the alert retains
+            // its actions until dealloc, so the gate outlives the alert
+            // and its deinit-fallback fires on cascade-dismiss.
+        }
+        guard let actionId else {
+            return .failure(BridgeError(
+                code: .noActiveMessage,
+                message: "Alert was dismissed before any action was tapped"
+            ))
         }
         return .success(.object(Self.toJSON(BridgeAlertResult(actionId: actionId))))
     }
@@ -973,5 +994,39 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
 // MARK: - Local error types
 
 private enum BridgeDecodeError: Error { case unsupportedBodyShape }
+
+// MARK: - Alert continuation gate
+
+/// Resume-once wrapper around a `CheckedContinuation<String?, Never>` used
+/// by `handleShowAlert`. The gate is captured by every action closure on
+/// the alert; UIAlertController retains its actions for its lifetime, so
+/// the gate naturally outlives the alert. When the alert deallocs (user
+/// tap OR parent-sheet cascade-dismiss), the captures release and the
+/// gate's deinit resumes the continuation with `nil` if no action ever
+/// fired. Guarantees the bridge dispatch Task awaiting the alert always
+/// makes forward progress, so the bridge — and through it the WebView's
+/// strong refs — can release on dismiss.
+@MainActor
+private final class AlertContinuationGate {
+    private var continuation: CheckedContinuation<String?, Never>?
+
+    init(continuation: CheckedContinuation<String?, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(with actionId: String) {
+        guard let c = continuation else { return }
+        continuation = nil
+        c.resume(returning: actionId)
+    }
+
+    deinit {
+        // No isolation hop in deinit (Swift 6) — but `continuation` is
+        // either nil (already resumed) or a CheckedContinuation, both of
+        // which are safe to touch from any actor. The fallback resume
+        // makes the alert's vanishing equivalent to a no-action tap.
+        continuation?.resume(returning: nil)
+    }
+}
 
 #endif // canImport(WebKit) && canImport(UIKit)

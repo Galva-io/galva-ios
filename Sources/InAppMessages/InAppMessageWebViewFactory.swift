@@ -32,8 +32,11 @@ enum InAppMessageWebViewFactory {
     /// Build a fresh `WKWebView` + `NativeBridge` for an in-app message.
     /// The caller mounts the WebView (UIKit sheet VC's view, SwiftUI
     /// `UIViewRepresentable`, …) and retains the bridge for the lifetime
-    /// of the presentation — `WKUserContentController.add(_:name:)` only
-    /// holds a weak reference to script-message handlers.
+    /// of the presentation. Note: `WKUserContentController.add(_:name:)`
+    /// retains its script-message handler STRONGLY (a long-known WebKit
+    /// gotcha) — every host MUST call `tearDown(webView:bridge:)` below on
+    /// dismiss so the channel is severed promptly instead of waiting on
+    /// the WebView dealloc cascade.
     ///
     /// On Apple platforms the optional `storeKitPrefetcher` lets the
     /// bridge's `requestPurchase` handler skip a live
@@ -115,9 +118,10 @@ enum InAppMessageWebViewFactory {
                 name: WebViewConsoleLogHandler.handlerName
             )
             config.userContentController.addUserScript(makeConsoleForwardingScript())
-            // `add(_:name:)` only weakly retains the handler — park it on the
-            // bridge (which the host retains strongly) so it lives as long as
-            // the WebView.
+            // `add(_:name:)` retains the handler strongly, so technically the
+            // content controller already keeps it alive. We mirror it on the
+            // bridge anyway so `tearDown(webView:bridge:)` has a single place
+            // to drop the strong ref alongside the script-handler removal.
             bridge.consoleLogHandler = consoleHandler
         }
 
@@ -137,6 +141,41 @@ enum InAppMessageWebViewFactory {
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         return (webView, bridge)
+    }
+
+    /// Sever every native ↔ WebView edge so the WebView (and through it
+    /// the bridge + console handler + bundled HTML) can release as soon
+    /// as the host drops its strong refs. Mirror of `make(...)` / the
+    /// `assemble` path above — every script handler / delegate it
+    /// installs is undone here. Safe to call multiple times.
+    ///
+    /// Why this matters: `WKUserContentController.add(_:name:)` retains
+    /// its handlers strongly, and a `WKWebView` waiting on an in-flight
+    /// `evaluateJavaScript` (or a `loadFileURL` resource handle) can
+    /// outlive the host's release of its strong ref by enough time to
+    /// keep the entire HTML bundle paged in. Calling this on dismiss
+    /// gives WebKit an immediate signal to wind those resources down.
+    static func tearDown(webView: WKWebView, bridge: NativeBridge?) {
+        // Cancel any in-flight bundle load so WebKit drops its load-side
+        // completion blocks (which transitively retain the WebView).
+        webView.stopLoading()
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: kGalvaBridgeHandlerName)
+        controller.removeScriptMessageHandler(forName: WebViewConsoleLogHandler.handlerName)
+        // Delegates are declared `weak` by WebKit so this isn't a cycle
+        // break, but explicit clearing means a stray WebKit callback
+        // arriving post-dismiss can't ping a half-torn-down VC.
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        // Drop the bridge's strong console-handler ref so the handler
+        // releases even if the bridge is still pinned by an in-flight
+        // dispatch Task with strong `self` inside an `await`.
+        bridge?.consoleLogHandler = nil
+        // Sever the bridge → host weak edge too — defensive, since the
+        // host owns this teardown and is about to release the bridge,
+        // but it prevents an in-flight bridge call from re-entering a
+        // half-destructed host.
+        bridge?.host = nil
     }
 
     /// Build a `WKUserScript` that assigns the prefetched StoreKit

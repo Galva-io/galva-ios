@@ -35,3 +35,4 @@ default.profraw
 .env
 .env.local
 *.UserInterfaceState.xcuserstate
+.swiftpm/xcode/package.xcworkspace/xcuserdata/petervu.xcuserdatad/UserInterfaceState.xcuserstate

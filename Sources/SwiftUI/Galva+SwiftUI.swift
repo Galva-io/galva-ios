@@ -270,12 +270,16 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
         tearDown()
     }
 
-    /// Idempotent state reset. Cancels any in-flight prepare, drops the
-    /// WebView + bridge + reveal flag, and asks the SDK to forget the
-    /// active message id on the GalvaActor.
+    /// Idempotent state reset. Cancels any in-flight prepare, severs
+    /// every native ↔ WebView edge (so WebKit can wind down its
+    /// resources eagerly), drops the WebView + bridge + reveal flag, and
+    /// asks the SDK to forget the active message id on the GalvaActor.
     private func tearDown() {
         prepareTask?.cancel()
         prepareTask = nil
+        if let webView {
+            InAppMessageWebViewFactory.tearDown(webView: webView, bridge: bridge)
+        }
         readyMessage = nil
         webView = nil
         bridge = nil
