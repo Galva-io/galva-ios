@@ -643,6 +643,46 @@ public enum AppUser {
         }
     }
 
+    /// Set one or more user traits from a loose `[String: Any]` dictionary
+    /// — the lenient mirror of `AppEvents.track(_:attributes:)`.
+    ///
+    /// Use this when the values come from an untyped source (a JSON parse,
+    /// `UserDefaults.dictionaryRepresentation()`, a host-side `[String: Any]`
+    /// payload). Foundation-bridged values (`NSString`, `NSNumber`, `NSNull`,
+    /// nested `NSDictionary` / `NSArray`) flow through cleanly so a host
+    /// doesn't have to bridge each value to its Swift equivalent first — a
+    /// failed bridge there is exactly the path that silently drops traits
+    /// at the call site (e.g. an email read as `NSString` cast through a
+    /// non-`@objc` protocol type ends up `nil`).
+    ///
+    /// Same rules as `AppEvents.track` for what survives the coercion:
+    ///   • Kept: `String`, `Bool`, `Int`/`Int64`, `Double`/`Float`, `Decimal`,
+    ///     `Date`, `URL`, `UUID`, any custom `Codable` `GalvaCompatibleValue`,
+    ///     `NSNumber`/`NSString`/`NSNull`, and nested arrays/dictionaries of
+    ///     those.
+    ///   • Dropped: custom classes, closures, and other non-JSON values.
+    ///
+    /// Example:
+    ///
+    ///     // Reading what the host already has lying around as `[String: Any]`:
+    ///     let stored = UserDefaults.standard.dictionaryRepresentation()
+    ///     AppUser.set([
+    ///         "$gv_email":    stored["email"]    ?? NSNull(),  // NSString → ok
+    ///         "$gv_country":  stored["country"]  ?? NSNull(),
+    ///         "plan_tier":    stored["plan"]     ?? NSNull(),
+    ///     ])
+    public static func set(_ attributes: [String: Any]) {
+        let coerced = AnyJSONValue.coercing(dictionary: attributes)
+        guard !coerced.isEmpty else { return }
+        Task { @GalvaActor in
+            await SDKCore.shared.identify(
+                userId: nil,
+                appAccountToken: nil,
+                traits: coerced
+            )
+        }
+    }
+
     /// Log out the current user. Clears the identified user id and rotates
     /// the anonymous id so subsequent events are attributed to a fresh
     /// anonymous session.

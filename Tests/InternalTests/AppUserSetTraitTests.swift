@@ -130,6 +130,95 @@ final class AppUserSetTraitTests: XCTestCase {
                      "Invalid email must be dropped before the identify is emitted")
     }
 
+    // MARK: - Foundation-bridged values (regression cover for QA's lost-email report)
+
+    func test_setBulk_NSString_isAcceptedAsEmailTrait() async {
+        // Reproduces the QA-reported case: an `Any` value sourced from
+        // UserDefaults that arrives as `NSString`. The lenient bulk overload
+        // routes through `AnyJSONValue.coercing(_:)`, which already bridges
+        // `NSString` → `String` → `.string` — so the email reaches identify
+        // even though the host never converted to Swift `String` first.
+        let harness = await SDKHarness.makeConfigured()
+        defer { harness.cleanup() }
+        await harness.consumer.reset()
+
+        let attributes: [String: Any] = [
+            BuiltInTraitKey.email: NSString(string: "peter@example.com"),
+        ]
+        let coerced = AnyJSONValue.coercing(dictionary: attributes)
+        await harness.core.identify(userId: nil, appAccountToken: nil, traits: coerced)
+
+        let identifyTraits = await harness.consumer.allMessages.first?.identifyTraits
+        XCTAssertEqual(
+            identifyTraits?[BuiltInTraitKey.email],
+            .string("peter@example.com"),
+            "NSString email must bridge through coercion and reach identify"
+        )
+    }
+
+    func test_setBulk_NSNumber_isAcceptedAsTypedTrait() async {
+        // `NSNumber` is what a JSON-decoded integer / double / bool arrives
+        // as on the wire. The coercion path distinguishes bool from int from
+        // double via CFBoolean / objCType so trait shape is preserved.
+        let harness = await SDKHarness.makeConfigured()
+        defer { harness.cleanup() }
+        await harness.consumer.reset()
+
+        let attributes: [String: Any] = [
+            BuiltInTraitKey.totalLifetimeValue: NSNumber(value: 49.99),
+            "habit_streak": NSNumber(value: 13),
+            "is_pro": NSNumber(value: true),
+        ]
+        let coerced = AnyJSONValue.coercing(dictionary: attributes)
+        await harness.core.identify(userId: nil, appAccountToken: nil, traits: coerced)
+
+        let traits = await harness.consumer.allMessages.first?.identifyTraits
+        XCTAssertEqual(traits?[BuiltInTraitKey.totalLifetimeValue], .double(49.99))
+        XCTAssertEqual(traits?["habit_streak"], .int(13))
+        XCTAssertEqual(traits?["is_pro"], .bool(true),
+                       "NSNumber-as-CFBoolean must not silently collapse to .int(1)")
+    }
+
+    func test_coercion_dropsNonJSONValuesSilently() async {
+        // The bulk setter's contract: non-JSON entries are dropped, the rest
+        // survives. A bug in the host that puts a closure / arbitrary class
+        // into the dict shouldn't take the whole identify down with it.
+        final class Unrepresentable {}
+        let attributes: [String: Any] = [
+            BuiltInTraitKey.email: NSString(string: "p@x.co"),
+            "garbage": Unrepresentable(),
+        ]
+        let coerced = AnyJSONValue.coercing(dictionary: attributes)
+        XCTAssertEqual(coerced[BuiltInTraitKey.email], .string("p@x.co"))
+        XCTAssertNil(coerced["garbage"], "non-JSON entries must be dropped, not crash")
+        XCTAssertEqual(coerced.count, 1)
+    }
+
+    func test_coercion_handlesNestedNSDictionaryAndNSArray() async {
+        // Foundation collections sourced from JSON arrive as NSDictionary /
+        // NSArray. The recursive coercer flattens them into `.object` /
+        // `.array` of coerced values.
+        let nested: [String: Any] = [
+            "preferences": NSDictionary(dictionary: [
+                "theme": NSString(string: "dark"),
+                "fontSize": NSNumber(value: 14),
+            ]),
+            "tags": NSArray(array: [NSString(string: "vip"), NSString(string: "beta")]),
+        ]
+        let coerced = AnyJSONValue.coercing(dictionary: nested)
+
+        guard case .object(let prefs) = coerced["preferences"] else {
+            return XCTFail("nested NSDictionary must become .object")
+        }
+        XCTAssertEqual(prefs["theme"], .string("dark"))
+        XCTAssertEqual(prefs["fontSize"], .int(14))
+
+        guard case .array(let tags) = coerced["tags"] else {
+            return XCTFail("nested NSArray must become .array")
+        }
+        XCTAssertEqual(tags, [.string("vip"), .string("beta")])
+    }
+
     // MARK: - Helper
 
     /// Reproduces the trait-dict construction performed by
