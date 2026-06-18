@@ -88,11 +88,4 @@ final class EmailValidatorTests: XCTestCase {
         XCTAssertFalse(EmailValidator.isValid("pe ter@example.com"))   // (also whitespace)
     }
 
-    // MARK: - Public surface
-
-    func test_publicIsValidEmail_matchesValidator() {
-        XCTAssertTrue(Communication.isValidEmail("peter@example.com"))
-        XCTAssertFalse(Communication.isValidEmail("not-an-email"))
-        XCTAssertFalse(Communication.isValidEmail("peter@@example.com"))
-    }
 }

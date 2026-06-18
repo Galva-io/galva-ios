@@ -2,15 +2,13 @@
 //  CommunicationEndpointTests.swift
 //  GalvaTests
 //
-//  Covers the internal wire-format model + the public→wire bridges that
-//  let `Communication.registerPushToken(_:platform:)` and friends accept
-//  public enums without leaking the internal wire spelling.
+//  Covers the internal `CommunicationEndpoint` wire-format model:
+//  Codable shape — email vs push-notification discriminator, kebab-case
+//  channelType values, in-app rejected for endpoint payloads.
 //
-//  Two concerns:
-//    1. Codable shape — email vs push-notification discriminator, kebab-
-//       case channelType values, in-app rejected for endpoint payloads.
-//    2. Bridges — `Communication.PushPlatform.wireValue` and
-//       `Communication.Channel.wireValue` round-trip correctly.
+//  (The public `Communication` namespace and its public→wire enum bridges
+//  were removed: push endpoints are registered automatically from the device
+//  token, and email is set via `AppUser.set(.email, …)`.)
 //
 
 import Foundation
@@ -130,43 +128,5 @@ final class CommunicationEndpointCodableTests: XCTestCase {
         let data = try JSONEncoder().encode(endpoint)
         let decoded = try JSONDecoder().decode(CommunicationEndpoint.self, from: data)
         XCTAssertEqual(decoded, endpoint, file: file, line: line)
-    }
-}
-
-// MARK: - Public → wire bridges
-
-final class CommunicationBridgeTests: XCTestCase {
-
-    func test_pushPlatform_bridgesApns() {
-        XCTAssertEqual(Communication.PushPlatform.apns.wireValue, .apns)
-    }
-
-    func test_pushPlatform_bridgesFcm() {
-        XCTAssertEqual(Communication.PushPlatform.fcm.wireValue, .fcm)
-    }
-
-    func test_channel_bridgesEmail() {
-        XCTAssertEqual(Communication.Channel.email.wireValue, .email)
-    }
-
-    func test_channel_bridgesPushNotification() {
-        XCTAssertEqual(Communication.Channel.pushNotification.wireValue, .pushNotification)
-    }
-
-    func test_channel_bridgesInApp() {
-        XCTAssertEqual(Communication.Channel.inApp.wireValue, .inApp)
-    }
-
-    func test_allChannelCases_haveExhaustiveBridges() {
-        // If a new Communication.Channel case is added, the switch in
-        // `wireValue` is the only place that needs updating — this loop
-        // would still pass. The real safety net is the switch's
-        // exhaustiveness check at compile time. We do, however, assert
-        // here that every raw value maps to a non-nil wire enum.
-        let allRawValues = ["email", "pushNotification", "inApp"]
-        for raw in allRawValues {
-            XCTAssertNotNil(Communication.Channel(rawValue: raw),
-                            "Missing raw mapping for \(raw)")
-        }
     }
 }

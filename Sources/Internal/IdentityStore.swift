@@ -22,9 +22,18 @@ final class IdentityStore {
     private static let anonymousIdKey       = "co.galva.anonymousId"
     private static let endUserIdKey         = "co.galva.endUserId"
     private static let appAccountTokenKey   = "co.galva.appAccountToken"
+    private static let deviceTokenKey       = "co.galva.deviceToken"
 
     private(set) var anonymousId: String
     private(set) var endUserId: String?
+
+    /// APNs push token (hex) for THIS device. Device-scoped, not user-scoped:
+    /// set once when the OS hands us a token and reused for whoever is
+    /// identified — so it is deliberately **not** cleared on `logOut()` /
+    /// `rotateAnonymousId()`. Persisted so it survives launches and is
+    /// available to re-register against a new identity before the next
+    /// OS token callback arrives.
+    private(set) var deviceToken: String?
 
     /// Developer-supplied StoreKit `appAccountToken` override. Set via
     /// `AppUser.identify(userId:appAccountToken:)`. `nil` when the host
@@ -54,6 +63,18 @@ final class IdentityStore {
         endUserId = defaults.string(forKey: Self.endUserIdKey)
         if let raw = defaults.string(forKey: Self.appAccountTokenKey) {
             appAccountToken = UUID(uuidString: raw)
+        }
+        deviceToken = defaults.string(forKey: Self.deviceTokenKey)
+    }
+
+    /// Persist (or clear) the device's push token. Device-scoped — survives
+    /// `logOut()` so the next user keeps the same token.
+    func setDeviceToken(_ token: String?) {
+        deviceToken = token
+        if let token {
+            defaults.set(token, forKey: Self.deviceTokenKey)
+        } else {
+            defaults.removeObject(forKey: Self.deviceTokenKey)
         }
     }
 
@@ -102,7 +123,8 @@ final class IdentityStore {
     /// Rotate anonymousId. Called after logOut to start a fresh anonymous
     /// session. Also clears the appAccountToken — the override belonged to
     /// the previous identity and reusing it on the next user would taint
-    /// receipt attribution.
+    /// receipt attribution. The `deviceToken` is intentionally **kept** — it
+    /// belongs to the device, so the next (anonymous) user inherits it.
     func rotateAnonymousId() {
         let new = UUIDv7.next().uuidString.lowercased()
         defaults.set(new, forKey: Self.anonymousIdKey)

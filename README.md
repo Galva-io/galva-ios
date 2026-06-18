@@ -312,48 +312,31 @@ Task { @MainActor in
 
 ## Push notifications
 
-Galva sends push campaigns through APNs. Forward the device token and register it as an endpoint:
+Galva sends push campaigns through APNs. Forward the device token in **one line** — pass the raw `Data` straight from the OS callback:
 
 ```swift
 // AppDelegate — or an @UIApplicationDelegateAdaptor in SwiftUI.
 func application(_ application: UIApplication,
                  didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-    let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
-    Galva.setDeviceToken(hex)              // attach the token to outgoing context
-    Communication.registerPushToken(hex)   // register as a push endpoint (.apns default)
+    Galva.applicationDidRegisterForRemoteNotificationsWithDeviceToken(deviceToken)
 }
 ```
 
-Using Firebase? Pass the FCM token with `Communication.registerPushToken(fcmToken, platform: .fcm)`. Requesting notification permission and registering with APNs (`UNUserNotificationCenter` / `registerForRemoteNotifications()`) stays in your hands — Galva never prompts on your behalf.
+That's it. The token is **device-scoped**: Galva stores it and automatically keeps it associated with whoever is identified. You don't re-send it on login or logout — after `AppUser.identify(...)` or `AppUser.logOut()` the SDK re-registers the same token for the new user on its own, so every user the device serves stays reachable.
+
+Requesting notification permission and registering with APNs (`UNUserNotificationCenter` / `registerForRemoteNotifications()`) stays in your hands — Galva never prompts on your behalf.
 
 ---
 
-## Communication preferences
+## Email
 
-Give users control over which channels and workflows can reach them:
+Set the user's email as a trait — it's validated client-side and an invalid address never reaches the server:
 
 ```swift
-// Validate first if you want to show the user an error — registerEmail also
-// validates internally and never sends an invalid address to the server.
-guard Communication.isValidEmail(input) else { /* show error */ return }
-Communication.registerEmail(input)
-
-// Per-workflow opt-in / opt-out:
-Communication.setPreference(
-    channel: .email,
-    categories: ["payment-recovery": true, "winback": false]
-)
-
-// Disable a whole channel:
-Communication.setPreference(channel: .pushNotification, disabled: true)
-
-// Stop in-app messages specifically (rendering keeps working for everything else):
-Communication.setPreference(channel: .inApp, disabled: true)
+AppUser.set(.email, "peter@example.com")
 ```
 
-Channels: `.email`, `.pushNotification`, `.inApp`.
-
-Email addresses are validated client-side (basic RFC 5322: exactly one `@` with non-empty local + domain, a dotted domain, no whitespace). An invalid address — whether via `registerEmail(_:)` or the `.email` user trait — is dropped before it reaches the server. Use `Communication.isValidEmail(_:)` to check input up front.
+Validation is basic RFC 5322: exactly one `@` with non-empty local + domain, a dotted domain, no whitespace. An invalid address is dropped before sending (the rest of the identify still goes through).
 
 ---
 
@@ -383,7 +366,7 @@ Galva.setOptOut(true)    // stop all telemetry
 Galva.isOptedOut          // synchronous read — safe in a SwiftUI body
 ```
 
-When opted out: `track`, `identify`, and `Communication.*` become silent no-ops, auto `session_start` is suppressed, StoreKit sweeps are skipped, and the on-disk event queue is **purged** on the opt-in → opt-out transition. The flag persists across launches (`UserDefaults`). In-app message polling/rendering continue using the anonymous ID — disable those separately with `Communication.setPreference(channel: .inApp, disabled: true)`.
+When opted out: `track`, `identify`, and device-token / endpoint registration become silent no-ops, auto `session_start` is suppressed, StoreKit sweeps are skipped, and the on-disk event queue is **purged** on the opt-in → opt-out transition. The flag persists across launches (`UserDefaults`). In-app message polling/rendering continue using the anonymous ID.
 
 **What the SDK collects:** an anonymous device UUID (first launch, stored locally); locale, timezone, OS/app version; and anything you explicitly send via `identify` / `track` / `set`.
 

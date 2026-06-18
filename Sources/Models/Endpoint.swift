@@ -77,25 +77,9 @@ extension CommunicationEndpoint: Codable {
     }
 }
 
-// MARK: - Public → wire bridges
-
-extension Communication.PushPlatform {
-    /// Maps a public `Communication.PushPlatform` to the internal wire enum.
-    var wireValue: CommunicationEndpoint.PushPlatform {
-        switch self {
-        case .apns: return .apns
-        case .fcm:  return .fcm
-        }
-    }
-}
-
-extension Communication.Channel {
-    /// Maps a public `Communication.Channel` to the internal wire enum.
-    var wireValue: CommunicationEndpoint.ChannelType {
-        switch self {
-        case .email:            return .email
-        case .pushNotification: return .pushNotification
-        case .inApp:            return .inApp
-        }
-    }
-}
+// Note: the public `Communication` namespace (and its `PushPlatform` /
+// `Channel` enums) was removed — push tokens are registered automatically by
+// the SDK from `Galva.applicationDidRegisterForRemoteNotificationsWithDeviceToken(_:)`,
+// and email is set via `AppUser.set(.email, …)`. The internal
+// `CommunicationEndpoint.PushPlatform` / `ChannelType` enums (defined above)
+// remain the wire representation.

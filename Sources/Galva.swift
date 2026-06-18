@@ -49,9 +49,9 @@ import UIKit
 /// Call `Galva.configure(apiKey:)` once at app launch before any tracking
 /// calls. Subsequent calls are ignored with a warning.
 public enum Galva {
-
+    
     // MARK: Environment
-
+    
     /// Selects the Galva backend the SDK talks to. Different environments
     /// are fully isolated — production data never crosses into development
     /// and vice versa.
@@ -62,15 +62,15 @@ public enum Galva {
     /// keys are valid against `.production` only; `pk_test_*` against
     /// `.development`.
     public enum Environment: Sendable, Hashable {
-
+        
         /// `api.galva.io` + `webview.galva.io`. App Store releases ship
         /// this. **Default** if you don't pass an environment.
         case production
-
+        
         /// `api.galva.dev` + `webview.galva.dev`. Used for in-house dev /
         /// staging builds and local debugging.
         case development
-
+        
         /// Custom backend — supply your own API + webview bundle CDN URLs.
         /// Reserved for on-prem and proxy setups; the standard SaaS path
         /// is `.production` / `.development`.
@@ -82,7 +82,7 @@ public enum Galva {
         ///     in-app message HTML bundles from. Each version is fetched
         ///     as `<webviewBundleCDN>/<version>.html`.
         case custom(apiBaseURL: URL, webviewBundleCDN: URL)
-
+        
         /// Resolved API base URL for this environment.
         public var apiBaseURL: URL {
             switch self {
@@ -91,7 +91,7 @@ public enum Galva {
             case .custom(let api, _): return api
             }
         }
-
+        
         /// Resolved webview bundle CDN URL for this environment.
         public var webviewBundleCDN: URL {
             switch self {
@@ -101,9 +101,9 @@ public enum Galva {
             }
         }
     }
-
+    
     // MARK: AutoTrack
-
+    
     /// Auto-tracking categories. Pass an `OptionSet` to `configure(...)` to
     /// opt into automatic event collection for the listed categories.
     ///
@@ -111,7 +111,7 @@ public enum Galva {
     public struct AutoTrackCategory: OptionSet, Sendable {
         public var rawValue: UInt
         public init(rawValue: UInt) { self.rawValue = rawValue }
-
+        
         /// Emit `session_start` events automatically. Driven by
         /// `UIApplication.didBecomeActive`:
         ///
@@ -128,9 +128,9 @@ public enum Galva {
         /// `device_country` is derived server-side from the request IP.
         public static let lifecycle: AutoTrackCategory = .init(rawValue: 1 << 0)
     }
-
+    
     // MARK: LogLevel
-
+    
     /// Minimum severity for log entries emitted by the SDK. Maps 1:1 onto
     /// the system `os.Logger` levels so output appears at the expected
     /// severity in Console.app and Xcode's debug console.
@@ -150,14 +150,14 @@ public enum Galva {
         case error   = 4
         case fault   = 5
         case off     = 99
-
+        
         public static func < (lhs: Self, rhs: Self) -> Bool {
             lhs.rawValue < rhs.rawValue
         }
     }
-
+    
     // MARK: LogCategory
-
+    
     /// Logical area of the SDK that produced a log entry. Each category
     /// becomes a distinct `os.Logger`, which means you can filter to just
     /// one subsystem in Console.app:
@@ -180,9 +180,9 @@ public enum Galva {
         /// App-level lifecycle (cold start, background, foreground).
         case lifecycle
     }
-
+    
     // MARK: configure
-
+    
     /// Configure the SDK. Call this once on app launch, ideally from
     /// `App.init()` or `application(_:didFinishLaunchingWithOptions:)`.
     ///
@@ -236,7 +236,7 @@ public enum Galva {
             )
         }
     }
-
+    
     /// Install a custom `GalvaLogger` at any point after `configure(...)`.
     /// The `logLevel` filter set at configure time is preserved — your
     /// logger only sees entries that pass it.
@@ -255,7 +255,7 @@ public enum Galva {
             SDKCore.shared.installLogger(logger)
         }
     }
-
+    
     /// Force an off-cycle reconciliation of the device's StoreKit
     /// transaction history with Galva's backend.
     ///
@@ -283,13 +283,13 @@ public enum Galva {
             await SDKCore.shared.reconcileTransactions()
         }
     }
-
+    
     // MARK: Opt-out
-
+    
     /// Globally disable / re-enable Galva's server-bound tracking.
     /// When opted out (`true`):
-    ///   • `AppEvents.track`, `AppUser.identify`, `Communication.*`
-    ///     calls become silent no-ops.
+    ///   • `AppEvents.track`, `AppUser.identify`, and device-token /
+    ///     endpoint registration calls become silent no-ops.
     ///   • Auto-tracked `session_start` events are suppressed.
     ///   • `Transaction.all` sweeps are skipped, so Galva doesn't
     ///     reconcile organic purchases for this device.
@@ -299,9 +299,7 @@ public enum Galva {
     ///
     /// In-app message polling + rendering **continue** to work using
     /// the anonymous id. Opt-out blocks server-bound telemetry, not
-    /// user-visible feature delivery — give the user the option to
-    /// disable in-app messages separately via
-    /// `Communication.setPreference(channel: .inApp, disabled: true)`.
+    /// user-visible feature delivery.
     ///
     /// The flag is persisted in `UserDefaults` (`co.galva.optedOut`) so
     /// it survives app restarts. Defaults to `false` (tracking enabled)
@@ -314,7 +312,7 @@ public enum Galva {
             await SDKCore.shared.setOptedOut(enabled)
         }
     }
-
+    
     /// Current opt-out state. Synchronous read — safe to call from any
     /// thread, including a SwiftUI view body. Backed by a
     /// lock-protected mirror of the persisted `UserDefaults` flag, so
@@ -322,24 +320,33 @@ public enum Galva {
     public static var isOptedOut: Bool {
         SDKCore.shared.isOptedOut
     }
-
-    /// Attach an APNs / FCM device token to outgoing messages. Required if
-    /// you intend to register the device for push notifications via
-    /// `Communication.registerPushToken(...)`.
+    
+    /// Forward the APNs device token to Galva. Call this from your app
+    /// delegate's
+    /// `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)` —
+    /// pass the raw `Data` exactly as the OS hands it to you; the SDK
+    /// hex-encodes it.
     ///
-    /// - Parameter token: The hex-encoded device token string.
+    /// The token is **device-scoped**: the SDK stores it and automatically
+    /// keeps it associated with whoever is identified. You only call this once
+    /// per launch — after `AppUser.identify(...)` or `AppUser.logOut()` the SDK
+    /// re-registers the same token for the new user on its own. You never have
+    /// to re-send it per user.
     ///
     /// Example:
     ///
-    ///     // In application(_:didRegisterForRemoteNotificationsWithDeviceToken:)
-    ///     let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
-    ///     Galva.setDeviceToken(hex)
-    public static func setDeviceToken(_ token: String) {
+    ///     func application(_ application: UIApplication,
+    ///         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    ///         Galva.applicationDidRegisterForRemoteNotificationsWithDeviceToken(deviceToken)
+    ///     }
+    public static func applicationDidRegisterForRemoteNotificationsWithDeviceToken(_ tokenData: Data) {
+        let hex = tokenData.map { String(format: "%02x", $0) }.joined()
         Task { @GalvaActor in
-            SDKCore.shared.setDeviceToken(token)
+            await SDKCore.shared.registerDeviceToken(hex)
         }
     }
 }
+
 
 // MARK: - GalvaCompatibleValue
 
@@ -636,7 +643,7 @@ public enum AppUser {
     ///
     ///     AppUser.set("plan_tier", "pro")
     ///     AppUser.set("habit_count", 13)
-    public static func set<V: GalvaCompatibleValue>(_ attributeName: String, _ value: V) {
+    public static func set<V: GalvaCompatibleValue>(attribute attributeName: String, _ value: V) {
         let trait = [attributeName: AnyJSONValue(value)]
         Task { @GalvaActor in
             await SDKCore.shared.identify(userId: nil, appAccountToken: nil, traits: trait)
@@ -692,122 +699,6 @@ public enum AppUser {
         }
     }
 }
-
-// MARK: - Communication
-
-/// Register / unregister communication endpoints (email, push) and set
-/// per-workflow communication preferences.
-///
-/// Endpoints are how Galva reaches the user outside the app — email and
-/// push notifications. Preferences control which workflows (Trial Rescue,
-/// Payment Recovery, Winback…) are allowed to use each channel.
-public enum Communication {
-
-    // MARK: Public enums
-
-    /// Push provider for a device token.
-    public enum PushPlatform: String, Sendable, Hashable {
-        /// Apple Push Notification service (default on Apple platforms).
-        case apns
-        /// Firebase Cloud Messaging.
-        case fcm
-    }
-
-    /// Communication channel a preference applies to.
-    public enum Channel: String, Sendable, Hashable {
-        case email
-        case pushNotification
-        case inApp
-    }
-
-    /// Validate an email address against Galva's basic ingestion rules:
-    /// exactly one `@` with non-empty local and domain parts, a dotted domain,
-    /// no whitespace, and a basic RFC 5322 character set.
-    ///
-    /// `registerEmail(_:)` already validates internally and silently skips
-    /// invalid addresses so they never reach the server. Call this first when
-    /// you want to surface a validation error in your own UI:
-    ///
-    ///     guard Communication.isValidEmail(input) else {
-    ///         showError("Please enter a valid email address")
-    ///         return
-    ///     }
-    ///     Communication.registerEmail(input)
-    public static func isValidEmail(_ email: String) -> Bool {
-        EmailValidator.isValid(email)
-    }
-
-    /// Register an email address as a reachable endpoint for the current user.
-    ///
-    /// The address is validated client-side first (see `isValidEmail(_:)`);
-    /// an invalid address is **not** sent to the server — it's dropped with a
-    /// warning log. Validate up front with `isValidEmail(_:)` if you need to
-    /// tell the user.
-    ///
-    /// Example:
-    ///
-    ///     Communication.registerEmail("peter@example.com")
-    public static func registerEmail(_ email: String) {
-        Task { @GalvaActor in
-            await SDKCore.shared.createEndpoint(.email(email))
-        }
-    }
-
-    /// Remove a previously-registered email endpoint.
-    public static func unregisterEmail(_ email: String) {
-        Task { @GalvaActor in
-            await SDKCore.shared.deleteEndpoint(.email(email))
-        }
-    }
-
-    /// Register an APNs (or FCM) device token as a push-notification endpoint.
-    ///
-    /// - Parameters:
-    ///   - token: Hex-encoded device token.
-    ///   - platform: `.apns` (default) or `.fcm`.
-    ///
-    /// Example:
-    ///
-    ///     Communication.registerPushToken(hexToken)              // .apns
-    ///     Communication.registerPushToken(fcmToken, platform: .fcm)
-    public static func registerPushToken(_ token: String, platform: PushPlatform = .apns) {
-        Task { @GalvaActor in
-            await SDKCore.shared.createEndpoint(.pushNotification(platform: platform.wireValue, token: token))
-        }
-    }
-
-    /// Remove a previously-registered push-notification endpoint.
-    public static func unregisterPushToken(_ token: String, platform: PushPlatform = .apns) {
-        Task { @GalvaActor in
-            await SDKCore.shared.deleteEndpoint(.pushNotification(platform: platform.wireValue, token: token))
-        }
-    }
-
-    /// Update communication preferences for a channel.
-    ///
-    /// - Parameters:
-    ///   - channel: Channel to update (`.email`, `.pushNotification`, `.inApp`).
-    ///   - disabled: If `true`, disables the channel entirely.
-    ///   - categories: Per-workflow toggles (workflow type → enabled). Common
-    ///     keys: `"payment-recovery"`, `"prechurn-save"`, `"winback"`.
-    ///
-    /// Example — opt the user out of payment recovery emails:
-    ///
-    ///     Communication.setPreference(
-    ///         channel: .email,
-    ///         categories: ["payment-recovery": false]
-    ///     )
-    public static func setPreference(
-        channel: Channel,
-        disabled: Bool? = nil,
-        categories: [String: Bool]? = nil
-    ) {
-        Task { @GalvaActor in
-            await SDKCore.shared.setPreference(channel: channel.wireValue, disabled: disabled, categories: categories)
-        }
-    }
-}
-
 
 // MARK: - InAppMessages
 

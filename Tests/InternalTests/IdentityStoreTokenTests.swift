@@ -109,6 +109,29 @@ final class IdentityStoreTokenTests: XCTestCase {
         }
     }
 
+    // MARK: - Device push token (device-scoped)
+
+    func test_deviceToken_persistsAcrossInstances() async {
+        let name = suiteName!
+        await Self.runOnActor(suiteName: name) { store in
+            store.setDeviceToken("deadbeef")
+            XCTAssertEqual(store.deviceToken, "deadbeef")
+        }
+        await Self.runOnActor(suiteName: name) { store in
+            XCTAssertEqual(store.deviceToken, "deadbeef",
+                           "device token must survive process restart")
+        }
+    }
+
+    func test_rotateAnonymousId_keepsDeviceToken() async {
+        await Self.runOnActor(suiteName: suiteName) { store in
+            store.setDeviceToken("deadbeef")
+            store.rotateAnonymousId()
+            XCTAssertEqual(store.deviceToken, "deadbeef",
+                           "device token is device-scoped — it must survive logout/rotation")
+        }
+    }
+
     // MARK: - Helper
 
     /// Build an `IdentityStore` on the GalvaActor (it requires actor

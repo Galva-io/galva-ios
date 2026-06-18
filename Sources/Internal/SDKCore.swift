@@ -58,7 +58,6 @@ final class SDKCore {
     private(set) var environment: Galva.Environment = .production
     private var autoTrack: Galva.AutoTrackCategory = []
     private var logLevel: Galva.LogLevel = .warning
-    private var deviceToken: String?
 
     var identity: IdentityStore?
     var queue: MessageQueue?
@@ -267,7 +266,9 @@ final class SDKCore {
 
         // Capture UI-bound system properties once on MainActor.
         let snapshot = await MainActor.run { DeviceSnapshot.capture() }
-        self.contextProvider = ContextProvider(deviceToken: deviceToken, snapshot: snapshot)
+        // Seed the context with any device push token persisted from a previous
+        // launch so `context.device.token` is populated from the first message.
+        self.contextProvider = ContextProvider(deviceToken: identity.deviceToken, snapshot: snapshot)
         setCachedEndUserId(identity.endUserId)
 
         let uploader = Uploader(
@@ -516,11 +517,32 @@ final class SDKCore {
         self.logger = LevelFilterLogger(minLevel: logLevel, wrapped: sinkLogger)
     }
 
-    func setDeviceToken(_ token: String) {
-        self.deviceToken = token
+    /// Handle a fresh APNs device token (hex). Persists it device-scoped,
+    /// stamps it onto the message context, and registers it as a push
+    /// endpoint for whoever is currently identified. The token belongs to the
+    /// device, so the developer calls this once per launch — the SDK keeps it
+    /// associated across login / logout on its own.
+    func registerDeviceToken(_ token: String) async {
+        guard let identity else {
+            logger.warning(.identity, "device token received before configure() — dropping")
+            return
+        }
+        identity.setDeviceToken(token)
         // Preserve the existing UI snapshot when updating the device token.
         let snapshot = contextProvider?.snapshot ?? .empty
         self.contextProvider = ContextProvider(deviceToken: token, snapshot: snapshot)
+        logger.info(.identity, "device token registered")
+        await registerCurrentDeviceTokenEndpoint()
+    }
+
+    /// (Re)register the device's stored push token as an endpoint for the
+    /// CURRENT identity. Runs after a fresh token arrives and after any
+    /// identity change (login / logout) so every user the device serves is
+    /// reachable — the developer never re-sends the token per user. No-op
+    /// when no token has been received yet.
+    private func registerCurrentDeviceTokenEndpoint() async {
+        guard let token = identity?.deviceToken else { return }
+        await createEndpoint(.pushNotification(platform: .apns, token: token))
     }
 
     // MARK: Identify / Logout
@@ -545,6 +567,10 @@ final class SDKCore {
             "hasTraits": traits.map { String($0.count) } ?? "0",
             "hasAccountToken": appAccountToken == nil ? "false" : "true",
         ])
+        // Track whether this call is a real login transition (the user
+        // binding actually changes) so we can re-associate the device push
+        // token with the new user afterwards.
+        var userDidChange = false
         if let userId {
             // Emit a higher-level state-transition log when the end-user
             // binding actually changes (was nil → now set, or switched users)
@@ -552,6 +578,7 @@ final class SDKCore {
             // the per-trait-update calls that also flow through here.
             let previous = identity.endUserId
             if previous != userId {
+                userDidChange = true
                 logger.info(.identity, "endUserId changed", metadata: [
                     "from": previous ?? "<anonymous>",
                     "to": userId,
@@ -593,6 +620,12 @@ final class SDKCore {
             body: .identify(traits: mergedTraits.isEmpty ? nil : mergedTraits)
         )
         await queue.emit(msg)
+
+        // A new user just logged in — re-associate the device's push token
+        // with them so they're reachable without the developer re-sending it.
+        if userDidChange {
+            await registerCurrentDeviceTokenEndpoint()
+        }
     }
 
     /// Built-in traits sourced from the device on every identify. Keys come
@@ -631,6 +664,11 @@ final class SDKCore {
         #endif
         // Seed built-in traits for the freshly-rotated anonymous user.
         await identify(userId: nil, appAccountToken: nil, traits: nil)
+        // Re-associate the device's push token with the new anonymous identity
+        // — the token is device-scoped, so the post-logout user stays reachable
+        // without the developer re-sending it. (The seed identify above is a
+        // nil-userId call, so it doesn't trigger the login-transition path.)
+        await registerCurrentDeviceTokenEndpoint()
     }
 
     // MARK: Transaction reconciliation
