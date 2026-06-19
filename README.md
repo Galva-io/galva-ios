@@ -491,6 +491,12 @@ Every guarantee is locked in by contract tests in CI.
 
 ---
 
+## Example app
+
+[`Examples/GalvaDemo`](Examples/GalvaDemo) is a runnable SwiftUI app that integrates the SDK end-to-end, plus an XCUITest suite that drives the whole stack (in-app messages, the native bridge, deep links + deferral, identity/event uploads) against an in-process mock. Run it with `./scripts/e2e.sh` — see the [demo README](Examples/GalvaDemo/README.md).
+
+---
+
 ## Links
 
 - **Galva platform** — [galva.io](https://galva.io)

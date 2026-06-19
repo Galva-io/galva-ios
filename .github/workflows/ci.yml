@@ -59,3 +59,30 @@ jobs:
 
       - name: swift test
         run: swift test --parallel
+
+  e2e:
+    name: E2E (UI tests)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same Xcode selection as the unit-test job — the demo links the SDK,
+      # which needs the iOS 26 SDK to compile (see the comment above).
+      - name: Select Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          [ -z "$XCODE" ] && XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "Selecting $XCODE"
+          sudo xcode-select -switch "$XCODE"
+          xcodebuild -version
+
+      # Tuist generates the demo project (.xcodeproj/.xcworkspace are
+      # git-ignored). Homebrew is preinstalled on the runner.
+      - name: Install Tuist
+        run: brew install --quiet tuist
+
+      # Generates the project + runs the XCUITest suite against the in-process
+      # mock (deterministic, no network). The script auto-detects an available
+      # iPhone simulator by UDID; set GALVA_E2E_DESTINATION to override.
+      - name: Run E2E suite
+        run: ./scripts/e2e.sh

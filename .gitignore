@@ -43,3 +43,4 @@ Examples/**/*.xcworkspace
 Examples/**/Derived/
 Examples/**/.tuist/
 Examples/**/*.xcconfig.local
+Examples/**/*.xcresult

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Galva E2E Bundle</title>
+  <style>
+    body { font: -apple-system-body, sans-serif; margin: 0; padding: 24px; color: #111; background: #fff; }
+    h1 { font-size: 22px; }
+    p  { font-size: 16px; margin: 8px 0; }
+    button { display: block; width: 100%; padding: 14px; margin: 10px 0; font-size: 17px; border: 0; border-radius: 10px; background: #1d6cf0; color: #fff; }
+  </style>
+</head>
+<body>
+  <!-- Title is overwritten with the resolved message's `title` (proves the
+       getMessageData bridge round-trip). XCUITest asserts "E2E Offer". -->
+  <h1 id="title">Galva E2E Bundle</h1>
+  <p id="status">booting</p>
+  <p id="pageContext">pageContext: -</p>
+  <p id="apiFetchResult">apiFetch: -</p>
+  <p id="alertResult">alert: -</p>
+  <p id="deepLinkParams">deepLink: -</p>
+
+  <button onclick="runApiFetch()">Run apiFetch</button>
+  <button onclick="runShowAlert()">Run showAlert</button>
+  <button onclick="closeMessage()">Close E2E</button>
+
+  <script>
+    // ----- Bridge transport -----------------------------------------------
+    var pending = {};
+
+    function call(name, payload) {
+      return new Promise(function (resolve, reject) {
+        var id = 'r' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
+        pending[id] = { resolve: resolve, reject: reject };
+        window.webkit.messageHandlers.galva.postMessage(
+          JSON.stringify({ name: name, requestId: id, payload: payload || {} })
+        );
+      });
+    }
+
+    window.handleNativeMessage = function (json) {
+      var res = JSON.parse(json);
+      var cb = pending[res.requestId];
+      if (!cb) { return; }
+      delete pending[res.requestId];
+      if (res.error) { cb.reject(res.error); } else { cb.resolve(res.result); }
+    };
+
+    function setText(id, text) { document.getElementById(id).textContent = text; }
+
+    // ----- Boot: reveal + read message context ----------------------------
+    async function boot() {
+      // Reveal the overlay (anti-FOUC): the SDK keeps the WebView hidden
+      // until `ready()`, so this must run for the sheet to become visible.
+      try { await call('ready'); setText('status', 'ready'); }
+      catch (e) { setText('status', 'ready-error'); }
+
+      try {
+        var data = await call('getMessageData');
+        if (data && data.title) { setText('title', data.title); }
+      } catch (e) { /* leave default title */ }
+
+      try {
+        var ctx = await call('getPageContext');
+        setText('pageContext', 'pageContext: ' + (ctx ? ctx.platform : '?'));
+      } catch (e) { setText('pageContext', 'pageContext: error'); }
+
+      if (window.galvaDeepLinkParams && window.galvaDeepLinkParams.communicationId) {
+        setText('deepLinkParams', 'deepLink: ' + window.galvaDeepLinkParams.communicationId);
+      }
+    }
+
+    // ----- Button-driven bridge calls -------------------------------------
+    async function runApiFetch() {
+      try {
+        var res = await call('apiFetch', { path: '/e2e/ping', method: 'GET' });
+        setText('apiFetchResult', res && res.ok ? 'apiFetch ok' : 'apiFetch fail');
+      } catch (e) { setText('apiFetchResult', 'apiFetch error'); }
+    }
+
+    async function runShowAlert() {
+      try {
+        var res = await call('showAlert', {
+          title: 'E2E Alert',
+          message: 'Pick one',
+          actions: [{ id: 'ok', title: 'OK', style: 'default' }]
+        });
+        setText('alertResult', 'alert ' + (res ? res.actionId : '?'));
+      } catch (e) { setText('alertResult', 'alert error'); }
+    }
+
+    function closeMessage() { call('dismiss', { reason: 'e2e-close' }); }
+
+    document.addEventListener('DOMContentLoaded', boot);
+  </script>
+</body>
+</html>
