@@ -50,6 +50,23 @@ enum DeepLink: Sendable, Hashable {
         static let openCommunication = "openCommunication"
     }
 
+    /// The canonical (camelCase) action name for this link. Used for logging.
+    var actionName: String {
+        switch self {
+        case .openCommunication: return Route.openCommunication
+        }
+    }
+
+    /// Whether resolving this route needs an identified user. `true` for
+    /// routes that resolve a user-targeted communication — such a link
+    /// arriving before `identify()` is deferred until identity is available.
+    /// A future route that works for anonymous users returns `false`.
+    var requiresIdentity: Bool {
+        switch self {
+        case .openCommunication: return true
+        }
+    }
+
     /// Why a URL could not be parsed into a `DeepLink`. Carries only
     /// non-sensitive identifiers (scheme, action name, parameter *names*) —
     /// never parameter values or the full URL, which can carry tokens.

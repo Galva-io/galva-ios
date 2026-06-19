@@ -36,3 +36,10 @@ default.profraw
 .env.local
 *.UserInterfaceState.xcuserstate
 .swiftpm/xcode/package.xcworkspace/xcuserdata/petervu.xcuserdatad/UserInterfaceState.xcuserstate
+
+# Tuist-generated project artefacts (Examples/* — regenerated via `tuist generate`)
+Examples/**/*.xcodeproj
+Examples/**/*.xcworkspace
+Examples/**/Derived/
+Examples/**/.tuist/
+Examples/**/*.xcconfig.local

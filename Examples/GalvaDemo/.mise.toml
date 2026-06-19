@@ -1,0 +1,5 @@
+# Pins the Tuist version for reproducible project generation (used by CI via
+# jdx/mise-action). Local devs with a system Tuist install can ignore this —
+# any Tuist 4.x generates the project the same way.
+[tools]
+tuist = "4.200.4"

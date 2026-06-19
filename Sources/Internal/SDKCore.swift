@@ -547,13 +547,20 @@ final class SDKCore {
 
     // MARK: Deep links
 
+    /// A Galva deep link parsed before the SDK could act on it — e.g. an
+    /// `openCommunication` link that arrived before the user was identified.
+    /// Held until `configure()` + `identify()` make resolution possible, then
+    /// replayed once by `resolveDeferredDeepLinkIfReady()`. Latest-wins: a
+    /// newer deferred link replaces an unresolved older one. Readable in tests
+    /// (`@testable`) to assert the defer → replay state machine.
+    private(set) var deferredDeepLink: DeepLink?
+
     /// Router for incoming Galva deep links, forwarded from
     /// `Galva.handleOpenURL(_:)` (auto-attached by the SwiftUI
     /// `.galvaConfigure(...)` modifier, or called manually from UIKit). The
     /// caller has already confirmed the `gv` scheme; here we parse the URL
-    /// into a typed `DeepLink` and dispatch on the case. Each route's handler
-    /// lives in its own `DeepLink+<Route>.swift` extension — add a `case` to
-    /// `DeepLink` + a handler to support a new path.
+    /// into a typed `DeepLink` and route it — dispatching now, or deferring
+    /// until the SDK can resolve it (see `route(_:)`).
     ///
     /// On a parse failure we log the detailed reason (unknown action, missing
     /// parameter, …) so a misconfigured campaign link is debuggable — but only
@@ -562,19 +569,72 @@ final class SDKCore {
     func handleOpenURL(_ url: URL) async {
         switch DeepLink.parse(url) {
         case .success(let link):
-            switch link {
-            case let .openCommunication(communicationId, parameters):
-                logger.info(.lifecycle, "deep link", metadata: [
-                    "action": DeepLink.Route.openCommunication,
-                ])
-                await handleOpenCommunication(communicationId: communicationId,
-                                              parameters: parameters)
-            }
+            await route(link)
         case .failure(let reason):
             logger.warning(.lifecycle, "deep link ignored", metadata: [
                 "scheme": url.scheme ?? "<none>",
                 "reason": reason.description,
             ])
+        }
+    }
+
+    /// Dispatch a parsed deep link now, or defer it when the SDK can't resolve
+    /// it yet. `openCommunication` resolves a user-targeted communication, so
+    /// it needs an identified user — a link that arrives before `identify()`
+    /// (or before `configure()`) is held and replayed by
+    /// `resolveDeferredDeepLinkIfReady()` once identity is available.
+    private func route(_ link: DeepLink) async {
+        guard canResolve(link) else {
+            deferredDeepLink = link
+            logger.info(.lifecycle, "deep link deferred", metadata: [
+                "action": link.actionName,
+                "reason": configured ? "awaiting identify" : "awaiting configure",
+            ])
+            return
+        }
+        await dispatch(link)
+    }
+
+    /// Whether `link` can be resolved right now: `configure()` has run, and —
+    /// for routes that target a specific user — the user is identified.
+    private func canResolve(_ link: DeepLink) -> Bool {
+        guard configured else { return false }
+        if link.requiresIdentity, !isIdentified { return false }
+        return true
+    }
+
+    /// `true` once the user has an end-user id (a real `identify(userId:)`,
+    /// or a persisted id restored at `configure()`). Anonymous users are not
+    /// identified.
+    private var isIdentified: Bool { identity?.endUserId != nil }
+
+    /// Dispatch a deep link to its route handler. The caller guarantees the
+    /// link is resolvable (`canResolve`). Each `case` maps to a handler in a
+    /// `DeepLink+<Route>.swift` extension.
+    private func dispatch(_ link: DeepLink) async {
+        logger.info(.lifecycle, "deep link", metadata: ["action": link.actionName])
+        switch link {
+        case let .openCommunication(communicationId, parameters):
+            await handleOpenCommunication(communicationId: communicationId,
+                                          parameters: parameters)
+        }
+    }
+
+    /// Replay a deferred deep link once the SDK can resolve it — called after
+    /// `identify()` (which `configure()` also invokes for the anonymous seed,
+    /// covering a returning identified user whose id was restored from disk).
+    /// No-op when nothing is pending or resolution still isn't possible.
+    /// Clears the slot synchronously, then dispatches on a detached actor task
+    /// so a long present flow never blocks the `identify()` / `configure()`
+    /// caller.
+    func resolveDeferredDeepLinkIfReady() {
+        guard let deferred = deferredDeepLink, canResolve(deferred) else { return }
+        deferredDeepLink = nil
+        logger.info(.lifecycle, "resolving deferred deep link", metadata: [
+            "action": deferred.actionName,
+        ])
+        Task { @GalvaActor [weak self] in
+            await self?.dispatch(deferred)
         }
     }
 
@@ -659,6 +719,12 @@ final class SDKCore {
         if userDidChange {
             await registerCurrentDeviceTokenEndpoint()
         }
+
+        // A deep link may have arrived before we had an identity to resolve
+        // its communication against. Now that identify has run, replay it if
+        // resolution is possible (guarded inside — the anonymous seed identify
+        // from configure() won't flush an identity-requiring link).
+        resolveDeferredDeepLinkIfReady()
     }
 
     /// Built-in traits sourced from the device on every identify. Keys come

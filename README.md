@@ -362,6 +362,8 @@ func application(_ app: UIApplication, open url: URL,
 
 You don't author these URLs — Galva generates them when a workflow targets a user. The shipped route is `gv…://openCommunication?communicationId=…`, which opens that communication through the same in-app message flow (the SDK resolves the payload, downloads the bundle, and renders the `WKWebView`). All query parameters ride along into the page, so a tap carries its campaign context with it.
 
+**Deferred until identify.** A targeted communication can only be resolved once Galva knows *who* the user is. If a deep link arrives before you've called `AppUser.identify(...)` (cold launch straight from a notification, before your session restore runs), the SDK **holds** it and replays it automatically the moment you identify — no work on your part. A returning user whose id was restored at launch resolves immediately. (If several arrive while waiting, the most recent wins.)
+
 **Register the scheme** so iOS routes these URLs to your app — add your `gv…` scheme under **Target → Info → URL Types** (or in `Info.plist`):
 
 ```xml
