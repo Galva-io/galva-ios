@@ -18,6 +18,9 @@ struct GalvaDemoApp: App {
     private let config: E2EConfig
 
     init() {
+        // Touch the launch clock first so `launchMs` measures init → first
+        // frame as accurately as possible.
+        _ = LaunchClock.startUptime
         // MUST run before any view calls `.galvaConfigure` — the mock
         // URLProtocol has to be registered before the SDK's first
         // `URLSession.shared` request fires at configure time.

@@ -77,12 +77,46 @@ jobs:
           xcodebuild -version
 
       # Tuist generates the demo project (.xcodeproj/.xcworkspace are
-      # git-ignored). Homebrew is preinstalled on the runner.
-      - name: Install Tuist
-        run: brew install --quiet tuist
+      # git-ignored). Installed at the version pinned in .mise.toml so CI is
+      # reproducible.
+      - name: Install Tuist (pinned via .mise.toml)
+        uses: jdx/mise-action@v2
 
       # Generates the project + runs the XCUITest suite against the in-process
       # mock (deterministic, no network). The script auto-detects an available
       # iPhone simulator by UDID; set GALVA_E2E_DESTINATION to override.
       - name: Run E2E suite
         run: ./scripts/e2e.sh
+
+  perf:
+    name: Performance (SDK overhead)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          [ -z "$XCODE" ] && XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "Selecting $XCODE"
+          sudo xcode-select -switch "$XCODE"
+          xcodebuild -version
+
+      - name: Install Tuist (pinned via .mise.toml)
+        uses: jdx/mise-action@v2
+
+      # Measures the SDK's footprint (memory/launch/CPU) as a delta vs a
+      # baseline with no Galva, and writes Examples/GalvaDemo/perf-report.md.
+      # Fails the job if the gated memory budget is breached — immediate
+      # notification. (Layer-1 main-thread budgets ride the `test` job.)
+      - name: Run performance suite
+        run: ./scripts/perf.sh
+
+      # Publish the before/after report on success OR failure.
+      - name: Upload perf report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report
+          path: Examples/GalvaDemo/perf-report.md
+          if-no-files-found: warn

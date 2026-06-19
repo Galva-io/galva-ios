@@ -44,3 +44,4 @@ Examples/**/Derived/
 Examples/**/.tuist/
 Examples/**/*.xcconfig.local
 Examples/**/*.xcresult
+Examples/**/perf-report.md

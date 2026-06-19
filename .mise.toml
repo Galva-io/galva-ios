@@ -1,0 +1,8 @@
+# Pins tool versions for reproducible CI (consumed by `jdx/mise-action` in
+# .github/workflows/ci.yml) and for local contributors who use mise.
+#
+# Tuist generates the Examples/GalvaDemo project for the E2E + performance
+# suites. Pin it so CI is deterministic — Homebrew can't install a specific
+# old version, and an unpinned launcher has resolved a broken build before.
+[tools]
+tuist = "4.200.4"

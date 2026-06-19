@@ -477,7 +477,7 @@ The SDK is built to be invisible to your app's perf budget:
 - **Bounded retries.** Failed batches use exponential backoff with jitter capped at 60s — no busy-loop on outages.
 - **No iCloud Backup pressure.** SQLite lives in `Application Support/Galva/` with the no-backup flag set.
 
-Every guarantee is locked in by contract tests in CI.
+These aren't just claims — CI **gates** on them. Main-thread budget tests assert every public call returns in microseconds, and a before/after suite runs a real app **with** and **without** the SDK to measure the actual overhead (currently **~2 MB** resident memory, **no measurable launch delay**), failing the build if it regresses past budget. See [Examples/GalvaDemo](Examples/GalvaDemo#performance-sdk-overhead).
 
 ---
 

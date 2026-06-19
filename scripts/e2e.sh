@@ -52,4 +52,5 @@ xcodebuild test \
     -workspace "$DEMO/GalvaDemo.xcworkspace" \
     -scheme GalvaDemo \
     -destination "$DESTINATION" \
+    -skip-testing:GalvaDemoUITests/PerformanceUITests \
     -resultBundlePath "$RESULT_BUNDLE"

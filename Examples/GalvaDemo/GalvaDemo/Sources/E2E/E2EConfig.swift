@@ -22,6 +22,11 @@ enum E2EScenario: String {
 
 struct E2EConfig {
     let isE2E: Bool
+    /// Whether the SDK is configured at all. `false` only in the performance
+    /// baseline (`GALVA_PERF_BASELINE=1`) — a pure host shell with zero Galva
+    /// involvement, so the perf suite can measure the SDK's footprint as a
+    /// delta against it.
+    let sdkEnabled: Bool
     let scenario: E2EScenario
     let environment: Galva.Environment
     let apiKey: String
@@ -34,11 +39,24 @@ struct E2EConfig {
     static func fromEnvironment() -> E2EConfig {
         let env = ProcessInfo.processInfo.environment
 
+        // Performance baseline: don't touch Galva at all (no mock, no
+        // configure). The perf suite compares this against SDK-on.
+        if env["GALVA_PERF_BASELINE"] == "1" {
+            return E2EConfig(
+                isE2E: false,
+                sdkEnabled: false,
+                scenario: .noMessages,
+                environment: .development,
+                apiKey: ""
+            )
+        }
+
         if env["GALVA_E2E"] == "1" {
             let scenario = env["GALVA_E2E_SCENARIO"]
                 .flatMap(E2EScenario.init(rawValue:)) ?? .showInAppMessage
             return E2EConfig(
                 isE2E: true,
+                sdkEnabled: true,
                 scenario: scenario,
                 environment: .custom(apiBaseURL: mockAPIBaseURL, webviewBundleCDN: mockCDNBaseURL),
                 apiKey: "pk_e2e_demo"
@@ -50,6 +68,7 @@ struct E2EConfig {
         let devKey = env["GALVA_DEV_API_KEY"] ?? "pk_test_REPLACE_ME"
         return E2EConfig(
             isE2E: false,
+            sdkEnabled: true,
             scenario: .noMessages,
             environment: .development,
             apiKey: devKey

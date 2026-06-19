@@ -226,6 +226,7 @@ public enum Galva {
         logLevel: LogLevel = .warning,
         logger: (any GalvaLogger)? = nil
     ) {
+        
         Task { @GalvaActor in
             await SDKCore.shared.configure(
                 apiKey: apiKey,

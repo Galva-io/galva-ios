@@ -51,6 +51,27 @@ UI tests select a scenario through launch environment:
 - **Identity + events** — `identify` / `track` actually upload, asserted
   against the recorded request bodies ([IdentityEventUITests](GalvaDemoUITests/IdentityEventUITests.swift)).
 
+## Performance (SDK overhead)
+
+A great SDK is invisible to the host app's performance. Two layers guard that:
+
+- **Main-thread budgets** (host, in `swift test`) — every public call must
+  return in microseconds ([Tests/PerformanceTests/MainThreadBudgetTests.swift](../../Tests/PerformanceTests/MainThreadBudgetTests.swift)).
+- **App-process A/B** (this target, [PerformanceUITests](GalvaDemoUITests/PerformanceUITests.swift)) —
+  launches the app **with** the SDK and **without** (`GALVA_PERF_BASELINE=1`, a
+  pure host shell), measures resident memory / launch / CPU via
+  [MetricsProbe](GalvaDemo/Sources/E2E/MetricsProbe.swift), and reports the
+  delta. It **gates on extra resident memory** (< 8 MB) and fails the build on
+  a breach; launch + CPU are report-only.
+
+```sh
+./scripts/perf.sh                            # → Examples/GalvaDemo/perf-report.md
+cat Examples/GalvaDemo/perf-report.md        # before/after table
+```
+
+Runs in CI as the `perf` job, which uploads `perf-report.md` as an artifact on
+every run.
+
 ## Run by hand against the dev server
 
 Launch without the E2E env and the app uses `Galva.Environment.development`.

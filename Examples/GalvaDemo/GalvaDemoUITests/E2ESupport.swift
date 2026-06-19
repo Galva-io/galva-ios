@@ -43,6 +43,31 @@ extension XCTestCase {
         button.tap()
     }
 
+    /// Launch the app for a performance run: SDK-on (E2E mock, no message) or
+    /// the pure baseline shell (`GALVA_PERF_BASELINE`).
+    func launchAppPerf(sdkEnabled: Bool) -> XCUIApplication {
+        let app = XCUIApplication()
+        if sdkEnabled {
+            app.launchEnvironment["GALVA_E2E"] = "1"
+            app.launchEnvironment["GALVA_E2E_SCENARIO"] = "noMessages"
+        } else {
+            app.launchEnvironment["GALVA_PERF_BASELINE"] = "1"
+        }
+        app.launch()
+        return app
+    }
+
+    /// Wait for the perf probe to settle, then read the three metric labels.
+    /// Returns nil if the probe never became ready.
+    func readMetrics(
+        _ app: XCUIApplication,
+        timeout: TimeInterval = 20
+    ) -> (memoryMB: Double, launchMs: Double, cpuMs: Double)? {
+        guard app.staticTexts["metric.ready"].waitForExistence(timeout: timeout) else { return nil }
+        func read(_ id: String) -> Double { Double(app.staticTexts[id].label) ?? .nan }
+        return (read("metric.memoryMB"), read("metric.launchMs"), read("metric.cpuMs"))
+    }
+
     /// Wait until `element`'s accessibility label contains `substring`.
     func expectLabel(
         _ element: XCUIElement,
