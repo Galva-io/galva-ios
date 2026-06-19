@@ -12,8 +12,8 @@
 //      • `currentSummary()` returns whatever we've fetched so far — never
 //        blocks, never throws. Empty when StoreKit is offline or no
 //        productIds have been requested yet.
-//      • The WebView presenter calls `currentSummaryJSON()` right before
-//        loading the bundle and injects the resulting JSON as
+//      • The WebView presenter snapshots `currentSummaryObject()` right
+//        before loading the bundle; the factory serializes it and injects
 //        `window.galvaProducts` via WKUserScript at `.atDocumentStart`.
 //
 //  Why not block show() on a fresh fetch?
@@ -107,21 +107,19 @@ final class StoreKitProductPrefetcher {
 
     // MARK: - Summary for WebView injection
 
-    /// JSON-encoded product summary keyed by productId. Returns the
-    /// literal string `"{}"` when nothing has been fetched yet, so the
-    /// injected `window.galvaProducts = …;` snippet always parses.
-    func currentSummaryJSON() -> String {
-        let summary = currentSummary()
-        guard
-            let data = try? JSONSerialization.data(
-                withJSONObject: summary,
-                options: [.fragmentsAllowed, .sortedKeys]
-            ),
-            let string = String(data: data, encoding: .utf8)
-        else {
-            return "{}"
+    /// Product summary keyed by `productId`, as Sendable structured JSON
+    /// values (`AnyJSONValue`) — ready to cross actors and be serialized at
+    /// the `window.galvaProducts` injection boundary by the WebView factory.
+    /// Empty when nothing has been fetched yet (the bundle handles an empty
+    /// catalog). Returning structured values rather than a pre-encoded string
+    /// keeps serialization in one place and makes it impossible for a caller
+    /// to inject an arbitrary string.
+    func currentSummaryObject() -> [String: AnyJSONValue] {
+        var out: [String: AnyJSONValue] = [:]
+        for (id, fields) in currentSummary() {
+            out[id] = .object(AnyJSONValue.coercing(dictionary: fields))
         }
-        return string
+        return out
     }
 
     /// JSON-shaped summary keyed by `productId`. Each value is a flat

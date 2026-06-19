@@ -345,6 +345,36 @@ public enum Galva {
             await SDKCore.shared.registerDeviceToken(hex)
         }
     }
+
+    /// Hand an incoming URL to Galva — call this for every URL your app opens
+    /// (deep links, universal links). SwiftUI apps using the
+    /// `.galvaConfigure(...)` modifier get this wired up automatically (the
+    /// modifier attaches `onOpenURL`), so they never call it directly.
+    ///
+    /// - Returns: `true` if this is a Galva deep link (scheme begins with
+    ///   `gv`) that the SDK has claimed, `false` otherwise. Galva only
+    ///   handles its own `gv…` scheme — `http(s)` and your app's own custom
+    ///   schemes return `false` and are untouched, so a UIKit
+    ///   `application(_:open:)` can use the result to decide whether to route
+    ///   the URL itself:
+    ///
+    ///     func application(_ app: UIApplication, open url: URL,
+    ///                      options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+    ///         if Galva.handleOpenURL(url) { return true }   // Galva took it
+    ///         return myRouter.handle(url)                   // your own links
+    ///     }
+    ///
+    /// The Galva-side handling itself is fire-and-forget (resolve + present
+    /// happen asynchronously); the `Bool` is the synchronous "is this mine"
+    /// decision based on the URL scheme.
+    @discardableResult
+    public static func handleOpenURL(_ url: URL) -> Bool {
+        guard DeepLink.canHandle(url) else { return false }
+        Task { @GalvaActor in
+            await SDKCore.shared.handleOpenURL(url)
+        }
+        return true
+    }
 }
 
 

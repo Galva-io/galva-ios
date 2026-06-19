@@ -49,7 +49,8 @@ enum InAppMessageWebViewFactory {
         identity: IdentityStore,
         storeKitPrefetcher: StoreKitProductPrefetcher?,
         host: any InAppMessageHost,
-        prefetchedProductsJSON: String,
+        prefetchedProducts: [String: AnyJSONValue],
+        deepLinkParameters: [String: String] = [:],
         logger: any GalvaLogger
     ) -> (WKWebView, NativeBridge) {
         let bridge = NativeBridge(
@@ -61,7 +62,8 @@ enum InAppMessageWebViewFactory {
         return assemble(
             bridge: bridge,
             host: host,
-            prefetchedProductsJSON: prefetchedProductsJSON
+            prefetchedProducts: prefetchedProducts,
+            deepLinkParameters: deepLinkParameters
         )
     }
     #else
@@ -69,7 +71,8 @@ enum InAppMessageWebViewFactory {
         messageManager: InAppMessageManager,
         identity: IdentityStore,
         host: any InAppMessageHost,
-        prefetchedProductsJSON: String,
+        prefetchedProducts: [String: AnyJSONValue],
+        deepLinkParameters: [String: String] = [:],
         logger: any GalvaLogger
     ) -> (WKWebView, NativeBridge) {
         let bridge = NativeBridge(
@@ -80,7 +83,8 @@ enum InAppMessageWebViewFactory {
         return assemble(
             bridge: bridge,
             host: host,
-            prefetchedProductsJSON: prefetchedProductsJSON
+            prefetchedProducts: prefetchedProducts,
+            deepLinkParameters: deepLinkParameters
         )
     }
     #endif
@@ -93,7 +97,8 @@ enum InAppMessageWebViewFactory {
     private static func assemble(
         bridge: NativeBridge,
         host: any InAppMessageHost,
-        prefetchedProductsJSON: String
+        prefetchedProducts: [String: AnyJSONValue],
+        deepLinkParameters: [String: String] = [:]
     ) -> (WKWebView, NativeBridge) {
         let config = WKWebViewConfiguration()
         bridge.host = host
@@ -102,8 +107,22 @@ enum InAppMessageWebViewFactory {
         // Inject prefetched StoreKit products as `window.galvaProducts`
         // BEFORE any bundle script runs. The bundle reads the global
         // synchronously on boot — no bridge round-trip needed for pricing.
+        // Callers pass structured `AnyJSONValue`s; serialization happens here,
+        // at the single injection boundary.
         config.userContentController.addUserScript(
-            makeProductsInjectionScript(json: prefetchedProductsJSON)
+            makeGlobalInjectionScript(global: "galvaProducts", object: prefetchedProducts)
+        )
+
+        // When opened from a deep link, expose its query parameters as
+        // `window.galvaDeepLinkParams` (e.g. `{ communicationId, … }`) so the
+        // bundle can read them synchronously on boot. Empty `{}` for the
+        // normal stream-driven presentation path. The flat string→string query
+        // map is lifted to JSON string values for injection.
+        config.userContentController.addUserScript(
+            makeGlobalInjectionScript(
+                global: "galvaDeepLinkParams",
+                object: deepLinkParameters.mapValues(AnyJSONValue.string)
+            )
         )
 
         // When debug logging is on, forward the WebView's console output (and
@@ -178,31 +197,45 @@ enum InAppMessageWebViewFactory {
         bridge?.host = nil
     }
 
-    /// Build a `WKUserScript` that assigns the prefetched StoreKit
-    /// product summary to `window.galvaProducts` at the very first
-    /// chance (`.atDocumentStart`). The injected source is:
+    /// Build a `.atDocumentStart` user script that assigns `object` (encoded
+    /// to JSON here) to `window.<global>` before any bundle script runs:
     ///
     ///     window.galvaProducts = { … };
     ///
-    /// Falls back to an empty object literal when nothing has been
-    /// pre-fetched so the bundle can always read `window.galvaProducts`
-    /// without a `typeof` guard.
-    private static func makeProductsInjectionScript(json: String) -> WKUserScript {
-        let safe = json.isEmpty ? "{}" : json
-        // The JSON we pass came from JSONSerialization and is therefore
-        // safe to splice as a JavaScript object literal — JSON is a
-        // subset of JS. We still defensively replace U+2028 / U+2029
-        // since those characters are valid in JSON strings but break out
-        // of inline JS source.
-        let sanitized = safe
+    /// Used for `galvaProducts` (StoreKit catalog) and `galvaDeepLinkParams`
+    /// (deep-link query params). Encoding lives here — the single injection
+    /// boundary — so callers pass structured `AnyJSONValue`s and can't supply
+    /// an arbitrary, possibly-unsafe string. An empty map (or an encode
+    /// failure, which can't happen for `AnyJSONValue`) yields `{}` so the
+    /// bundle can always read the global without a `typeof` guard. JSON is a
+    /// subset of JS, but we defensively escape U+2028 / U+2029, which are
+    /// valid in JSON strings yet break out of inline JS source.
+    private static func makeGlobalInjectionScript(
+        global: String,
+        object: [String: AnyJSONValue]
+    ) -> WKUserScript {
+        let json = encodeJSONObject(object)
+        let sanitized = json
             .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
             .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
-        let source = "window.galvaProducts = \(sanitized);"
         return WKUserScript(
-            source: source,
+            source: "window.\(global) = \(sanitized);",
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         )
+    }
+
+    /// Encode a JSON object to a compact, key-sorted string. Returns `"{}"`
+    /// for an empty map or the (unreachable for `AnyJSONValue`) encode failure.
+    private static func encodeJSONObject(_ object: [String: AnyJSONValue]) -> String {
+        guard !object.isEmpty else { return "{}" }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(object),
+              let string = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return string
     }
 
     /// `WKUserScript` (main frame, document-start) that wraps the page's

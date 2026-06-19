@@ -50,17 +50,17 @@ import Galva
 
 @main
 struct MyApp: App {
-    init() {
-        Galva.configure(apiKey: "pk_live_xxxxxxxx")
-    }
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .autoDisplayInAppMessages()   // 3. render retention messages
+                .galvaConfigure(apiKey: "pk_live_xxxxxxxx")  // configure + deep links
+                .autoDisplayInAppMessages()                  // 3. render retention messages
         }
     }
 }
 ```
+
+`.galvaConfigure(...)` configures the SDK and **auto-wires deep links** (it attaches `onOpenURL` for you — no manual forwarding). Prefer calling `Galva.configure(...)` from `App.init()` / your `AppDelegate` instead? That works too; just forward URL opens with `Galva.handleOpenURL(_:)` yourself.
 
 **Anywhere in your app**, tell Galva who the user is and what they do:
 
@@ -116,7 +116,19 @@ Each release also ships a ready-to-paste `.binaryTarget(url:checksum:)` snippet 
 
 ## Configure
 
-Call `Galva.configure(apiKey:)` **once**, as early as possible — `App.init()` (SwiftUI) or `application(_:didFinishLaunchingWithOptions:)` (UIKit). Subsequent calls are ignored with a warning.
+**SwiftUI** — apply `.galvaConfigure(...)` to your root view (configures the SDK once and auto-attaches deep-link forwarding):
+
+```swift
+ContentView()
+    .galvaConfigure(
+        apiKey: "pk_live_xxxxxxxx",
+        environment: .production,
+        autoTrackCategories: [.lifecycle],
+        logLevel: .warning
+    )
+```
+
+**UIKit / manual** — call `Galva.configure(apiKey:)` **once**, as early as possible (`application(_:didFinishLaunchingWithOptions:)`), and forward deep links with `Galva.handleOpenURL(_:)`. Subsequent `configure` calls are ignored with a warning.
 
 ```swift
 Galva.configure(
@@ -126,6 +138,8 @@ Galva.configure(
     logLevel: .warning
 )
 ```
+
+Both take the same parameters (`.galvaConfigure` mirrors `configure`):
 
 | Parameter | Default | Notes |
 |---|---|---|
@@ -325,6 +339,42 @@ func application(_ application: UIApplication,
 That's it. The token is **device-scoped**: Galva stores it and automatically keeps it associated with whoever is identified. You don't re-send it on login or logout — after `AppUser.identify(...)` or `AppUser.logOut()` the SDK re-registers the same token for the new user on its own, so every user the device serves stays reachable.
 
 Requesting notification permission and registering with APNs (`UNUserNotificationCenter` / `registerForRemoteNotifications()`) stays in your hands — Galva never prompts on your behalf.
+
+---
+
+## Deep linking
+
+When a user taps an email or push that links into your app, Galva can open the targeted message for you. Forward opened URLs to `Galva.handleOpenURL(_:)`.
+
+**SwiftUI** — already wired. `.galvaConfigure(...)` attaches `onOpenURL` for you, so there's nothing else to do.
+
+**UIKit / manual** — forward the URL, and use the return value to fall through to your own routing:
+
+```swift
+func application(_ app: UIApplication, open url: URL,
+                options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+    if Galva.handleOpenURL(url) { return true }   // Galva handled a gv… link
+    return myRouter.open(url)                      // your app's own links continue here
+}
+```
+
+`handleOpenURL` is **scheme-scoped**: it claims a URL only when the scheme starts with `gv` (your app's Galva link prefix) and returns `true`; for anything else — `https`, your own `myapp://`, `mailto:` — it returns `false` immediately and leaves the URL untouched. Adding Galva never swallows your existing links.
+
+You don't author these URLs — Galva generates them when a workflow targets a user. The shipped route is `gv…://openCommunication?communicationId=…`, which opens that communication through the same in-app message flow (the SDK resolves the payload, downloads the bundle, and renders the `WKWebView`). All query parameters ride along into the page, so a tap carries its campaign context with it.
+
+**Register the scheme** so iOS routes these URLs to your app — add your `gv…` scheme under **Target → Info → URL Types** (or in `Info.plist`):
+
+```xml
+<key>CFBundleURLTypes</key>
+<array>
+  <dict>
+    <key>CFBundleURLSchemes</key>
+    <array><string>gvYOURKEY</string></array>
+  </dict>
+</array>
+```
+
+> Your exact scheme is shown in the [Galva dashboard](https://galva.io) alongside your API key.
 
 ---
 

@@ -545,6 +545,39 @@ final class SDKCore {
         await createEndpoint(.pushNotification(platform: .apns, token: token))
     }
 
+    // MARK: Deep links
+
+    /// Router for incoming Galva deep links, forwarded from
+    /// `Galva.handleOpenURL(_:)` (auto-attached by the SwiftUI
+    /// `.galvaConfigure(...)` modifier, or called manually from UIKit). The
+    /// caller has already confirmed the `gv` scheme; here we parse the URL
+    /// into a typed `DeepLink` and dispatch on the case. Each route's handler
+    /// lives in its own `DeepLink+<Route>.swift` extension — add a `case` to
+    /// `DeepLink` + a handler to support a new path.
+    ///
+    /// On a parse failure we log the detailed reason (unknown action, missing
+    /// parameter, …) so a misconfigured campaign link is debuggable — but only
+    /// the scheme + reason, never the full URL or parameter values, which can
+    /// carry tokens.
+    func handleOpenURL(_ url: URL) async {
+        switch DeepLink.parse(url) {
+        case .success(let link):
+            switch link {
+            case let .openCommunication(communicationId, parameters):
+                logger.info(.lifecycle, "deep link", metadata: [
+                    "action": DeepLink.Route.openCommunication,
+                ])
+                await handleOpenCommunication(communicationId: communicationId,
+                                              parameters: parameters)
+            }
+        case .failure(let reason):
+            logger.warning(.lifecycle, "deep link ignored", metadata: [
+                "scheme": url.scheme ?? "<none>",
+                "reason": reason.description,
+            ])
+        }
+    }
+
     // MARK: Identify / Logout
 
     func identify(
@@ -781,7 +814,11 @@ final class SDKCore {
     #if canImport(UIKit) && canImport(WebKit)
     /// Drive the WebView overlay for a single message. Throws if the
     /// SDK is not configured or the bundle / payload can't be resolved.
-    func showInAppMessage(_ message: InAppMessages.Message, in scene: UIWindowScene) async throws {
+    func showInAppMessage(
+        _ message: InAppMessages.Message,
+        in scene: UIWindowScene? = nil,
+        deepLinkParameters: [String: String] = [:]
+    ) async throws {
         guard configured,
               let manager = inAppMessageManager,
               let bundleCache,
@@ -791,13 +828,14 @@ final class SDKCore {
         let snapshotLogger = logger
 
         // Snapshot the current StoreKit product summary on the GalvaActor
-        // BEFORE hopping to MainActor — the prefetcher is actor-isolated
-        // and the WebView needs the JSON in hand to install the
-        // `window.galvaProducts` user script at .atDocumentStart.
+        // BEFORE hopping to MainActor — the prefetcher is actor-isolated.
+        // It crosses as `[String: AnyJSONValue]` (a Sendable, structured JSON
+        // value), NOT a pre-serialized string: the presenter / factory owns
+        // serialization at the `window.galvaProducts` injection boundary.
         #if canImport(StoreKit)
-        let productsJSON = storeKitPrefetcher?.currentSummaryJSON() ?? "{}"
+        let products = storeKitPrefetcher?.currentSummaryObject() ?? [:]
         #else
-        let productsJSON = "{}"
+        let products: [String: AnyJSONValue] = [:]
         #endif
 
         // Snapshot the prefetcher reference too — it crosses the hop as
@@ -833,7 +871,12 @@ final class SDKCore {
                 self.presenter = presenter
             }
             return presenter
-        }.show(message: message, in: scene, prefetchedProductsJSON: productsJSON)
+        }.show(
+            message: message,
+            in: scene,
+            prefetchedProducts: products,
+            deepLinkParameters: deepLinkParameters
+        )
     }
 
     /// SwiftUI entry point. Resolves the message payload, downloads the
@@ -880,12 +923,14 @@ final class SDKCore {
         }
 
         // 3. Snapshot StoreKit products + prefetcher reference on the
-        //    GalvaActor before crossing to MainActor.
+        //    GalvaActor before crossing to MainActor. Products cross as a
+        //    Sendable `[String: AnyJSONValue]`; the factory serializes them
+        //    at the `window.galvaProducts` injection boundary.
         #if canImport(StoreKit)
-        let productsJSON = storeKitPrefetcher?.currentSummaryJSON() ?? "{}"
+        let products = storeKitPrefetcher?.currentSummaryObject() ?? [:]
         let prefetcher = self.storeKitPrefetcher
         #else
-        let productsJSON = "{}"
+        let products: [String: AnyJSONValue] = [:]
         #endif
 
         // 4. Mark active so the bridge's getPageContext / getMessageData
@@ -903,7 +948,7 @@ final class SDKCore {
                 identity: identity,
                 storeKitPrefetcher: prefetcher,
                 host: host,
-                prefetchedProductsJSON: productsJSON,
+                prefetchedProducts: products,
                 logger: snapshotLogger
             )
             #else
@@ -911,7 +956,7 @@ final class SDKCore {
                 messageManager: manager,
                 identity: identity,
                 host: host,
-                prefetchedProductsJSON: productsJSON,
+                prefetchedProducts: products,
                 logger: snapshotLogger
             )
             #endif

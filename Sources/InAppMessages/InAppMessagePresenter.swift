@@ -108,18 +108,31 @@ final class InAppMessagePresenter: NSObject {
     ///
     /// - Parameters:
     ///   - message: The message to render.
-    ///   - scene: Foreground scene to attach the sheet to.
-    ///   - prefetchedProductsJSON: JSON object (as a string) keyed by
-    ///     StoreKit `productId`. Injected into the WebView as
+    ///   - scene: the scene to present on. Pass `nil` (the default, used by
+    ///     the deep-link path) to present on the app's foreground-active
+    ///     `UIWindowScene`, resolved here on the main actor — that way callers
+    ///     that don't already hold a scene (e.g. a `gv://` URL open) don't have
+    ///     to send a non-`Sendable` `UIWindowScene` across an actor hop.
+    ///   - prefetchedProducts: StoreKit product summary keyed by `productId`,
+    ///     as structured `AnyJSONValue`s. Injected into the WebView as
     ///     `window.galvaProducts` at `.atDocumentStart` so the bundle has
-    ///     localized pricing + display copy available before any of its
-    ///     own JavaScript runs. Pass `"{}"` when nothing's been
-    ///     pre-fetched yet — the bundle is expected to handle empty.
+    ///     localized pricing + display copy before any of its own JavaScript
+    ///     runs. Pass `[:]` when nothing's pre-fetched — the bundle handles an
+    ///     empty catalog. Serialized to JSON by the factory, not the caller.
+    ///   - deepLinkParameters: the originating deep link's query parameters,
+    ///     injected as `window.galvaDeepLinkParams`. `[:]` for the normal
+    ///     stream-driven path (no originating URL).
     func show(
         message: InAppMessages.Message,
-        in scene: UIWindowScene,
-        prefetchedProductsJSON: String = "{}"
+        in scene: UIWindowScene? = nil,
+        prefetchedProducts: [String: AnyJSONValue] = [:],
+        deepLinkParameters: [String: String] = [:]
     ) async throws {
+        guard let scene = scene ?? Self.activeWindowScene() else {
+            logger.warning(.identity, "show(in:) — no foreground UIWindowScene to present on",
+                           metadata: ["messageId": message.id])
+            throw InAppMessageError.notConfigured
+        }
         if currentMessageId == message.id {
             logger.debug(.identity, "show(in:) ignored — message already presenting",
                          metadata: ["messageId": message.id])
@@ -160,7 +173,8 @@ final class InAppMessagePresenter: NSObject {
         await messageManager.setActiveMessageId(message.id)
         currentMessageId = message.id
         let (webView, bridge) = makeWebViewAndBridge(
-            prefetchedProductsJSON: prefetchedProductsJSON
+            prefetchedProducts: prefetchedProducts,
+            deepLinkParameters: deepLinkParameters
         )
         self.bridge = bridge
         let vc = InAppMessageViewController(
@@ -203,7 +217,8 @@ final class InAppMessagePresenter: NSObject {
     // MARK: - Internals
 
     private func makeWebViewAndBridge(
-        prefetchedProductsJSON: String
+        prefetchedProducts: [String: AnyJSONValue],
+        deepLinkParameters: [String: String]
     ) -> (WKWebView, NativeBridge) {
         // Both UIKit and SwiftUI presentation paths share the same
         // WebView + bridge construction; the factory keeps the two in
@@ -214,7 +229,8 @@ final class InAppMessagePresenter: NSObject {
             identity: identity,
             storeKitPrefetcher: storeKitPrefetcher,
             host: self,
-            prefetchedProductsJSON: prefetchedProductsJSON,
+            prefetchedProducts: prefetchedProducts,
+            deepLinkParameters: deepLinkParameters,
             logger: logger
         )
         #else
@@ -222,7 +238,8 @@ final class InAppMessagePresenter: NSObject {
             messageManager: messageManager,
             identity: identity,
             host: self,
-            prefetchedProductsJSON: prefetchedProductsJSON,
+            prefetchedProducts: prefetchedProducts,
+            deepLinkParameters: deepLinkParameters,
             logger: logger
         )
         #endif
@@ -278,6 +295,15 @@ final class InAppMessagePresenter: NSObject {
     }
 
     // MARK: - Host VC discovery
+
+    /// The app's foreground-active window scene (falling back to any
+    /// connected window scene). Used by the deep-link path, which has no
+    /// developer-supplied scene. MainActor-isolated — the presenter is
+    /// `@MainActor`, so reading `UIApplication.shared` here is safe.
+    static func activeWindowScene() -> UIWindowScene? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+    }
 
     private func topViewController(for scene: UIWindowScene) -> UIViewController? {
         let keyWindow = scene.windows.first { $0.isKeyWindow } ?? scene.windows.first
