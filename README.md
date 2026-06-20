@@ -348,17 +348,39 @@ When a user taps an email or push that links into your app, Galva can open the t
 
 **SwiftUI** — already wired. `.galvaConfigure(...)` attaches `onOpenURL` for you, so there's nothing else to do.
 
-**UIKit / manual** — forward the URL, and use the return value to fall through to your own routing:
+**UIKit** — a `gv://` link can arrive through four delegate methods (cold launch + warm, App- or Scene-based) and the URL lives in a different container in each. Galva mirrors every one, so forwarding is a near-copy-paste of the method you're in:
+
+| When | Delegate method | Forward with |
+|---|---|---|
+| Warm, no scenes | `application(_:open:options:)` | `Galva.application(app, open: url, options: options)` |
+| Cold, no scenes | `application(_:didFinishLaunchingWithOptions:)` | `Galva.application(app, didFinishLaunchingWithOptions: launchOptions)` |
+| Cold, scenes | `scene(_:willConnectTo:options:)` | `Galva.scene(scene, willConnectTo: session, options: connectionOptions)` |
+| Warm, scenes | `scene(_:openURLContexts:)` | `Galva.scene(scene, openURLContexts: URLContexts)` |
 
 ```swift
+// SceneDelegate — modern, scene-based apps
+func scene(_ scene: UIScene, willConnectTo session: UISceneSession,
+           options connectionOptions: UIScene.ConnectionOptions) {
+    Galva.scene(scene, willConnectTo: session, options: connectionOptions)   // cold launch
+}
+func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+    Galva.scene(scene, openURLContexts: URLContexts)                          // warm open
+}
+
+// AppDelegate — non-scene apps
+func application(_ app: UIApplication,
+                 didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+    Galva.application(app, didFinishLaunchingWithOptions: launchOptions)      // cold launch
+    return true
+}
 func application(_ app: UIApplication, open url: URL,
                 options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-    if Galva.handleOpenURL(url) { return true }   // Galva handled a gv… link
-    return myRouter.open(url)                      // your app's own links continue here
+    if Galva.application(app, open: url, options: options) { return true }    // warm; Galva took it
+    return myRouter.open(url)                                                 // your own links continue here
 }
 ```
 
-`handleOpenURL` is **scheme-scoped**: it claims a URL only when the scheme starts with `gv` (your app's Galva link prefix) and returns `true`; for anything else — `https`, your own `myapp://`, `mailto:` — it returns `false` immediately and leaves the URL untouched. Adding Galva never swallows your existing links.
+Every forwarder is **scheme-scoped**: Galva claims a URL only when its scheme starts with `gv` (your app's Galva link prefix) and returns `true`; for anything else — `https`, your own `myapp://`, `mailto:` — it returns `false` and leaves the URL untouched. Adding Galva never swallows your existing links. (Prefer one call site? `Galva.handleOpenURL(_ url: URL) -> Bool` is the underlying primitive every mirror funnels into.)
 
 You don't author these URLs — Galva generates them when a workflow targets a user. The shipped route is `gv…://openCommunication?communicationId=…`, which opens that communication through the same in-app message flow (the SDK resolves the payload, downloads the bundle, and renders the `WKWebView`). All query parameters ride along into the page, so a tap carries its campaign context with it.
 
@@ -447,6 +469,13 @@ Crank up verbosity while integrating:
 
 ```swift
 Galva.configure(apiKey: "...", logLevel: .debug)
+```
+
+For diagnostics screens or support tickets, read the installed SDK version
+synchronously:
+
+```swift
+Galva.sdkVersion
 ```
 
 At `.debug`, the SDK also **forwards the in-app message bundle's `console.*` output** (and uncaught JS errors) into the native log stream — so you can debug a hosted message from Xcode without attaching Safari Web Inspector.

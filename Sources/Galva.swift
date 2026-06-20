@@ -12,7 +12,7 @@
 //
 //      @main struct MyApp: App {
 //          init() {
-//              Galva.configure(apiKey: "gv_pub_...")
+//              Galva.configure(apiKey: "pk_live_xxxxxxxx")
 //          }
 //          var body: some Scene { WindowGroup { ContentView() } }
 //      }
@@ -49,6 +49,14 @@ import UIKit
 /// Call `Galva.configure(apiKey:)` once at app launch before any tracking
 /// calls. Subsequent calls are ignored with a warning.
 public enum Galva {
+
+    /// Current SDK semantic version, matching the release tag and the
+    /// `x-sdk-version` request header suffix.
+    ///
+    /// Useful for diagnostics screens and support reports:
+    ///
+    ///     let sdkVersion = Galva.sdkVersion
+    public static let sdkVersion = SDKConstants.version
     
     // MARK: Environment
     
@@ -192,7 +200,7 @@ public enum Galva {
     ///   - apiKey: Your Galva publishable API key. The server resolves your
     ///     `appId` and environment from it.
     ///   - autoTrackCategories: Which categories of events the SDK should
-    ///     collect automatically. Default: `[.lifecycle, .transactions]`.
+    ///     collect automatically. Default: `[.lifecycle]`.
     ///   - logLevel: Minimum severity to log. Default: `.warning`.
     ///   - logger: Optional custom logger. When `nil` (default), the SDK
     ///     writes to `os.Logger(subsystem: "co.galva.sdk", category: …)` —
@@ -205,7 +213,7 @@ public enum Galva {
     /// Example:
     ///
     ///     Galva.configure(
-    ///         apiKey: "gv_pub_xxx",
+    ///         apiKey: "pk_live_xxx",
     ///         environment: .production,
     ///         autoTrackCategories: [.lifecycle],
     ///         logLevel: .info
@@ -347,10 +355,12 @@ public enum Galva {
         }
     }
 
-    /// Hand an incoming URL to Galva — call this for every URL your app opens
-    /// (deep links, universal links). SwiftUI apps using the
-    /// `.galvaConfigure(...)` modifier get this wired up automatically (the
-    /// modifier attaches `onOpenURL`), so they never call it directly.
+    /// Hand an incoming URL to Galva. SwiftUI apps using `.galvaConfigure(...)`
+    /// get this wired up automatically (the modifier attaches `onOpenURL`), so
+    /// they never call it directly. UIKit apps forward from their App / Scene
+    /// delegates — the `Galva.application(...)` / `Galva.scene(...)` mirrors in
+    /// `Galva+OpenURL.swift` cover every entry point (cold + warm) and call
+    /// this under the hood.
     ///
     /// - Returns: `true` if this is a Galva deep link (scheme begins with
     ///   `gv`) that the SDK has claimed, `false` otherwise. Galva only
@@ -375,6 +385,22 @@ public enum Galva {
             await SDKCore.shared.handleOpenURL(url)
         }
         return true
+    }
+
+    /// Forward a batch of opened URLs (e.g. the set delivered to a scene, or a
+    /// cold-launch option). Each is run through `handleOpenURL(_:)`; Galva
+    /// claims only its own `gv…` URLs and ignores the rest.
+    ///
+    /// Shared by the UIKit App / Scene delegate forwarders in
+    /// `Galva+OpenURL.swift`. Platform-agnostic (takes plain `URL`s) so the
+    /// extraction logic is host-testable without UIKit objects.
+    ///
+    /// - Returns: `true` if Galva claimed **at least one** of `urls`.
+    @discardableResult
+    static func handleOpenURLs(_ urls: [URL]) -> Bool {
+        var claimed = false
+        for url in urls where handleOpenURL(url) { claimed = true }
+        return claimed
     }
 }
 

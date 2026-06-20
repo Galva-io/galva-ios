@@ -15,6 +15,9 @@
 import Foundation
 @testable import Galva
 import XCTest
+#if canImport(UIKit)
+import UIKit
+#endif
 
 final class DeepLinkTests: XCTestCase {
 
@@ -117,6 +120,53 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertFalse(Galva.handleOpenURL(URL(string: "https://example.com")!))
         XCTAssertFalse(Galva.handleOpenURL(URL(string: "myapp://openCommunication")!))
     }
+
+    // MARK: - Batch forwarder (host-testable)
+
+    func test_handleOpenURLs_claimsWhenAnyIsGalva() {
+        XCTAssertTrue(Galva.handleOpenURLs([
+            URL(string: "https://example.com")!,
+            URL(string: "gvabc://openCommunication?communicationId=x")!,
+        ]), "claims when at least one URL is a gv link")
+    }
+
+    func test_handleOpenURLs_falseWhenNoneAreGalva() {
+        XCTAssertFalse(Galva.handleOpenURLs([
+            URL(string: "https://example.com")!,
+            URL(string: "myapp://whatever")!,
+        ]))
+    }
+
+    func test_handleOpenURLs_emptyIsFalse() {
+        XCTAssertFalse(Galva.handleOpenURLs([]))
+    }
+
+    // MARK: - UIKit delegate mirrors
+    //
+    // `scene(_:openURLContexts:)` / `scene(_:willConnectTo:options:)` take
+    // UIOpenURLContext / UIScene.ConnectionOptions, which have no public
+    // initializers — they're a trivial `$0.url` map into `handleOpenURLs`
+    // (tested above), so they're covered transitively. The two `application(…)`
+    // mirrors take a `UIApplication` we can supply (`.shared`) + a plain
+    // dictionary, so they're asserted directly.
+
+    #if canImport(UIKit)
+    @MainActor
+    func test_application_open_mirrorsHandleOpenURL() {
+        XCTAssertTrue(Galva.application(
+            .shared, open: URL(string: "gvabc://openCommunication?communicationId=x")!))
+        XCTAssertFalse(Galva.application(
+            .shared, open: URL(string: "https://example.com")!))
+    }
+
+    @MainActor
+    func test_application_didFinishLaunching_extractsLaunchURL() {
+        let gv = URL(string: "gvabc://openCommunication?communicationId=x")!
+        XCTAssertTrue(Galva.application(.shared, didFinishLaunchingWithOptions: [.url: gv]))
+        XCTAssertFalse(Galva.application(.shared, didFinishLaunchingWithOptions: [:]))
+        XCTAssertFalse(Galva.application(.shared, didFinishLaunchingWithOptions: nil))
+    }
+    #endif
 
     // MARK: - Helpers
 
