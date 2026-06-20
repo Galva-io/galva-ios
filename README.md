@@ -115,7 +115,7 @@ ContentView()
     .galvaConfigure(
         apiKey: "pk_live_xxxxxxxx",
         environment: .production,
-        autoTrackCategories: [.lifecycle],
+        autoTrackCategories: [.lifecycle, .appleSearchAds],
         logLevel: .warning
     )
 ```
@@ -126,7 +126,7 @@ ContentView()
 Galva.configure(
     apiKey: "pk_live_xxxxxxxx",
     environment: .production,
-    autoTrackCategories: [.lifecycle],
+    autoTrackCategories: [.lifecycle, .appleSearchAds],
     logLevel: .warning
 )
 ```
@@ -137,7 +137,7 @@ Both take the same parameters (`.galvaConfigure` mirrors `configure`):
 |---|---|---|
 | `apiKey` | — | Your publishable key. The server resolves your app + environment from it. |
 | `environment` | `.production` | `.production` (`pk_live_*`), `.development` (`pk_test_*`), or `.custom(apiBaseURL:webviewBundleCDN:)`. Environments are fully isolated. |
-| `autoTrackCategories` | `[.lifecycle]` | `.lifecycle` auto-emits `session_start` (cold start + foreground after 30 min idle). Pass `[]` to disable. |
+| `autoTrackCategories` | `[.lifecycle, .appleSearchAds]` | `.lifecycle` auto-emits `session_start` (cold start + foreground after 30 min idle); `.appleSearchAds` resolves Apple Search Ads attribution into `$gv_asa_*` traits (see below). Pass `[]` to disable all, or e.g. `[.lifecycle]` to keep one. |
 | `logLevel` | `.warning` | `.debug` `.info` `.notice` `.warning` `.error` `.fault` `.off`. Use `.debug` while integrating. |
 | `logger` | `nil` (os.Logger) | Optional custom `GalvaLogger` sink — see [Debugging](#debugging). |
 
@@ -403,6 +403,18 @@ AppUser.set(.email, "peter@example.com")
 ```
 
 Validation is basic RFC 5322: exactly one `@` with non-empty local + domain, a dotted domain, no whitespace. An invalid address is dropped before sending (the rest of the identify still goes through).
+
+---
+
+## Apple Search Ads attribution
+
+On by default (the `.appleSearchAds` auto-track category). On first launch the SDK reads the install's AdServices attribution token and resolves it against Apple's API, then attaches the campaign fields to the user as `$gv_asa_*` traits:
+
+`$gv_asa_orgId` · `$gv_asa_campaignId` · `$gv_asa_conversionType` · `$gv_asa_claimType` · `$gv_asa_adGroupId` · `$gv_asa_countryOrRegion` · `$gv_asa_keywordId` · `$gv_asa_adId` · `$gv_asa_supplyPlacement`
+
+You don't write any code — it's automatic when the **AdServices** framework is available (iOS 14.3+; a silent no-op otherwise, e.g. the Simulator). Resolution is one-shot per install and **persisted**, so once it's resolved the traits ride along on every `identify(...)` — a user who signs in later still carries their acquisition source. Per Apple's guidance the SDK retries a not-yet-available token (404) up to 3× at 5-second intervals, and a temporary server error (5xx) on the next launch. Honors `Galva.setOptOut(true)`.
+
+Opt out by omitting it: `autoTrackCategories: [.lifecycle]`.
 
 ---
 

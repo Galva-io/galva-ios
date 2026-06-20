@@ -115,7 +115,7 @@ public enum Galva {
     /// Auto-tracking categories. Pass an `OptionSet` to `configure(...)` to
     /// opt into automatic event collection for the listed categories.
     ///
-    /// Default: `[.lifecycle]`
+    /// Default: `[.lifecycle, .appleSearchAds]`
     public struct AutoTrackCategory: OptionSet, Sendable {
         public var rawValue: UInt
         public init(rawValue: UInt) { self.rawValue = rawValue }
@@ -135,6 +135,20 @@ public enum Galva {
         /// `device_locale`, `os_version`, `app_version`, `sdk_version`.
         /// `device_country` is derived server-side from the request IP.
         public static let lifecycle: AutoTrackCategory = .init(rawValue: 1 << 0)
+
+        /// Resolve **Apple Search Ads** attribution once per install via the
+        /// AdServices framework and attach the campaign fields to the user as
+        /// `$gv_asa_*` traits (`$gv_asa_campaignId`, `$gv_asa_keywordId`,
+        /// `$gv_asa_adGroupId`, …).
+        ///
+        /// On first launch the SDK reads `AAAttribution.attributionToken()`
+        /// and resolves it against Apple's AdServices API, retrying a 404 per
+        /// Apple's guidance (up to 3×, 5s apart) and a 5xx on the next launch.
+        /// The resolved traits are persisted and re-attached to every
+        /// `identify(...)`, so a later login keeps the attribution. Requires
+        /// the AdServices framework (iOS 14.3+); a silent no-op where it isn't
+        /// available (e.g. the Simulator). Honors `setOptOut(_:)`.
+        public static let appleSearchAds: AutoTrackCategory = .init(rawValue: 1 << 1)
     }
     
     // MARK: LogLevel
@@ -230,7 +244,7 @@ public enum Galva {
     public static func configure(
         apiKey: String,
         environment: Environment = .production,
-        autoTrackCategories: AutoTrackCategory = [.lifecycle],
+        autoTrackCategories: AutoTrackCategory = [.lifecycle, .appleSearchAds],
         logLevel: LogLevel = .warning,
         logger: (any GalvaLogger)? = nil
     ) {

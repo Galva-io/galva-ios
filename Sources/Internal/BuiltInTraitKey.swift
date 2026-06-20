@@ -50,4 +50,10 @@ enum BuiltInTraitKey {
     /// `$gv_appAccountToken` — StoreKit 2 `appAccountToken` UUID
     /// (lower-cased, stringified). Attached by `identify(appAccountToken:)`.
     static let appAccountToken = "$gv_appAccountToken"
+
+    /// `$gv_asa_` — prefix for Apple Search Ads attribution fields, e.g.
+    /// `$gv_asa_campaignId`, `$gv_asa_keywordId`. Resolved once per install
+    /// from AdServices and re-attached to every identify. See
+    /// `AppleSearchAdsAttribution`.
+    static let appleSearchAdsPrefix = "$gv_asa_"
 }

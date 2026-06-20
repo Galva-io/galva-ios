@@ -22,7 +22,9 @@ final class GalvaMockURLProtocol: URLProtocol {
 
     override class func canInit(with request: URLRequest) -> Bool {
         guard let host = request.url?.host else { return false }
-        return host.hasSuffix("galva.test")
+        // Also claim Apple's AdServices host so the now-default-on Apple Search
+        // Ads resolution stays hermetic (no external network in tests).
+        return host.hasSuffix("galva.test") || host == "api-adservices.apple.com"
     }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -35,6 +37,14 @@ final class GalvaMockURLProtocol: URLProtocol {
         let host = url.host ?? ""
         let path = url.path
         let method = (request.httpMethod ?? "GET").uppercased()
+
+        // Apple Search Ads attribution (AdServices). Return a clean
+        // "not attributed" so resolution completes once with no external call
+        // and no extra identify upload (keeps the other E2E assertions stable).
+        if host == "api-adservices.apple.com" {
+            finish(status: 200, json: #"{"attribution":false}"#)
+            return
+        }
 
         // WebView bundle download (no auth, GET <cdn>/<version>.html).
         if host == "cdn.galva.test" {

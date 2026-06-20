@@ -58,7 +58,7 @@ public extension View {
     func galvaConfigure(
         apiKey: String,
         environment: Galva.Environment = .production,
-        autoTrackCategories: Galva.AutoTrackCategory = [.lifecycle],
+        autoTrackCategories: Galva.AutoTrackCategory = [.lifecycle, .appleSearchAds],
         logLevel: Galva.LogLevel = .warning,
         logger: (any GalvaLogger)? = nil
     ) -> some View {

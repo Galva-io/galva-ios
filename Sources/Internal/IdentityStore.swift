@@ -23,6 +23,8 @@ final class IdentityStore {
     private static let endUserIdKey         = "co.galva.endUserId"
     private static let appAccountTokenKey   = "co.galva.appAccountToken"
     private static let deviceTokenKey       = "co.galva.deviceToken"
+    private static let asaResolvedKey       = "co.galva.asaResolved"
+    private static let asaTraitsKey         = "co.galva.asaTraits"
 
     private(set) var anonymousId: String
     private(set) var endUserId: String?
@@ -41,6 +43,17 @@ final class IdentityStore {
     /// attribution token from `anonymousId` (see
     /// `purchaseAttributionToken` below).
     private(set) var appAccountToken: UUID?
+
+    /// Whether Apple Search Ads attribution has been resolved — a 200 from
+    /// AdServices, whether or not the install was attributed. Device-scoped
+    /// and one-shot per install: persisted, **not** cleared on `logOut()` /
+    /// `rotateAnonymousId()`, so the SDK never re-fetches.
+    private(set) var appleSearchAdsResolved: Bool
+
+    /// Resolved `$gv_asa_*` attribution traits (empty when the install wasn't
+    /// attributed). Re-attached to every identify so a later login carries the
+    /// install's Apple Search Ads attribution.
+    private(set) var appleSearchAdsTraits: [String: AnyJSONValue]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -65,6 +78,26 @@ final class IdentityStore {
             appAccountToken = UUID(uuidString: raw)
         }
         deviceToken = defaults.string(forKey: Self.deviceTokenKey)
+
+        appleSearchAdsResolved = defaults.bool(forKey: Self.asaResolvedKey)
+        if let data = defaults.data(forKey: Self.asaTraitsKey),
+           let decoded = try? JSONDecoder().decode([String: AnyJSONValue].self, from: data) {
+            appleSearchAdsTraits = decoded
+        } else {
+            appleSearchAdsTraits = [:]
+        }
+    }
+
+    /// Persist the Apple Search Ads resolution outcome. Device-scoped — like
+    /// `deviceToken`, deliberately survives `logOut()` so we never re-fetch
+    /// install-level attribution.
+    func setAppleSearchAds(resolved: Bool, traits: [String: AnyJSONValue]) {
+        appleSearchAdsResolved = resolved
+        appleSearchAdsTraits = traits
+        defaults.set(resolved, forKey: Self.asaResolvedKey)
+        if let data = try? JSONEncoder().encode(traits) {
+            defaults.set(data, forKey: Self.asaTraitsKey)
+        }
     }
 
     /// Persist (or clear) the device's push token. Device-scoped — survives

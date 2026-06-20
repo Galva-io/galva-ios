@@ -331,6 +331,16 @@ final class SDKCore {
         // identify() call.
         await identify(userId: nil, appAccountToken: nil, traits: nil)
 
+        // Resolve Apple Search Ads attribution (once per install) off the
+        // configure path — it makes a network round-trip + may sleep between
+        // 404 retries, so it must not block startup. The resolver persists the
+        // result and emits an identify with the $gv_asa_* traits when matched.
+        if autoTrack.contains(.appleSearchAds) {
+            Task { @GalvaActor [weak self] in
+                await self?.resolveAppleSearchAdsIfNeeded()
+            }
+        }
+
         // If we restored cached init data, apply its server-tuned batch
         // window to the freshly-built queue immediately — that way the
         // first session honors yesterday's tuning instead of running on
@@ -701,6 +711,14 @@ final class SDKCore {
         // supplied values win — host apps with an in-app language/timezone
         // picker can pass `.timezone` / `.languageCode` to override.
         for (key, value) in Self.deviceTraits() {
+            if mergedTraits[key] == nil {
+                mergedTraits[key] = value
+            }
+        }
+        // Re-attach resolved Apple Search Ads traits ($gv_asa_*) on every
+        // identify so a later login carries the install's attribution. Distinct
+        // key namespace, so this never collides with caller / device traits.
+        for (key, value) in identity.appleSearchAdsTraits {
             if mergedTraits[key] == nil {
                 mergedTraits[key] = value
             }
