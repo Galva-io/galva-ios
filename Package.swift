@@ -14,20 +14,12 @@ let package = Package(
         .macOS(.v12),
     ],
     products: [
-        // Default product for SPM source consumers — static linking,
-        // zero dynamic-load overhead at app launch.
+        // The one and only product. Galva is distributed exclusively via
+        // Swift Package Manager — no prebuilt XCFramework, no separate
+        // dynamic variant. Linking (static vs dynamic) is left to SPM /
+        // the consuming target so there's a single, unambiguous `Galva`.
         .library(
             name: "Galva",
-            targets: ["Galva"]
-        ),
-
-        // Dynamic variant used ONLY by `scripts/build-xcframework.sh`
-        // to produce the prebuilt `Galva.xcframework`. SPM consumers
-        // never pick this product (the default name "Galva" wins). The
-        // `_dynamic` suffix is a marker, not part of the public API.
-        .library(
-            name: "Galva_dynamic",
-            type: .dynamic,
             targets: ["Galva"]
         ),
     ],

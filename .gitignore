@@ -10,12 +10,6 @@ Packages/
 *.xcworkspace/xcuserdata/
 DerivedData/
 
-# XCFramework build outputs (produced by scripts/build-xcframework.sh)
-build/
-*.xcframework
-*.xcframework.zip
-*.xcframework.zip.checksum
-
 # Test artefacts
 *.xctestplan.xcuserstate
 default.profraw
@@ -45,3 +39,5 @@ Examples/**/.tuist/
 Examples/**/*.xcconfig.local
 Examples/**/*.xcresult
 Examples/**/perf-report.md
+
+build/

@@ -12,7 +12,7 @@ Open source · MIT-licensed. The Galva platform is hosted — [create a free acc
 |---|---|
 | **Runtime** | iOS 15+ · macOS 12+ |
 | **Build** | Xcode 26+ (the StoreKit offer path uses an iOS 26 SDK API that's back-deployed to iOS 15 at runtime) |
-| **Distribution** | Swift Package Manager · prebuilt XCFramework |
+| **Distribution** | Swift Package Manager (only) |
 | **Dependencies** | None — system frameworks only |
 | **Threading** | Every public call is fire-and-forget and safe from any thread |
 
@@ -100,15 +100,7 @@ targets: [
 ]
 ```
 
-### Prebuilt XCFramework
-
-For teams that vendor binaries (no SPM resolution at build time, mixed-build pipelines):
-
-1. Download `Galva.xcframework.zip` from the [latest release](https://github.com/Galva-io/galva-ios/releases).
-2. Unzip and drag `Galva.xcframework` into your project.
-3. Under your app target's **General → Frameworks, Libraries, and Embedded Content**, set it to **Embed & Sign**.
-
-Each release also ships a ready-to-paste `.binaryTarget(url:checksum:)` snippet if you'd rather pin the binary via SPM. CocoaPods is not supported.
+Swift Package Manager is the only supported distribution — there's no prebuilt XCFramework and no CocoaPods podspec, so there's exactly one `Galva` to import.
 
 > **Build requirement:** Galva builds with **Xcode 26+**. The StoreKit promotional-offer path uses `Product.PurchaseOption.promotionalOffer(_:compactJWS:)`, an iOS 26 SDK symbol that is back-deployed (`@backDeployed`) to **run on iOS 15+** — so your app's deployment target stays at iOS 15, but the SDK must be *compiled* with the iOS 26 SDK.
 
