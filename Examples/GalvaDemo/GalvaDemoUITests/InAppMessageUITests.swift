@@ -58,8 +58,18 @@ final class InAppMessageUITests: XCTestCase {
         let app = launchApp(scenario: .showInAppMessage)
         tapControl(app, "checkMessages")
 
+        // Wait for the resolved title to render — not just for the close
+        // button to enter the a11y tree. The button appears the instant the
+        // WebView is revealed on `ready()`, but on a slow/contended runner
+        // that can precede the WebView becoming reliably hit-testable, so a
+        // tap fired then never triggers the bundle's `onclick`. The title
+        // ("E2E Offer") only renders after a full getMessageData bridge
+        // round-trip, which proves the WebView is booted and interactive.
+        XCTAssertTrue(app.webViews.staticTexts["E2E Offer"].waitForExistence(timeout: 20),
+                      "bundle should render the resolved payload before we dismiss it")
+
         let closeButton = app.webViews.buttons["Close E2E"]
-        XCTAssertTrue(closeButton.waitForExistence(timeout: 20))
+        XCTAssertTrue(closeButton.waitForExistence(timeout: 10))
         closeButton.tap()
         XCTAssertTrue(app.webViews.firstMatch.waitForNonExistence(timeout: 10),
                       "dismiss() should tear down the WebView sheet")

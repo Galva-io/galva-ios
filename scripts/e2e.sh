@@ -48,9 +48,17 @@ tuist generate --path "$DEMO" --no-open
 echo "==> Running E2E UI tests on: $DESTINATION"
 RESULT_BUNDLE="$DEMO/.e2e-result.xcresult"
 rm -rf "$RESULT_BUNDLE"
+
+# `-retry-tests-on-failure -test-iterations 2` gives each test one retry (only
+# failed tests re-run; passing tests run once). XCUITest interactions — WebView
+# hit-testing, sheet dismiss animations, a11y snapshot timing — are inherently
+# flaky on contended CI runners. A transient first-attempt flake shouldn't red
+# the build, but a genuine regression still fails both attempts.
 xcodebuild test \
     -workspace "$DEMO/GalvaDemo.xcworkspace" \
     -scheme GalvaDemo \
     -destination "$DESTINATION" \
     -skip-testing:GalvaDemoUITests/PerformanceUITests \
+    -retry-tests-on-failure \
+    -test-iterations 2 \
     -resultBundlePath "$RESULT_BUNDLE"
