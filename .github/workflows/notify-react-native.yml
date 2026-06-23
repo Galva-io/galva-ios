@@ -1,0 +1,42 @@
+# Notify galva-react-native of a new galva-ios release.
+#
+# galva-react-native consumes the SDK by vendoring a pinned snapshot of
+# `Sources/` into its CocoaPods pod (Galva ships publicly via SPM only —
+# never to the CocoaPods trunk). When a new iOS tag is pushed, fire a
+# repository_dispatch so galva-react-native can open a "bump + re-vendor" PR.
+#
+# Inert until wired: needs an `RN_DISPATCH_TOKEN` secret (a PAT / app token
+# with `contents: write` on the target repo). The step skips cleanly when the
+# secret is absent, so this is safe to merge before the React Native side
+# exists.
+
+name: Notify React Native
+
+on:
+  push:
+    # Fires on every tag. Tighten to your release-tag convention (e.g.
+    # 'v*.*.*') if you also push non-release tags.
+    tags:
+      - '*'
+
+# A new release supersedes any in-flight dispatch for the same tag.
+concurrency:
+  group: notify-rn-${{ github.ref }}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch galva-ios-release to galva-react-native
+        env:
+          GH_TOKEN: ${{ secrets.RN_DISPATCH_TOKEN }}
+          TARGET_REPO: Galva-io/galva-react-native
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "RN_DISPATCH_TOKEN not set — React Native side not wired yet; skipping."
+            exit 0
+          fi
+          echo "Dispatching galva-ios-release (tag=${GITHUB_REF_NAME}) to ${TARGET_REPO}"
+          gh api "repos/${TARGET_REPO}/dispatches" \
+            -f event_type='galva-ios-release' \
+            -F "client_payload[tag]=${GITHUB_REF_NAME}"

@@ -100,7 +100,7 @@ targets: [
 ]
 ```
 
-Swift Package Manager is the only supported distribution — there's no prebuilt XCFramework and no CocoaPods podspec, so there's exactly one `Galva` to import.
+Swift Package Manager is the only distribution for direct iOS integration — no prebuilt XCFramework, no public CocoaPods pod — so there's exactly one `Galva` to import. (React Native apps consume Galva transitively via [`galva-react-native`](https://github.com/Galva-io/galva-react-native), which vendors this source into its own CocoaPods pod; Galva is never published to the CocoaPods trunk.)
 
 > **Build requirement:** Galva builds with **Xcode 26+**. The StoreKit promotional-offer path uses `Product.PurchaseOption.promotionalOffer(_:compactJWS:)`, an iOS 26 SDK symbol that is back-deployed (`@backDeployed`) to **run on iOS 15+** — so your app's deployment target stays at iOS 15, but the SDK must be *compiled* with the iOS 26 SDK.
 
