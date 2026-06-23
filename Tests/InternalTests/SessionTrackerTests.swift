@@ -195,8 +195,11 @@ private actor EmissionRecorder {
         let properties: [String: AnyJSONValue]?
     }
     private(set) var events: [Event] = []
-    func record(_ event: String, _ properties: [String: AnyJSONValue]?) {
-        events.append(.init(name: event, properties: properties))
+    func record(_ event: any AppEvents.Event) {
+        events.append(.init(
+            name: event.eventName,
+            properties: event.attributes?.mapValues { AnyJSONValue($0) }
+        ))
     }
 }
 
@@ -230,8 +233,8 @@ private enum SessionTrackerHarness {
             logger: SilentLogger(),
             contextProvider: contextProvider,
             isOptedOut: isOptedOut,
-            trackHandler: { event, props in
-                await recorder.record(event, props)
+            trackHandler: { event in
+                await recorder.record(event)
             }
         )
         await body(tracker, recorder)

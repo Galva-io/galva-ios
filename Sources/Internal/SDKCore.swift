@@ -305,8 +305,8 @@ final class SDKCore {
                 logger: logger,
                 contextProvider: self.contextProvider ?? ContextProvider(),
                 isOptedOut: { [weak self] in self?.isOptedOut ?? false },
-                trackHandler: { [weak self] event, props in
-                    await self?.track(event: event, properties: props)
+                trackHandler: { [weak self] event in
+                    await self?.track(event)
                 }
             )
         }
@@ -811,6 +811,14 @@ final class SDKCore {
     }
 
     // MARK: Track
+
+    /// Emit a strongly-typed event (`AppEvents.Event`). Mirrors the public
+    /// `AppEvents.track(_:)` but on this instance so internal callers (e.g.
+    /// `SessionTracker` emitting `SessionStartEvent`) go through the typed path.
+    /// Built-in events live in `BuiltInEvents.swift`.
+    func track<E: AppEvents.Event>(_ event: E) async {
+        await track(event: event.eventName, properties: event.attributes?.mapValues { AnyJSONValue($0) })
+    }
 
     func track(event: String, properties: [String: AnyJSONValue]?) async {
         guard !isOptedOut else {

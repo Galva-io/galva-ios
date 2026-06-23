@@ -18,48 +18,41 @@ final class ContextProviderTests: XCTestCase {
 
     // MARK: - session_start property bag
 
-    func test_sessionProperties_deriveFromSnapshot_matchingMessageContext() {
+    func test_sessionStart_deriveFromSnapshot_matchingMessageContext() {
         // `os_version` must come from the captured snapshot
         // (UIDevice.systemVersion shape, e.g. "17.0") — NOT from
         // `ProcessInfo.operatingSystemVersionString` ("Version 17.0 (Build …)").
         let provider = ContextProvider(snapshot: DeviceSnapshot(osVersion: "17.0"))
-        let props = provider.sessionProperties()
+        let event = provider.sessionStartEvent()
         let ctx = provider.currentContext()
 
-        XCTAssertEqual(props["os_version"], .string("17.0"))
+        XCTAssertEqual(event.osVersion, "17.0")
 
         // Every property mirrors the matching field on the context the SAME
         // provider would stamp onto the message — one source of truth.
-        XCTAssertEqual(props["os_version"],    .string(ctx.os?.version ?? ""))
-        XCTAssertEqual(props["device_locale"], .string(ctx.locale ?? ""))
-        XCTAssertEqual(props["app_version"],   .string(ctx.app?.version ?? ""))
-        XCTAssertEqual(props["sdk_version"],   .string(ctx.library?.version ?? ""))
+        XCTAssertEqual(event.osVersion,    ctx.os?.version ?? "")
+        XCTAssertEqual(event.deviceLocale, ctx.locale ?? "")
+        XCTAssertEqual(event.appVersion,   ctx.app?.version ?? "")
+        XCTAssertEqual(event.sdkVersion,   ctx.library?.version ?? "")
     }
 
-    func test_sessionProperties_sdkVersion_matchesConstants() {
-        let props = ContextProvider().sessionProperties()
-        XCTAssertEqual(props["sdk_version"], .string(SDKConstants.version))
+    func test_sessionStart_sdkVersion_matchesConstants() {
+        XCTAssertEqual(ContextProvider().sessionStartEvent().sdkVersion, SDKConstants.version)
     }
 
-    func test_sessionProperties_omitDeviceCountry() {
+    func test_sessionStart_attributesOmitDeviceCountry() {
         // device_country is derived server-side from the request IP and must
         // never appear on the wire.
-        let props = ContextProvider(snapshot: DeviceSnapshot(osVersion: "17.0"))
-            .sessionProperties()
-        XCTAssertNil(props["device_country"])
-        XCTAssertEqual(Set(props.keys),
+        let attributes = ContextProvider(snapshot: DeviceSnapshot(osVersion: "17.0"))
+            .sessionStartEvent().attributes
+        XCTAssertNil(attributes?["device_country"])
+        XCTAssertEqual(Set((attributes ?? [:]).keys),
                        ["device_locale", "os_version", "app_version", "sdk_version"])
     }
 
-    func test_sessionProperties_emptySnapshot_stillEmitsAllKeysAsStrings() {
+    func test_sessionStart_emptySnapshot_osVersionFallsBackToEmptyString() {
         // With no captured snapshot, os_version falls back to "" rather than
-        // dropping the key — keeps the event shape stable.
-        let props = ContextProvider().sessionProperties()
-        XCTAssertEqual(props["os_version"], .string(""))
-        for key in ["device_locale", "os_version", "app_version", "sdk_version"] {
-            guard case .string? = props[key] else {
-                return XCTFail("\(key) missing or not a string")
-            }
-        }
+        // dropping the field — keeps the event shape stable.
+        XCTAssertEqual(ContextProvider().sessionStartEvent().osVersion, "")
     }
 }

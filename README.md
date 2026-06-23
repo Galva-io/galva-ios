@@ -332,6 +332,19 @@ That's it. The token is **device-scoped**: Galva stores it and automatically kee
 
 Requesting notification permission and registering with APNs (`UNUserNotificationCenter` / `registerForRemoteNotifications()`) stays in your hands — Galva never prompts on your behalf.
 
+**Track taps + dismissals** — forward the notification response from your `UNUserNotificationCenterDelegate`:
+
+```swift
+func userNotificationCenter(_ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void) {
+    Galva.userNotificationCenter(center, didReceive: response)   // ← one line
+    completionHandler()
+}
+```
+
+Galva tracks `$gv_notification_tapped` (the notification tap) or `$gv_notification_dismissed` (swipe-to-dismiss), with the notification `id` and the full APNs payload as attributes. It acts **only** on Galva-sent notifications (those carrying `"sender": "galva"` in the payload) — your app's own notifications pass through untouched — and ignores custom action buttons. Honors `Galva.setOptOut(true)`.
+
 ---
 
 ## Deep linking

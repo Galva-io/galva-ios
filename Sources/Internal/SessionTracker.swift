@@ -69,18 +69,17 @@ final class SessionTracker {
     /// `SDKCore.shared.isOptedOut` through the lock-protected mirror.
     private let isOptedOut: @Sendable () -> Bool
 
-    /// `@GalvaActor` async closure that hands the event to the SDK's
-    /// message queue via `SDKCore.track(event:properties:)`. The
-    /// indirection keeps the tracker testable — tests pass a
-    /// `RecordingTrackHandler` that captures emissions.
-    private let trackHandler: @GalvaActor (String, [String: AnyJSONValue]?) async -> Void
+    /// `@GalvaActor` async closure that hands a typed event to the SDK's
+    /// message queue via `SDKCore.track(_:)`. The indirection keeps the
+    /// tracker testable — tests pass a recorder that captures emissions.
+    private let trackHandler: @GalvaActor (any AppEvents.Event) async -> Void
 
     init(
         defaults: UserDefaults = .standard,
         logger: any GalvaLogger,
         contextProvider: ContextProvider = ContextProvider(),
         isOptedOut: @escaping @Sendable () -> Bool,
-        trackHandler: @escaping @GalvaActor (String, [String: AnyJSONValue]?) async -> Void
+        trackHandler: @escaping @GalvaActor (any AppEvents.Event) async -> Void
     ) {
         self.defaults = defaults
         self.logger = logger
@@ -127,7 +126,7 @@ final class SessionTracker {
             "coldStart": isColdStart ? "true" : "false",
         ])
 
-        await trackHandler("session_start", contextProvider.sessionProperties())
+        await trackHandler(contextProvider.sessionStartEvent())
     }
 
     /// Test helper — drops the persisted timestamp so the next

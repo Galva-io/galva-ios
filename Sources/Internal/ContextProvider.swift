@@ -142,13 +142,13 @@ struct ContextProvider: Sendable {
     /// `device_country` is intentionally omitted — the server derives it from
     /// the request IP, which is more reliable than the device Region setting
     /// (especially for travelers).
-    func sessionProperties() -> [String: AnyJSONValue] {
-        [
-            "device_locale": .string(Locale.current.identifier),
-            "os_version":    .string(osContext().version ?? ""),
-            "app_version":   .string(appContext().version ?? ""),
-            "sdk_version":   .string(SDKConstants.version),
-        ]
+    func sessionStartEvent() -> SessionStartEvent {
+        SessionStartEvent(
+            deviceLocale: Locale.current.identifier,
+            osVersion: osContext().version ?? "",
+            appVersion: appContext().version ?? "",
+            sdkVersion: SDKConstants.version
+        )
     }
 
     // MARK: - App (Bundle access — safe from any actor)
