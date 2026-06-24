@@ -11,11 +11,9 @@ enum SDKConstants {
     /// Public SDK version. Bump on every release.
     static let version = "1.0.0"
 
-    /// Library name as it appears in the `context.library` field.
+    /// Default library name (native core). Wrapper SDKs override the reported
+    /// identity via `Galva.configure(wrapper:)` — see `SDKIdentity`.
     static let libraryName = "ios"
-
-    /// Value for the `x-sdk-version` header. Format: `ios-X.Y.Z`.
-    static let sdkVersionHeader: String = "\(libraryName)/\(version)"
 
     // MARK: - Per-environment URLs
     //

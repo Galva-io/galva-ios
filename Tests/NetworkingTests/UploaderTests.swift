@@ -84,7 +84,7 @@ final class UploaderRequestShapeTests: XCTestCase {
 
         let headers = URLProtocolStub.lastRequest?.allHTTPHeaderFields ?? [:]
         XCTAssertEqual(headers["X-API-Key"], "pk_live_abc")
-        XCTAssertEqual(headers["x-sdk-version"], SDKConstants.sdkVersionHeader)
+        XCTAssertEqual(headers["x-sdk-version"], SDKIdentity.header)
         XCTAssertEqual(headers["Content-Type"], "application/json")
     }
 

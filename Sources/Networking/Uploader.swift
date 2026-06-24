@@ -133,7 +133,7 @@ actor Uploader: MessageUploader {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        req.setValue(SDKConstants.sdkVersionHeader, forHTTPHeaderField: "x-sdk-version")
+        req.setValue(SDKIdentity.header, forHTTPHeaderField: "x-sdk-version")
         let body = BatchCollectRequest(messages: messages, sentAt: Date())
         req.httpBody = try encoder.encode(body)
         return req

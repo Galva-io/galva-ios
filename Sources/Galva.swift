@@ -210,20 +210,6 @@ public enum Galva {
     ///
     /// Subsequent calls are ignored with a warning log line.
     ///
-    /// - Parameters:
-    ///   - apiKey: Your Galva publishable API key. The server resolves your
-    ///     `appId` and environment from it.
-    ///   - autoTrackCategories: Which categories of events the SDK should
-    ///     collect automatically. Default: `[.lifecycle]`.
-    ///   - logLevel: Minimum severity to log. Default: `.warning`.
-    ///   - logger: Optional custom logger. When `nil` (default), the SDK
-    ///     writes to `os.Logger(subsystem: "co.galva.sdk", category: …)` —
-    ///     open Console.app and filter `subsystem:co.galva.sdk` to see
-    ///     every category in real time. Pass a custom logger to forward
-    ///     SDK logs into your own pipeline (Sentry, Datadog, file
-    ///     logger, etc.). The configured `logLevel` is still applied to
-    ///     filter entries before they reach your logger.
-    ///
     /// Example:
     ///
     ///     Galva.configure(
@@ -234,13 +220,21 @@ public enum Galva {
     ///     )
     ///
     /// - Parameters:
-    ///   - apiKey: Your Galva publishable API key.
+    ///   - apiKey: Your Galva publishable API key. The server resolves your
+    ///     `appId` and environment from it.
     ///   - environment: Backend to talk to. Default is `.production`. Use
     ///     `.development` for staging / TestFlight, or `.custom(...)` for
     ///     on-prem and proxy setups.
-    ///   - autoTrackCategories: Auto-collected event categories.
-    ///   - logLevel: Minimum severity to log.
-    ///   - logger: Optional custom logger sink.
+    ///   - autoTrackCategories: Which categories of events the SDK should
+    ///     collect automatically. Default: `[.lifecycle, .appleSearchAds]`.
+    ///   - logLevel: Minimum severity to log. Default: `.warning`.
+    ///   - logger: Optional custom logger. When `nil` (default), the SDK
+    ///     writes to `os.Logger(subsystem: "co.galva.sdk", category: …)` —
+    ///     open Console.app and filter `subsystem:co.galva.sdk` to see
+    ///     every category in real time. Pass a custom logger to forward
+    ///     SDK logs into your own pipeline (Sentry, Datadog, file
+    ///     logger, etc.). The configured `logLevel` is still applied to
+    ///     filter entries before they reach your logger.
     public static func configure(
         apiKey: String,
         environment: Environment = .production,
@@ -248,7 +242,6 @@ public enum Galva {
         logLevel: LogLevel = .warning,
         logger: (any GalvaLogger)? = nil
     ) {
-        
         Task { @GalvaActor in
             await SDKCore.shared.configure(
                 apiKey: apiKey,
@@ -258,6 +251,39 @@ public enum Galva {
                 userLogger: logger
             )
         }
+    }
+
+    /// Configure the SDK on behalf of a first-party wrapper SDK (React Native,
+    /// Flutter, …) that embeds this core, overriding the reported SDK identity.
+    ///
+    /// **Not public.** Wrappers compile in the same Swift module as the core
+    /// (e.g. the React Native pod builds the core + bridge together), so they
+    /// reach this seam without it widening the public native API. Native apps
+    /// call ``configure(apiKey:environment:autoTrackCategories:logLevel:logger:)``.
+    ///
+    /// `wrapper`'s name/version replace `ios`/`sdkVersion` in the
+    /// `x-sdk-version` header, `context.library`, and the `sdk_version` event so
+    /// wrapper traffic is distinguishable from native iOS. The identity is set
+    /// synchronously, before any request is built. Pass `nil` to leave the
+    /// native-core identity in place.
+    static func configure(
+        apiKey: String,
+        environment: Environment = .production,
+        autoTrackCategories: AutoTrackCategory = [.lifecycle, .appleSearchAds],
+        logLevel: LogLevel = .warning,
+        logger: (any GalvaLogger)? = nil,
+        wrapper: SDKWrapper?
+    ) {
+        // Set the reported identity synchronously, before any request is built,
+        // then run the standard configure.
+        SDKIdentity.wrapper = wrapper
+        configure(
+            apiKey: apiKey,
+            environment: environment,
+            autoTrackCategories: autoTrackCategories,
+            logLevel: logLevel,
+            logger: logger
+        )
     }
     
     /// Install a custom `GalvaLogger` at any point after `configure(...)`.

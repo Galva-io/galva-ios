@@ -147,7 +147,7 @@ struct ContextProvider: Sendable {
             deviceLocale: Locale.current.identifier,
             osVersion: osContext().version ?? "",
             appVersion: appContext().version ?? "",
-            sdkVersion: SDKConstants.version
+            sdkVersion: SDKIdentity.version
         )
     }
 
@@ -213,6 +213,6 @@ struct ContextProvider: Sendable {
     // MARK: - Library
 
     private func libraryContext() -> MessageContext.Library {
-        MessageContext.Library(name: SDKConstants.libraryName, version: SDKConstants.version)
+        MessageContext.Library(name: SDKIdentity.libraryName, version: SDKIdentity.version)
     }
 }

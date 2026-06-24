@@ -51,7 +51,7 @@ extension NativeBridge {
             messageId: messageId,
             sessionToken: nil, // signed token attaches in a follow-up; bundle reads as-nil-safe
             bridgeProtocol: SDKConstants.bridgeProtocolVersion,
-            sdkVersion: SDKConstants.version,
+            sdkVersion: SDKIdentity.version,
             platform: "ios",
             appVersion: app.version,
             appBuild: app.build,

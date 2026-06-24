@@ -163,7 +163,7 @@ actor APIClient {
             req.setValue(value, forHTTPHeaderField: key)
         }
         req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        req.setValue(SDKConstants.sdkVersionHeader, forHTTPHeaderField: "x-sdk-version")
+        req.setValue(SDKIdentity.header, forHTTPHeaderField: "x-sdk-version")
         req.httpBody = body
 
         logger.debug(.uploader, "proxy \(method)", metadata: ["url": url.absoluteString])
@@ -228,7 +228,7 @@ actor APIClient {
         var req = URLRequest(url: url, timeoutInterval: SDKConstants.rpcTimeout)
         req.httpMethod = method
         req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        req.setValue(SDKConstants.sdkVersionHeader, forHTTPHeaderField: "x-sdk-version")
+        req.setValue(SDKIdentity.header, forHTTPHeaderField: "x-sdk-version")
         return req
     }
 
