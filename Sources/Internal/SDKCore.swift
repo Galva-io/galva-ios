@@ -147,6 +147,17 @@ final class SDKCore {
     nonisolated private static let _identifiedUserIdLock = NSLock()
     nonisolated(unsafe) private static var _identifiedUserId: String?
 
+    /// Thread-safe mirror of the *resolved* StoreKit `appAccountToken` — the
+    /// developer override from `identify(userId:appAccountToken:)` when set,
+    /// otherwise the token Galva generates and attaches to its own purchases
+    /// (the `anonymousId` rendered as a UUID). This is the exact value
+    /// `IdentityStore.purchaseAttributionToken` hands to StoreKit, mirrored here
+    /// so `AppUser.appAccountToken` can read it sync from any thread. Refreshed
+    /// whenever configure/identify/logOut runs on GalvaActor; `nil` only before
+    /// `configure()`.
+    nonisolated private static let _appAccountTokenLock = NSLock()
+    nonisolated(unsafe) private static var _appAccountToken: UUID?
+
     // MARK: Opt-out
     //
     // Persisted "do not track" flag with a lock-protected mirror so the
@@ -230,6 +241,21 @@ final class SDKCore {
         Self._identifiedUserIdLock.unlock()
     }
 
+    /// Lock-protected sync read of the resolved purchase `appAccountToken`
+    /// (developer override or Galva's generated token). `nil` only before
+    /// `configure()`. Mirror of `cachedEndUserId`.
+    nonisolated var cachedAppAccountToken: UUID? {
+        Self._appAccountTokenLock.lock()
+        defer { Self._appAccountTokenLock.unlock() }
+        return Self._appAccountToken
+    }
+
+    func setCachedAppAccountToken(_ value: UUID?) {
+        Self._appAccountTokenLock.lock()
+        Self._appAccountToken = value
+        Self._appAccountTokenLock.unlock()
+    }
+
     var currentEndUserId: String? { identity?.endUserId }
     var currentAnonymousId: String? { identity?.anonymousId }
 
@@ -270,6 +296,9 @@ final class SDKCore {
         // launch so `context.device.token` is populated from the first message.
         self.contextProvider = ContextProvider(deviceToken: identity.deviceToken, snapshot: snapshot)
         setCachedEndUserId(identity.endUserId)
+        // Seed the resolved purchase token so `AppUser.appAccountToken` returns
+        // the generated token (anonymousId-as-UUID) even before any identify().
+        setCachedAppAccountToken(identity.purchaseAttributionToken)
 
         let uploader = Uploader(
             baseURL: environment.apiBaseURL,
@@ -704,6 +733,9 @@ final class SDKCore {
             // Persist on the identity store so StoreKit purchases pick
             // the override up automatically — not just sent as a trait.
             identity.setAppAccountToken(token)
+            // Keep the public `AppUser.appAccountToken` mirror in step with the
+            // override (resolves to `token` now that the override is set).
+            setCachedAppAccountToken(identity.purchaseAttributionToken)
             mergedTraits[BuiltInTraitKey.appAccountToken] = .string(token.uuidString.lowercased())
         }
         // Auto-attach device-derived built-in traits on every identify so the
@@ -769,6 +801,9 @@ final class SDKCore {
         identity.setEndUserId(nil)
         identity.rotateAnonymousId()
         setCachedEndUserId(nil)
+        // rotateAnonymousId() also cleared the override, so the resolved token
+        // is now the fresh anonymousId-as-UUID — refresh the public mirror.
+        setCachedAppAccountToken(identity.purchaseAttributionToken)
         // Clear in-memory caches scoped to the previous identity so the
         // post-logout anonymous user starts clean. In-app message dedupe
         // + resolved-payload cache wouldn't apply to the new user; the

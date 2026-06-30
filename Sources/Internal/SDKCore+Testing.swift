@@ -54,6 +54,7 @@ extension SDKCore {
         // `installLogger(_:)` preserve the same filter level.
         installLogger(logger, minLevel: minLogLevel)
         setCachedEndUserId(identity.endUserId)
+        setCachedAppAccountToken(identity.purchaseAttributionToken)
         await queue.startRunloop()
         configured = true
         self.logger.info(.configuration, "SDK configured (testing)", metadata: [

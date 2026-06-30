@@ -41,3 +41,4 @@ Examples/**/*.xcresult
 Examples/**/perf-report.md
 
 build/
+.swiftpm/*

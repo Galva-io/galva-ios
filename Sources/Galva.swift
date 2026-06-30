@@ -699,6 +699,24 @@ public enum AppUser {
         SDKCore.shared.cachedEndUserId
     }
 
+    /// The StoreKit 2 `appAccountToken` Galva attaches to purchases for the
+    /// current identity. Returns the `appAccountToken` you passed to
+    /// `identify(userId:appAccountToken:)` when set, otherwise the token Galva
+    /// generates for you (the anonymous id as a UUID). It's the *same* value the
+    /// SDK uses for its own purchases, so passing it into a purchase you start
+    /// yourself reconciles that purchase to the same Galva account:
+    ///
+    ///     let token = AppUser.appAccountToken
+    ///     let result = try await product.purchase(
+    ///         options: token.map { [.appAccountToken($0)] } ?? []
+    ///     )
+    ///
+    /// A synchronous snapshot, kept in sync with `configure`/`identify`/`logOut`
+    /// and safe to read from any thread. `nil` only before `Galva.configure(...)`.
+    public static var appAccountToken: UUID? {
+        SDKCore.shared.cachedAppAccountToken
+    }
+
     /// Identify the current end user. Subsequent events are attributed to
     /// this user id until `logOut()` is called.
     ///
