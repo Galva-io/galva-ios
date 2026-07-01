@@ -69,6 +69,11 @@ final class InAppMessageViewController: UIViewController {
     /// the WebView. Idempotent — repeated reveal calls are no-ops.
     private(set) var hasRevealed: Bool = false
 
+    /// True once we've kicked off the bundle load. The load is deferred to
+    /// `viewDidAppear` (see below), and this guards against a re-appear
+    /// reloading it.
+    private var didLoadBundle = false
+
     init(
         webView: WKWebView,
         bundleURL: URL,
@@ -118,12 +123,12 @@ final class InAppMessageViewController: UIViewController {
         // unstyled content. The sheet's chrome (background + grabber)
         // animates in regardless.
         webView.isHidden = true
-        webView.loadFileURL(
-            bundleURL,
-            allowingReadAccessTo: bundleURL.deletingLastPathComponent()
-        )
-        logger.debug(.identity, "iam VC viewDidLoad — bundle loadFileURL",
-                     metadata: ["messageId": messageId])
+        // NOTE: the bundle is deliberately NOT loaded here. Loading in
+        // viewDidLoad lets the page boot and call `getPageContext()` before the
+        // sheet is laid out in its window, so it reads `safeAreaInsets == .zero`
+        // (no notch / home-indicator padding) — worst on a cached bundle that
+        // boots fast. The load is deferred to `viewDidAppear`, once the
+        // presentation — and its safe area — is settled.
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -132,6 +137,18 @@ final class InAppMessageViewController: UIViewController {
         // because `presentationController` is only non-nil once the
         // VC is attached to a presentation.
         presentationController?.delegate = self
+
+        // Load the bundle now that the sheet is on screen and laid out — its
+        // safe area is final, so the page's first `getPageContext()` reads the
+        // real insets. Guarded so a re-appear never reloads.
+        guard !didLoadBundle else { return }
+        didLoadBundle = true
+        webView.loadFileURL(
+            bundleURL,
+            allowingReadAccessTo: bundleURL.deletingLastPathComponent()
+        )
+        logger.debug(.identity, "iam VC viewDidAppear — bundle loadFileURL",
+                     metadata: ["messageId": messageId])
     }
 
     // No deinit cleanup. The presenter's `teardown()` removes the

@@ -11,6 +11,8 @@ import XCTest
 /// in-process mock serves for a launch.
 enum E2EScenarioArg: String {
     case showInAppMessage
+    case showInAppMessageUIKit
+    case showInAppMessageTwice
     case deepLinkTarget
     case noMessages
 }

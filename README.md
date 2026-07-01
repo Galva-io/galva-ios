@@ -173,8 +173,9 @@ AppUser.set(.totalLifetimeValue, 199.99)
 AppUser.set("plan_tier", "pro")
 AppUser.set("habit_count", 13)
 
-// Synchronous read — safe from any thread, incl. a SwiftUI body:
+// Synchronous reads — safe from any thread, incl. a SwiftUI body:
 if let userId = AppUser.identifiedUserId { /* … */ }
+let token = AppUser.appAccountToken   // token Galva uses for purchases (see Subscriptions)
 
 // On sign-out — clears the user binding + rotates the anonymous ID:
 AppUser.logOut()
@@ -438,6 +439,13 @@ Galva doesn't own your transaction lifecycle — your existing StoreKit 2 / Reve
 - **Link purchases to a user** by passing the StoreKit `appAccountToken` on identify:
   ```swift
   AppUser.identify(userId: "user_42", appAccountToken: subscriptionAccountToken)
+  ```
+- **Drive your own purchases with the same token.** Read `AppUser.appAccountToken` and pass it into a purchase *you* start, so it reconciles to the same Galva account as a Galva-initiated one. It returns the override you set via `identify(…, appAccountToken:)`, or — if you never set one — the token Galva generated for the current identity (the exact value the SDK attaches to its own purchases). It's `nil` only before `Galva.configure(...)`:
+  ```swift
+  let token = AppUser.appAccountToken
+  let result = try await product.purchase(
+      options: token.map { [.appAccountToken($0)] } ?? []
+  )
   ```
 - **Organic / restored purchases** (no `appAccountToken`) are reconciled automatically: on every foreground the SDK sweeps `Transaction.all` and maps `(originalTransactionId → userId)` so the backend can resolve App Store notifications. Force an off-cycle sweep after your own billing observer confirms a purchase, or behind a "Restore Purchases" button:
   ```swift

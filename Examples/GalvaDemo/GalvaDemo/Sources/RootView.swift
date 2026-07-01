@@ -13,6 +13,7 @@
 //
 
 import SwiftUI
+import UIKit
 import Galva
 
 struct RootView: View {
@@ -37,9 +38,40 @@ private struct GalvaIntegration: ViewModifier {
                     environment: config.environment,
                     logLevel: .debug
                 )
-                .autoDisplayInAppMessages()
+                .modifier(InAppMessageRenderer(scenario: config.scenario))
         } else {
             content
+        }
+    }
+}
+
+/// Renders in-app messages via SwiftUI auto-display by default, or via the UIKit
+/// `message.show(in:)` presenter for the `showInAppMessageUIKit` E2E scenario —
+/// the presenter path the React Native wrapper drives through `showMessage`.
+private struct InAppMessageRenderer: ViewModifier {
+    let scenario: E2EScenario
+
+    func body(content: Content) -> some View {
+        if scenario == .showInAppMessageUIKit {
+            content.modifier(UIKitPresentInAppMessages())
+        } else {
+            content.autoDisplayInAppMessages()
+        }
+    }
+}
+
+/// Presents each delivered in-app message through the UIKit `show(in:)` path so
+/// the E2E exercises `InAppMessageViewController`'s safe-area timing.
+private struct UIKitPresentInAppMessages: ViewModifier {
+    func body(content: Content) -> some View {
+        content.task {
+            for await message in InAppMessages.messages {
+                guard let scene = UIApplication.shared.connectedScenes
+                    .compactMap({ $0 as? UIWindowScene })
+                    .first(where: { $0.activationState == .foregroundActive })
+                else { continue }
+                try? await message.show(in: scene)
+            }
         }
     }
 }

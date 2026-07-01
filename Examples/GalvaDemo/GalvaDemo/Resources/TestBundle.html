@@ -17,6 +17,7 @@
   <h1 id="title">Galva E2E Bundle</h1>
   <p id="status">booting</p>
   <p id="pageContext">pageContext: -</p>
+  <p id="safeArea">safeArea: -</p>
   <p id="apiFetchResult">apiFetch: -</p>
   <p id="alertResult">alert: -</p>
   <p id="deepLinkParams">deepLink: -</p>
@@ -47,6 +48,13 @@
       if (res.error) { cb.reject(res.error); } else { cb.resolve(res.result); }
     };
 
+    // Read the page context AS EARLY AS POSSIBLE. The `galva` message handler is
+    // injected at document start, so this fires before the sheet may have
+    // mounted the WebView into its window — exactly when the off-screen-load
+    // race yields a `.zero` safe area (the real-world failure). We capture the
+    // promise here and surface its result once the DOM is ready.
+    var earlyPageContext = call('getPageContext');
+
     function setText(id, text) { document.getElementById(id).textContent = text; }
 
     // ----- Boot: reveal + read message context ----------------------------
@@ -62,9 +70,21 @@
       } catch (e) { /* leave default title */ }
 
       try {
-        var ctx = await call('getPageContext');
+        var ctx = await earlyPageContext;
         setText('pageContext', 'pageContext: ' + (ctx ? ctx.platform : '?'));
-      } catch (e) { setText('pageContext', 'pageContext: error'); }
+        // Surface the injected safe area so XCUITest can verify the notch /
+        // home-indicator insets reached the WebView. A `.zero` here means
+        // getPageContext raced ahead of the presentation's layout. `bottom`
+        // (home indicator) is reliably non-zero on notched devices for both
+        // full-screen and page-sheet presentations, so gate on either axis.
+        var sa = (ctx && ctx.safeArea) || { top: 0, bottom: 0, left: 0, right: 0 };
+        var top = Math.round(sa.top), bottom = Math.round(sa.bottom);
+        var marker = (top > 0 || bottom > 0) ? 'nonzero' : 'zero';
+        setText('safeArea', 'safeArea:' + marker + ':top=' + top + ':bottom=' + bottom);
+      } catch (e) {
+        setText('pageContext', 'pageContext: error');
+        setText('safeArea', 'safeArea:error');
+      }
 
       if (window.galvaDeepLinkParams && window.galvaDeepLinkParams.communicationId) {
         setText('deepLinkParams', 'deepLink: ' + window.galvaDeepLinkParams.communicationId);

@@ -17,6 +17,9 @@ enum MockFixtures {
     static let pollMessageId = "11111111-1111-1111-1111-111111111111"
     /// Deep-link target communication id.
     static let deepLinkCommunicationId = "22222222-2222-2222-2222-222222222222"
+    /// Second, distinct message for the `showInAppMessageTwice` scenario. Shares
+    /// bundle `1.0.0` with `pollMessageId` so its presentation is a cache hit.
+    static let secondMessageId = "44444444-4444-4444-4444-444444444444"
 
     private static let createdAt = "2026-06-18T10:30:00.000Z"
 
@@ -26,15 +29,23 @@ enum MockFixtures {
     """
 
     /// `GET /identities/communications` — scenario-dependent message list.
-    static func poll(for scenario: E2EScenario) -> String {
+    /// `second` selects the second message for `showInAppMessageTwice` (flipped
+    /// by the demo's "Next message" control).
+    static func poll(for scenario: E2EScenario, second: Bool = false) -> String {
         switch scenario {
-        case .showInAppMessage:
-            return """
-            {"success":true,"data":[{"id":"\(pollMessageId)","type":"trial-rescue-in-app","workflowType":"trial-rescue","createdAt":"\(createdAt)"}],"meta":{"nextCursor":null}}
-            """
+        case .showInAppMessage, .showInAppMessageUIKit:
+            return message(id: pollMessageId)
+        case .showInAppMessageTwice:
+            return message(id: second ? secondMessageId : pollMessageId)
         case .deepLinkTarget, .noMessages:
             return #"{"success":true,"data":[],"meta":{"nextCursor":null}}"#
         }
+    }
+
+    private static func message(id: String) -> String {
+        """
+        {"success":true,"data":[{"id":"\(id)","type":"trial-rescue-in-app","workflowType":"trial-rescue","createdAt":"\(createdAt)"}],"meta":{"nextCursor":null}}
+        """
     }
 
     /// `POST /identities/communications/{id}/resolve` — a renderable payload
@@ -43,7 +54,7 @@ enum MockFixtures {
         switch scenario {
         case .noMessages:
             return #"{"data":{"valid":false}}"#
-        case .showInAppMessage, .deepLinkTarget:
+        case .showInAppMessage, .showInAppMessageUIKit, .showInAppMessageTwice, .deepLinkTarget:
             return """
             {"data":{"valid":true,"webviewVersion":"1.0.0","payload":{"title":"E2E Offer","communicationId":"\(deepLinkCommunicationId)","source":"e2e"}}}
             """

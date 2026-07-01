@@ -18,6 +18,11 @@ final class GalvaMockURLProtocol: URLProtocol {
     /// URL loading threads.
     nonisolated(unsafe) static var scenario: E2EScenario = .showInAppMessage
 
+    /// For `showInAppMessageTwice`: flipped by the demo's "Next message" control
+    /// so the poll serves the second (cache-hit) message once the first has been
+    /// shown + dismissed — reproducing the cached-second-presentation race.
+    nonisolated(unsafe) static var deliverSecondMessage = false
+
     // MARK: URLProtocol
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -79,7 +84,7 @@ final class GalvaMockURLProtocol: URLProtocol {
 
         // In-app message poll.
         if method == "GET", path.hasSuffix("/identities/communications") {
-            finish(status: 200, json: MockFixtures.poll(for: Self.scenario))
+            finish(status: 200, json: MockFixtures.poll(for: Self.scenario, second: Self.deliverSecondMessage))
             return
         }
 

@@ -1087,15 +1087,15 @@ final class SDKCore {
                 logger: snapshotLogger
             )
             #endif
-            webView.loadFileURL(
-                bundleURL,
-                allowingReadAccessTo: bundleURL.deletingLastPathComponent()
-            )
+            // NOTE: the bundle is NOT loaded here. The coordinator loads it from
+            // the sheet's `onAppear`, so the page boots (and reads safe-area
+            // insets) only once the WebView is in the sheet's window — otherwise
+            // getPageContext() could read `.zero` insets off-screen.
             snapshotLogger.info(.identity, "SwiftUI sheet preparing", metadata: [
                 "messageId": message.id,
                 "version": resolved.webviewVersion,
             ])
-            return PreparedInAppMessage(webView: webView, bridge: bridge)
+            return PreparedInAppMessage(webView: webView, bridge: bridge, bundleURL: bundleURL)
         }
     }
 

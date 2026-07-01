@@ -40,6 +40,11 @@ import UIKit
 struct PreparedInAppMessage: @unchecked Sendable {
     let webView: WKWebView
     let bridge: NativeBridge
+    /// HTML bundle to load. The SwiftUI coordinator loads it from the sheet's
+    /// `onAppear` (not at prepare time) so the page boots — and reads
+    /// `getPageContext().safeArea` — only once the WebView is in the sheet's
+    /// window, where safe-area insets are valid.
+    let bundleURL: URL
 }
 
 /// What `NativeBridge` needs from its presentation owner. Both

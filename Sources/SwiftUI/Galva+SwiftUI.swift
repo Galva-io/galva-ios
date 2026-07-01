@@ -171,6 +171,10 @@ private struct InAppMessageSheetView: View {
         }
         .ignoresSafeArea()
         .applySheetChrome()
+        // Load the bundle now that the sheet content is on screen and its
+        // WebView is in the window — so the page's first getPageContext() reads
+        // the presented sheet's real safe area, not `.zero`.
+        .onAppear { coordinator.loadBundleIfNeeded() }
     }
 }
 
@@ -195,6 +199,12 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
     /// on real teardown (not on a "replace" mid-show, where a newer message
     /// hot-swaps the prepared bundle).
     private(set) var webView: WKWebView?
+
+    /// HTML bundle to load once the sheet appears (see `loadBundleIfNeeded`).
+    private var bundleURL: URL?
+
+    /// Guards the one-shot bundle load from the sheet's `onAppear`.
+    private var didLoadBundle = false
 
     /// Bridge held strongly — `WKUserContentController.add(_:name:)` only
     /// keeps a weak ref, so the channel dies the moment we drop the bridge.
@@ -231,6 +241,8 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
                     // reset the reveal flag.
                     self.webView = prepared.webView
                     self.bridge = prepared.bridge
+                    self.bundleURL = prepared.bundleURL
+                    self.didLoadBundle = false
                     self.isRevealed = false
                     self.readyMessage = message
                 }
@@ -274,6 +286,17 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
     /// every native ↔ WebView edge (so WebKit can wind down its
     /// resources eagerly), drops the WebView + bridge + reveal flag, and
     /// asks the SDK to forget the active message id on the GalvaActor.
+    /// Load the prepared bundle once, from the sheet content's `onAppear` — the
+    /// point where the WebView is in the sheet's window and its safe-area insets
+    /// are valid. Booting the page here (rather than at prepare time, off-screen)
+    /// means its first `getPageContext()` reads the presented sheet's real safe
+    /// area instead of `.zero`. Idempotent.
+    func loadBundleIfNeeded() {
+        guard !didLoadBundle, let webView, let bundleURL else { return }
+        didLoadBundle = true
+        webView.loadFileURL(bundleURL, allowingReadAccessTo: bundleURL.deletingLastPathComponent())
+    }
+
     private func tearDown() {
         prepareTask?.cancel()
         prepareTask = nil
@@ -282,6 +305,8 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
         }
         readyMessage = nil
         webView = nil
+        bundleURL = nil
+        didLoadBundle = false
         bridge = nil
         isRevealed = false
         Task { @GalvaActor in

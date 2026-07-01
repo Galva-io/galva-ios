@@ -12,8 +12,17 @@ import Galva
 
 /// Selects which canned backend responses the in-process mock serves.
 enum E2EScenario: String {
-    /// Poll returns one in-app message → auto-display renders it.
+    /// Poll returns one in-app message → SwiftUI auto-display renders it.
     case showInAppMessage
+    /// Same message as `showInAppMessage`, but presented through the UIKit
+    /// `message.show(in:)` presenter (the path the React Native wrapper uses)
+    /// instead of the SwiftUI auto-display modifier.
+    case showInAppMessageUIKit
+    /// Two distinct messages sharing bundle `1.0.0`. The first caches the
+    /// bundle; the "Next message" control serves the second, which reuses the
+    /// cached bundle and boots instantly — reproducing the cached-second-
+    /// presentation safe-area race.
+    case showInAppMessageTwice
     /// Poll returns nothing; only a deep link resolves a message.
     case deepLinkTarget
     /// Poll returns nothing and resolve is invalid (quiet baseline).

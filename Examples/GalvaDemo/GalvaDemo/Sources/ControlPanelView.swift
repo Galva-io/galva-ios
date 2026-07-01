@@ -60,6 +60,13 @@ struct ControlPanelView: View {
                         actionButton("Check for messages", id: "checkMessages") {
                             InAppMessages.checkForMessages()
                         }
+                        // E2E only: advance the mock to the second (cache-hit)
+                        // message, then poll — for the cached-second-presentation
+                        // safe-area race repro.
+                        actionButton("Next message", id: "nextMessage") {
+                            GalvaMockURLProtocol.deliverSecondMessage = true
+                            InAppMessages.checkForMessages()
+                        }
                         actionButton("Open deep link", id: "openDeepLink") {
                             openDeepLink()
                         }
