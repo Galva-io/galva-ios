@@ -173,6 +173,7 @@ final class InAppMessagePresenter: NSObject {
         await messageManager.setActiveMessageId(message.id)
         currentMessageId = message.id
         let (webView, bridge) = makeWebViewAndBridge(
+            messageId: message.id,
             prefetchedProducts: prefetchedProducts,
             deepLinkParameters: deepLinkParameters
         )
@@ -199,6 +200,10 @@ final class InAppMessagePresenter: NSObject {
             "version": version,
             "host": String(describing: type(of: host)),
         ])
+        // Claim the single presentation slot — a user-initiated deep-link /
+        // programmatic show wins, preempting a SwiftUI auto-display sheet if one
+        // is up, so two in-app messages never stack on the same host.
+        InAppMessagePresentationGate.shared.claimForProgrammatic(message.id, host: self)
         await present(vc, on: host)
     }
 
@@ -217,6 +222,7 @@ final class InAppMessagePresenter: NSObject {
     // MARK: - Internals
 
     private func makeWebViewAndBridge(
+        messageId: String,
         prefetchedProducts: [String: AnyJSONValue],
         deepLinkParameters: [String: String]
     ) -> (WKWebView, NativeBridge) {
@@ -225,6 +231,7 @@ final class InAppMessagePresenter: NSObject {
         // lockstep without copy-paste drift.
         #if canImport(StoreKit)
         return InAppMessageWebViewFactory.make(
+            messageId: messageId,
             messageManager: messageManager,
             identity: identity,
             storeKitPrefetcher: storeKitPrefetcher,
@@ -235,6 +242,7 @@ final class InAppMessagePresenter: NSObject {
         )
         #else
         return InAppMessageWebViewFactory.make(
+            messageId: messageId,
             messageManager: messageManager,
             identity: identity,
             host: self,
@@ -248,6 +256,14 @@ final class InAppMessagePresenter: NSObject {
     /// `present(_:animated:completion:)` is callback-based — wrap it in a
     /// continuation so the show() flow remains a clean `async` path.
     private func present(_ vc: UIViewController, on host: UIViewController) async {
+        // If the host is already presenting something (e.g. a SwiftUI
+        // auto-display sheet the gate just preempted, still mid-dismiss),
+        // clear it first so `present` can't fail with "already presenting".
+        if let existing = host.presentedViewController, existing !== vc {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                existing.dismiss(animated: false) { cont.resume() }
+            }
+        }
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             host.present(vc, animated: true) {
                 cont.resume()
@@ -287,6 +303,7 @@ final class InAppMessagePresenter: NSObject {
         if let webView = viewController?.webView {
             InAppMessageWebViewFactory.tearDown(webView: webView, bridge: bridge)
         }
+        InAppMessagePresentationGate.shared.release(host: self)
         viewController = nil
         bridge = nil
         currentMessageId = nil

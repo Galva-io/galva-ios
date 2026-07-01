@@ -234,6 +234,16 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
                 if Task.isCancelled { return }
                 await MainActor.run {
                     guard let self else { return }
+                    // Claim the single presentation slot now, right before we
+                    // drive the sheet. Yields if a deep-link / programmatic
+                    // message grabbed the host while we prepared off-screen —
+                    // auto-display must not stack a second sheet or clobber it.
+                    guard InAppMessagePresentationGate.shared.claimForAutoDisplay(message.id, host: self) else {
+                        InAppMessageWebViewFactory.tearDown(webView: prepared.webView, bridge: prepared.bridge)
+                        Task { @GalvaActor in await SDKCore.shared.clearActiveMessage() }
+                        onFail()
+                        return
+                    }
                     // Atomically swap to the new prepared bundle. SwiftUI's
                     // `sheet(item:)` handles the visual transition because
                     // the item identity changes — no manual dismiss/present
@@ -303,6 +313,7 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
         if let webView {
             InAppMessageWebViewFactory.tearDown(webView: webView, bridge: bridge)
         }
+        InAppMessagePresentationGate.shared.release(host: self)
         readyMessage = nil
         webView = nil
         bundleURL = nil

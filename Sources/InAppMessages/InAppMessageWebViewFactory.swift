@@ -45,6 +45,7 @@ enum InAppMessageWebViewFactory {
     /// on `NativeBridge.init` — non-Apple builds use the slimmer init.
     #if canImport(StoreKit)
     static func make(
+        messageId: String,
         messageManager: InAppMessageManager,
         identity: IdentityStore,
         storeKitPrefetcher: StoreKitProductPrefetcher?,
@@ -54,6 +55,7 @@ enum InAppMessageWebViewFactory {
         logger: any GalvaLogger
     ) -> (WKWebView, NativeBridge) {
         let bridge = NativeBridge(
+            messageId: messageId,
             messageManager: messageManager,
             identity: identity,
             storeKitPrefetcher: storeKitPrefetcher,
@@ -68,6 +70,7 @@ enum InAppMessageWebViewFactory {
     }
     #else
     static func make(
+        messageId: String,
         messageManager: InAppMessageManager,
         identity: IdentityStore,
         host: any InAppMessageHost,
@@ -76,6 +79,7 @@ enum InAppMessageWebViewFactory {
         logger: any GalvaLogger
     ) -> (WKWebView, NativeBridge) {
         let bridge = NativeBridge(
+            messageId: messageId,
             messageManager: messageManager,
             identity: identity,
             logger: logger

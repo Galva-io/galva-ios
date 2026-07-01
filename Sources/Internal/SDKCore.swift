@@ -1071,6 +1071,7 @@ final class SDKCore {
         return await MainActor.run {
             #if canImport(StoreKit)
             let (webView, bridge) = InAppMessageWebViewFactory.make(
+                messageId: message.id,
                 messageManager: manager,
                 identity: identity,
                 storeKitPrefetcher: prefetcher,
@@ -1080,6 +1081,7 @@ final class SDKCore {
             )
             #else
             let (webView, bridge) = InAppMessageWebViewFactory.make(
+                messageId: message.id,
                 messageManager: manager,
                 identity: identity,
                 host: host,

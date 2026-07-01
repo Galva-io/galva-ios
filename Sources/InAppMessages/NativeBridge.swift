@@ -76,6 +76,13 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     /// debug logging.
     var consoleLogHandler: WebViewConsoleLogHandler?
 
+    /// The message this bridge belongs to. `getMessageData` / `getPageContext` /
+    /// `requestPurchase` resolve against THIS id — not a shared global active id
+    /// — so a bridge always serves its own message's data even if a second
+    /// presentation is momentarily live (e.g. a deep-link message + a
+    /// concurrently-polled auto-display message).
+    let messageId: String
+
     let messageManager: InAppMessageManager
     let identity: IdentityStore
     let logger: any GalvaLogger
@@ -90,11 +97,13 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
 
     #if canImport(StoreKit)
     init(
+        messageId: String,
         messageManager: InAppMessageManager,
         identity: IdentityStore,
         storeKitPrefetcher: StoreKitProductPrefetcher?,
         logger: any GalvaLogger
     ) {
+        self.messageId = messageId
         self.messageManager = messageManager
         self.identity = identity
         self.storeKitPrefetcher = storeKitPrefetcher
@@ -102,10 +111,12 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     }
     #else
     init(
+        messageId: String,
         messageManager: InAppMessageManager,
         identity: IdentityStore,
         logger: any GalvaLogger
     ) {
+        self.messageId = messageId
         self.messageManager = messageManager
         self.identity = identity
         self.logger = logger
@@ -167,16 +178,11 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             return .success(nil)
 
         case .getPageContext:
-            guard let messageId = await messageManager.currentActiveMessageId() else {
-                return .failure(BridgeError(code: .noActiveMessage, message: "No active message"))
-            }
+            // Scoped to THIS bridge's message — never a shared global active id.
             let context = await makePageContext(messageId: messageId)
             return .success(.object(Self.toJSON(context)))
 
         case .getMessageData:
-            guard let messageId = await messageManager.currentActiveMessageId() else {
-                return .failure(BridgeError(code: .noActiveMessage, message: "No active message"))
-            }
             guard let valid = await messageManager.payload(for: messageId) else {
                 return .failure(BridgeError(
                     code: .messageDataUnavailable,
@@ -186,12 +192,9 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             return .success(.object(valid.payload.json))
 
         case .requestPurchase:
-            guard let active = await messageManager.currentActiveMessageId() else {
-                return .failure(BridgeError(code: .noActiveMessage, message: "No active message"))
-            }
             return await handleRequestPurchase(
                 payload: envelope.payload,
-                activeMessageId: active
+                activeMessageId: messageId
             )
 
         case .openManageSubscription:

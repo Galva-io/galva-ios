@@ -37,7 +37,11 @@ enum MockFixtures {
             return message(id: pollMessageId)
         case .showInAppMessageTwice:
             return message(id: second ? secondMessageId : pollMessageId)
-        case .deepLinkTarget, .noMessages:
+        case .deepLinkTarget:
+            // Nothing until the test flips `second` (via "Next message"), which
+            // delivers a poll message that must YIELD to an active deep-link.
+            return second ? message(id: secondMessageId) : #"{"success":true,"data":[],"meta":{"nextCursor":null}}"#
+        case .noMessages:
             return #"{"success":true,"data":[],"meta":{"nextCursor":null}}"#
         }
     }

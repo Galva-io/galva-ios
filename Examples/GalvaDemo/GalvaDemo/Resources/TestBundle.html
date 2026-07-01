@@ -17,6 +17,7 @@
   <h1 id="title">Galva E2E Bundle</h1>
   <p id="status">booting</p>
   <p id="pageContext">pageContext: -</p>
+  <p id="msgid">msgid: -</p>
   <p id="safeArea">safeArea: -</p>
   <p id="apiFetchResult">apiFetch: -</p>
   <p id="alertResult">alert: -</p>
@@ -72,6 +73,9 @@
       try {
         var ctx = await earlyPageContext;
         setText('pageContext', 'pageContext: ' + (ctx ? ctx.platform : '?'));
+        // Surface the message id this WebView was served (Fix A: scoped bridge)
+        // so a test can assert WHICH message is presenting.
+        setText('msgid', 'msgid:' + (ctx ? ctx.messageId : '?'));
         // Surface the injected safe area so XCUITest can verify the notch /
         // home-indicator insets reached the WebView. A `.zero` here means
         // getPageContext raced ahead of the presentation's layout. `bottom`

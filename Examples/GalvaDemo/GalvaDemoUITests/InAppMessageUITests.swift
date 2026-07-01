@@ -117,6 +117,46 @@ final class InAppMessageUITests: XCTestCase {
                       file: file, line: line)
     }
 
+    func test_deepLink_and_pollMessage_doNotCollide() {
+        // Coexistence smoke test for the reported bug: an email deep link opens a
+        // message (UIKit presenter) while a poll auto-displays a DIFFERENT message
+        // (SwiftUI sheet). Asserts the deep-link stays presented, serving its OWN
+        // message id (Fix A), and a subsequent poll doesn't disrupt it (Fix B).
+        //
+        // NOTE: positive smoke test, not a fail-without-fix guard. The USER-facing
+        // failure was the CONCURRENT race (both presenting at the same instant →
+        // active-id clobber + "already presenting"), which this hermetic,
+        // sequential harness can't reproduce deterministically — the deep-link
+        // fully presents and reads its context before the poll runs. The fixes
+        // are correct by construction (per-message bridge id; single-presentation
+        // gate).
+        let app = launchApp(scenario: .deepLinkTarget)
+
+        // openCommunication deep links are deferred until identify — identify
+        // first so the link renders immediately.
+        tapControl(app, "identify")
+        // Deep link presents communicationId 22222222-… via the UIKit presenter.
+        tapControl(app, "openDeepLink")
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 20),
+                      "deep-link message should present")
+        let deepLinkMsg = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "msgid:22222222")
+        ).firstMatch
+        XCTAssertTrue(deepLinkMsg.waitForExistence(timeout: 15),
+                      "the deep-link WebView must serve its OWN message id (Fix A)")
+
+        // A concurrent poll now delivers a DIFFERENT message (44444444-…). The
+        // SwiftUI auto-display must yield to the active deep-link (Fix B).
+        tapControl(app, "nextMessage")
+        let pollMsg = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "msgid:44444444")
+        ).firstMatch
+        XCTAssertFalse(pollMsg.waitForExistence(timeout: 6),
+                       "a polled message must not stack on / replace the active deep-link")
+        XCTAssertTrue(deepLinkMsg.exists,
+                      "the deep-link message must remain presented, serving its own id")
+    }
+
     func test_bridgeApiFetch_roundTrips() {
         let app = launchApp(scenario: .showInAppMessage)
         tapControl(app, "checkMessages")
