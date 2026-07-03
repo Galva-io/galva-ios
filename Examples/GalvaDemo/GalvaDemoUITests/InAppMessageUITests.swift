@@ -166,6 +166,43 @@ final class InAppMessageUITests: XCTestCase {
                       "the suppressed message must surface on the next return event")
     }
 
+    func test_deepLink_alreadyPresented_doesNotRepresent_andOthersCanShow() {
+        // The reported bug: deep-link message presented, user dismisses, exits
+        // and returns — the deep link re-fires (SwiftUI re-delivers the URL on
+        // scene reactivation) and the SAME message re-presents, hogging the
+        // display budget. Contract:
+        //   1. a re-fired deep link for an ALREADY-PRESENTED communication is
+        //      ignored — no sheet, and crucially no budget claim,
+        //   2. so a subsequent return event's poll can present OTHER messages.
+        let app = launchApp(scenario: .deepLinkRace)
+        tapControl(app, "identify")
+
+        // Present + dismiss the deep-link message D (22222222…).
+        tapControl(app, "openDeepLink")
+        let deepLinkMsg = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "msgid:22222222")
+        ).firstMatch
+        XCTAssertTrue(deepLinkMsg.waitForExistence(timeout: 25))
+        let close = app.webViews.buttons["Close E2E"]
+        XCTAssertTrue(close.waitForExistence(timeout: 10))
+        close.tap()
+        XCTAssertTrue(app.webViews.firstMatch.waitForNonExistence(timeout: 10))
+
+        // 1. Re-fire the same deep link — must be ignored, nothing presents.
+        tapControl(app, "openDeepLink")
+        XCTAssertFalse(app.webViews.firstMatch.waitForExistence(timeout: 5),
+                       "an already-presented deep-link message must not re-present")
+
+        // 2. And it didn't claim the budget: the next return event's poll can
+        //    deliver a DIFFERENT message (44444444…).
+        tapControl(app, "nextMessage")
+        let polledMsg = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "msgid:44444444")
+        ).firstMatch
+        XCTAssertTrue(polledMsg.waitForExistence(timeout: 20),
+                      "other messages must be presentable after the ignored re-fire")
+    }
+
     func test_deepLink_and_pollMessage_doNotCollide() {
         // A poll triggered while a deep-link message is ON SCREEN must be
         // suppressed by the display budget (the slot is `.used` and the sheet is

@@ -30,6 +30,18 @@ extension SDKCore {
     /// injected into the bundle as `window.galvaDeepLinkParams`.
     func handleOpenCommunication(communicationId: String, parameters: [String: String]) async {
         #if canImport(UIKit) && canImport(WebKit)
+        // Already presented this run? Stand down WITHOUT claiming the display
+        // budget. SwiftUI can re-deliver the same URL on scene reactivation (a
+        // re-fired `onOpenURL` when returning from background), and the user
+        // already saw + dismissed this message — re-presenting would both annoy
+        // them and burn the stint's budget, suppressing polls that could
+        // surface OTHER pending messages.
+        if inAppMessageManager?.hasPresented(messageId: communicationId) == true {
+            logger.info(.lifecycle, "openCommunication ignored — already presented this run", metadata: [
+                "communicationId": communicationId,
+            ])
+            return
+        }
         // Minimal envelope — only `id` is used by resolve + present; the other
         // fields are display / dedupe metadata the deep-link path doesn't have.
         let message = InAppMessages.Message(

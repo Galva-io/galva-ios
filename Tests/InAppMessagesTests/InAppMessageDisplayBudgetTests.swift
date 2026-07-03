@@ -169,6 +169,49 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
         XCTAssertEqual(emitted.count, 1, "a failed show must not burn the stint's budget")
     }
 
+    // MARK: - Presented-communication dedupe
+
+    func test_presentedMessage_isNotRedeliveredByPoll_othersAre() async throws {
+        // The user's deep-link scenario: message X presented + dismissed. A
+        // later poll returning X (server still pending) plus a new message Y
+        // must skip X and deliver Y — the presented message is done for the
+        // run; OTHER messages get the slot.
+        let shown = UUID()
+        let other = UUID()
+        URLProtocolStub.handler = { request in
+            (URLProtocolStub.httpResponse(url: request.url!, status: 200),
+             BudgetFixtures.list(ids: [shown, other]))
+        }
+        let harness = await BudgetHarness.make()
+
+        // Present X via the deep-link/programmatic path (claim → on screen),
+        // then dismiss.
+        await harness.manager.claimDisplaySlot(messageId: shown.uuidString.lowercased())
+        await harness.manager.setActiveMessageId(shown.uuidString.lowercased())
+        await harness.manager.setActiveMessageId(nil)
+
+        // Next return event's poll: X is skipped (already presented), Y delivers.
+        let emitted = await harness.manager.poll()
+        XCTAssertEqual(emitted.map(\.id), [other.uuidString.lowercased()],
+                       "a presented message must never re-deliver; other messages take the slot")
+    }
+
+    func test_hasPresented_marksOnPresentation_clearsOnReset() async throws {
+        let harness = await BudgetHarness.make()
+
+        let presented = await harness.manager.hasPresented(messageId: "m1")
+        XCTAssertFalse(presented)
+
+        await harness.manager.setActiveMessageId("m1")
+        await harness.manager.setActiveMessageId(nil) // dismissed — still presented this run
+        let afterShow = await harness.manager.hasPresented(messageId: "m1")
+        XCTAssertTrue(afterShow, "presentation is remembered past dismissal (per run)")
+
+        await harness.manager.reset() // logOut
+        let afterReset = await harness.manager.hasPresented(messageId: "m1")
+        XCTAssertFalse(afterReset, "the next identity starts clean")
+    }
+
     func test_reset_clearsSlot() async throws {
         URLProtocolStub.handler = { request in
             (URLProtocolStub.httpResponse(url: request.url!, status: 200),

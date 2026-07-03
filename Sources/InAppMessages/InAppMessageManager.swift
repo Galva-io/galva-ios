@@ -47,6 +47,15 @@ final class InAppMessageManager {
     /// emitting the same message twice. Bounded — see prune below.
     private var seenIds: Set<String> = []
 
+    /// Message ids that actually went ON SCREEN this run (deep-link,
+    /// programmatic, or auto-display). A presented communication must never
+    /// re-present — not via a later poll (it also joins `seenIds`) and not via
+    /// a re-fired `openCommunication` deep link (SwiftUI can re-deliver the
+    /// same URL on scene reactivation; the deep-link route checks
+    /// `hasPresented` and stands down WITHOUT claiming the display budget, so
+    /// other messages stay eligible).
+    private var presentedIds: Set<String> = []
+
     /// Cached resolve payloads keyed by message id. Populated on `resolve`
     /// (or by a successful show flow) so that the bridge's
     /// `getMessageData()` call resolves immediately from memory.
@@ -343,7 +352,20 @@ final class InAppMessageManager {
         // until the next return event resets it.
         if let id {
             displaySlot = .used(messageId: id)
+            // Once shown, this communication is done for the run: later polls
+            // must not re-deliver it (seenIds) and a repeated deep link must
+            // not re-present it (presentedIds) — clearing the way for OTHER
+            // pending messages instead.
+            presentedIds.insert(id)
+            seenIds.insert(id)
         }
+    }
+
+    /// Whether `messageId` already went on screen this run. Consulted by the
+    /// `openCommunication` deep-link route so a re-fired URL doesn't re-present
+    /// a message the user already saw (or burn the display budget doing so).
+    func hasPresented(messageId: String) -> Bool {
+        presentedIds.contains(messageId)
     }
 
     /// Accessor for the bridge layer (MainActor). Returns the current
@@ -362,6 +384,7 @@ final class InAppMessageManager {
     /// session doesn't see leftover messages from the previous identity.
     func reset() {
         seenIds.removeAll(keepingCapacity: false)
+        presentedIds.removeAll(keepingCapacity: false)
         resolvedPayloads.removeAll(keepingCapacity: false)
         activeMessageId = nil
         displaySlot = .available
