@@ -39,6 +39,11 @@ final class InAppMessageStream {
 
     /// Yield `message` to every active subscriber. Subscribers that have
     /// already finished are pruned lazily on the next yield.
+    ///
+    /// Delivery pacing lives UPSTREAM: `InAppMessageManager` delivers at most
+    /// one message per foreground stint and suppresses the fetch entirely
+    /// while a deep-link presentation is active (see its display budget), so
+    /// by the time a message reaches this broadcast it is cleared to display.
     func yield(_ message: InAppMessages.Message) {
         var alive: [Subscriber] = []
         alive.reserveCapacity(subscribers.count)

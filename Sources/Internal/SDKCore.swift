@@ -952,6 +952,12 @@ final class SDKCore {
               let identity else {
             throw InAppMessages.Error.notConfigured
         }
+        // Claim the stint's display slot BEFORE any async work — this is what
+        // suppresses in-app message fetching for the whole deep-link flight
+        // (`poll()` skips the network entirely while the slot is pending/used).
+        // Runs on GalvaActor, the same isolation as the poll's slot checks, so
+        // the claim and the fetch gating can never race.
+        manager.claimDisplaySlot(messageId: message.id)
         let snapshotLogger = logger
 
         // Snapshot the current StoreKit product summary on the GalvaActor
@@ -974,36 +980,43 @@ final class SDKCore {
 
         // Hop to MainActor to construct / reuse the presenter. The
         // presenter then runs its async show() on the main actor.
-        try await MainActor.run {
-            let presenter: InAppMessagePresenter
-            if let existing = self.presenter {
-                presenter = existing
-            } else {
-                #if canImport(StoreKit)
-                presenter = InAppMessagePresenter(
-                    messageManager: manager,
-                    identity: identity,
-                    bundleCache: bundleCache,
-                    storeKitPrefetcher: prefetcher,
-                    logger: snapshotLogger
-                )
-                #else
-                presenter = InAppMessagePresenter(
-                    messageManager: manager,
-                    identity: identity,
-                    bundleCache: bundleCache,
-                    logger: snapshotLogger
-                )
-                #endif
-                self.presenter = presenter
-            }
-            return presenter
-        }.show(
-            message: message,
-            in: scene,
-            prefetchedProducts: products,
-            deepLinkParameters: deepLinkParameters
-        )
+        do {
+            try await MainActor.run {
+                let presenter: InAppMessagePresenter
+                if let existing = self.presenter {
+                    presenter = existing
+                } else {
+                    #if canImport(StoreKit)
+                    presenter = InAppMessagePresenter(
+                        messageManager: manager,
+                        identity: identity,
+                        bundleCache: bundleCache,
+                        storeKitPrefetcher: prefetcher,
+                        logger: snapshotLogger
+                    )
+                    #else
+                    presenter = InAppMessagePresenter(
+                        messageManager: manager,
+                        identity: identity,
+                        bundleCache: bundleCache,
+                        logger: snapshotLogger
+                    )
+                    #endif
+                    self.presenter = presenter
+                }
+                return presenter
+            }.show(
+                message: message,
+                in: scene,
+                prefetchedProducts: products,
+                deepLinkParameters: deepLinkParameters
+            )
+        } catch {
+            // Nothing was shown — restore the stint's budget so polling can
+            // resume on the next return event / explicit check.
+            manager.releaseDisplaySlot(messageId: message.id)
+            throw error
+        }
     }
 
     /// SwiftUI entry point. Resolves the message payload, downloads the

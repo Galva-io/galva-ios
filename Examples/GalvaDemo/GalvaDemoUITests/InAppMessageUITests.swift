@@ -117,19 +117,62 @@ final class InAppMessageUITests: XCTestCase {
                       file: file, line: line)
     }
 
+    func test_deepLinkRace_fetchSuppressed_untilNextReturnEvent() {
+        // THE regression guard for the email-deep-link double-present, under the
+        // one-message-per-stint budget. The mock serves the deep link's resolve
+        // with ~2s of latency (deepLinkRace), so tapping "Next message" right
+        // after the deep link lands the poll squarely INSIDE the deep-link
+        // flight — the exact real-world interleaving. Contract:
+        //   1. the deep link D presents ALONE (the poll's fetch is suppressed
+        //      while D's claim is pending),
+        //   2. the polled message P does NOT show after D closes either — the
+        //      stint's budget is spent,
+        //   3. P surfaces on the NEXT RETURN EVENT (background → foreground).
+        // Broken code presents P mid-flight and collides with D (fails 1).
+        let app = launchApp(scenario: .deepLinkRace)
+        tapControl(app, "identify") // openCommunication links defer until identified
+
+        // Deep link D (22222222…) starts its ~2s flight and claims the slot.
+        tapControl(app, "openDeepLink")
+        // Poll triggered mid-flight — the fetch must be suppressed entirely.
+        tapControl(app, "nextMessage")
+
+        // 1. D presents alone, serving its OWN payload.
+        let deepLinkMsg = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "msgid:22222222")
+        ).firstMatch
+        XCTAssertTrue(deepLinkMsg.waitForExistence(timeout: 25),
+                      "the deep-link message must present after its delayed resolve")
+        let polledMsg = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "msgid:44444444")
+        ).firstMatch
+        XCTAssertFalse(polledMsg.exists,
+                       "the mid-flight poll must be suppressed — no second message")
+
+        // 2. Close D — P must STILL not show (budget spent; dismissal is not a
+        //    return event).
+        let close = app.webViews.buttons["Close E2E"]
+        XCTAssertTrue(close.waitForExistence(timeout: 10))
+        close.tap()
+        XCTAssertTrue(app.webViews.firstMatch.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(polledMsg.waitForExistence(timeout: 4),
+                       "no further message this stint — the budget is spent")
+
+        // 3. Background → foreground: a return event starts a fresh stint, the
+        //    poll runs again, and the suppressed message finally surfaces.
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(polledMsg.waitForExistence(timeout: 25),
+                      "the suppressed message must surface on the next return event")
+    }
+
     func test_deepLink_and_pollMessage_doNotCollide() {
-        // Coexistence smoke test for the reported bug: an email deep link opens a
-        // message (UIKit presenter) while a poll auto-displays a DIFFERENT message
-        // (SwiftUI sheet). Asserts the deep-link stays presented, serving its OWN
-        // message id (Fix A), and a subsequent poll doesn't disrupt it (Fix B).
-        //
-        // NOTE: positive smoke test, not a fail-without-fix guard. The USER-facing
-        // failure was the CONCURRENT race (both presenting at the same instant →
-        // active-id clobber + "already presenting"), which this hermetic,
-        // sequential harness can't reproduce deterministically — the deep-link
-        // fully presents and reads its context before the poll runs. The fixes
-        // are correct by construction (per-message bridge id; single-presentation
-        // gate).
+        // A poll triggered while a deep-link message is ON SCREEN must be
+        // suppressed by the display budget (the slot is `.used` and the sheet is
+        // active, so the fetch is skipped entirely). The deep-link sheet stays
+        // presented, serving its OWN message id (per-message bridge scoping).
+        // The mid-flight variant — poll landing DURING the deep-link resolve —
+        // is covered deterministically by `test_deepLinkRace_…`.
         let app = launchApp(scenario: .deepLinkTarget)
 
         // openCommunication deep links are deferred until identify — identify

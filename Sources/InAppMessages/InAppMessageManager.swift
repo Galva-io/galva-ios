@@ -57,6 +57,71 @@ final class InAppMessageManager {
     /// of a rendered message" (see docs).
     var activeMessageId: String?
 
+    // MARK: - Display budget (one message per foreground stint)
+    //
+    // At most ONE in-app message flow per "return event" (cold start, resume
+    // from background, or an explicit `checkForMessages()`):
+    //
+    //   • `.pending`   a deep-link / programmatic show is resolving — polling
+    //                  must not fetch AT ALL (a deep link is user-initiated and
+    //                  outranks anything the poll could surface).
+    //   • `.used`      a message was delivered/presented this stint — no more
+    //                  fetches until the next return event.
+    //
+    // Because the manager is `@GalvaActor`, the deep-link claim and the poll's
+    // slot checks are serialized by the actor — a claim that lands while a
+    // fetch is in flight is observed by the post-fetch re-check, and the
+    // fetched items are dropped UNMARKED so they surface again next stint.
+    // This is what prevents an email deep link and a foreground poll from
+    // ever presenting two messages at once.
+
+    enum DisplaySlot: Sendable, Hashable {
+        case available
+        /// Deep-link / programmatic presentation resolving. Fetch suppressed.
+        case pending(messageId: String)
+        /// A message was delivered or presented this stint. Fetch suppressed
+        /// until the next return event resets.
+        case used(messageId: String)
+    }
+
+    private(set) var displaySlot: DisplaySlot = .available
+
+    /// Claim the stint's display slot for a deep-link / programmatic show.
+    /// Priority claim: overrides `.used` (the user explicitly asked for this
+    /// message). No-op when the same message is already on screen, so a
+    /// repeated `show(in:)` doesn't regress `.used` back to `.pending`.
+    func claimDisplaySlot(messageId: String) {
+        guard activeMessageId != messageId else { return }
+        displaySlot = .pending(messageId: messageId)
+    }
+
+    /// Roll back a claim whose presentation failed (resolve rejected, bundle
+    /// unavailable, no host) — nothing was shown, so the stint's budget is
+    /// restored and the next poll may fetch again.
+    func releaseDisplaySlot(messageId: String) {
+        switch displaySlot {
+        case .pending(let id) where id == messageId:
+            displaySlot = .available
+        case .used(let id) where id == messageId && activeMessageId == nil:
+            // The show consumed the slot (setActiveMessageId ran) but then
+            // failed and tore down before returning — restore the budget.
+            displaySlot = .available
+        default:
+            break
+        }
+    }
+
+    /// Start-of-stint reset, called from `poll()` (which only runs on return
+    /// events + explicit checks). A spent slot resets ONLY when nothing is
+    /// pending or still on screen — so a deep link claimed before the
+    /// foreground poll, or a sheet the user is still viewing, keeps polling
+    /// suppressed.
+    private func resetDisplaySlotIfStale() {
+        if case .used = displaySlot, activeMessageId == nil {
+            displaySlot = .available
+        }
+    }
+
     init(
         client: APIClient,
         identity: IdentityStore,
@@ -77,11 +142,26 @@ final class InAppMessageManager {
 
     // MARK: - Polling
 
-    /// Hit GET /identities/communications, pick the newest unseen in-app
-    /// message, publish it, and warm the bundle for its webview version.
-    /// Idempotent — called by the lifecycle observer on every foreground.
+    /// Hit GET /identities/communications, pick the FIRST unseen in-app
+    /// message (server returns highest-priority first), publish it, and warm
+    /// the bundle for its webview version. Called by the lifecycle observer on
+    /// every foreground (a "return event") and by `checkForMessages()`.
+    ///
+    /// Display budget: at most one message per stint. The fetch is skipped
+    /// entirely while a deep-link presentation is pending/on screen or a
+    /// message already showed this stint; the skipped messages surface
+    /// naturally on the next return event's poll.
     @discardableResult
     func poll() async -> [InAppMessages.Message] {
+        // A return event starts a fresh stint (unless something is pending
+        // or still on screen).
+        resetDisplaySlotIfStale()
+        guard case .available = displaySlot else {
+            logger.debug(.identity, "in-app poll skipped — display slot busy", metadata: [
+                "slot": String(describing: displaySlot),
+            ])
+            return []
+        }
         var query: [URLQueryItem] = [
             URLQueryItem(name: "channelType", value: "in-app"),
         ]
@@ -100,6 +180,16 @@ final class InAppMessageManager {
             logger.debug(.identity, "in-app poll OK", metadata: [
                 "count": String(response.data.count),
             ])
+            // Re-check after the network suspension: a deep link may have
+            // claimed the slot while the fetch was in flight (the actor
+            // serializes the claim and this check). Drop the results UNMARKED
+            // so they surface again on the next return event's poll.
+            guard case .available = displaySlot else {
+                logger.info(.identity, "in-app poll dropped — display slot claimed mid-flight", metadata: [
+                    "count": String(response.data.count),
+                ])
+                return []
+            }
             return await dispatch(items: response.data)
         } catch let error as APIError {
             // Permanent errors typically mean missing/invalid api key on
@@ -129,23 +219,28 @@ final class InAppMessageManager {
     }
 
     private func dispatch(items: [CommunicationItem]) async -> [InAppMessages.Message] {
-        // Server returns highest-priority first, but consumers expect a
-        // newest-first view per the doc. The two coincide today; keep the
-        // server order to avoid second-guessing the priority resolution.
-        var emitted: [InAppMessages.Message] = []
+        // Deliver exactly ONE message per stint — the first unseen in-app item
+        // in server order (the backend returns highest-priority first). The
+        // remaining items are left UNMARKED so they surface on the next return
+        // event's poll instead of being lost.
         for item in items where item.type == .trialRescueInApp {
             let key = item.id.uuidString.lowercased()
             if seenIds.contains(key) { continue }
             seenIds.insert(key)
             let message = item.toPublicMessage()
-            emitted.append(message)
+            // Consume the stint's budget at delivery — the fetch won't run
+            // again until the next return event, even if the app never
+            // presents this message.
+            displaySlot = .used(messageId: message.id)
             // Hop to the MainActor stream — keeps message delivery on the
             // main thread for the SDK's MainActor-isolated consumers.
             await stream.yield(message)
             prefetchBundleIfPossible()
+            pruneSeenIfNeeded()
+            return [message]
         }
         pruneSeenIfNeeded()
-        return emitted
+        return []
     }
 
     /// Warm the latest known bundle versions if we have any. We don't yet
@@ -242,6 +337,13 @@ final class InAppMessageManager {
     /// screen."
     func setActiveMessageId(_ id: String?) {
         activeMessageId = id
+        // A presentation going live consumes the stint's display budget —
+        // this also converts a deep link's `.pending` claim to `.used`.
+        // Going nil (dismiss) does NOT free the slot; the budget stays spent
+        // until the next return event resets it.
+        if let id {
+            displaySlot = .used(messageId: id)
+        }
     }
 
     /// Accessor for the bridge layer (MainActor). Returns the current
@@ -262,6 +364,7 @@ final class InAppMessageManager {
         seenIds.removeAll(keepingCapacity: false)
         resolvedPayloads.removeAll(keepingCapacity: false)
         activeMessageId = nil
+        displaySlot = .available
     }
 
     // MARK: - StoreKit storefront

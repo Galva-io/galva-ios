@@ -138,12 +138,18 @@ final class InAppMessagePresenter: NSObject {
                          metadata: ["messageId": message.id])
             return
         }
-        
+
         if currentMessageId != nil {
             logger.info(.identity, "show(in:) dismissing previous overlay",
                         metadata: ["replacedBy": message.id])
             await dismissAnimated(reason: "replaced")
         }
+
+        // Note: exclusion with the polling pipeline lives UPSTREAM — the
+        // caller (SDKCore.showInAppMessage) claims the manager's display slot
+        // before this runs, which suppresses in-app message fetching for the
+        // whole flight. By the time we present, no concurrently-polled
+        // message can exist.
 
         // 1. Resolve payload (server pin → /sdk/initialize fallback for
         //    the webview version). The bridge serves the payload back to
@@ -200,10 +206,6 @@ final class InAppMessagePresenter: NSObject {
             "version": version,
             "host": String(describing: type(of: host)),
         ])
-        // Claim the single presentation slot — a user-initiated deep-link /
-        // programmatic show wins, preempting a SwiftUI auto-display sheet if one
-        // is up, so two in-app messages never stack on the same host.
-        InAppMessagePresentationGate.shared.claimForProgrammatic(message.id, host: self)
         await present(vc, on: host)
     }
 
@@ -256,14 +258,6 @@ final class InAppMessagePresenter: NSObject {
     /// `present(_:animated:completion:)` is callback-based — wrap it in a
     /// continuation so the show() flow remains a clean `async` path.
     private func present(_ vc: UIViewController, on host: UIViewController) async {
-        // If the host is already presenting something (e.g. a SwiftUI
-        // auto-display sheet the gate just preempted, still mid-dismiss),
-        // clear it first so `present` can't fail with "already presenting".
-        if let existing = host.presentedViewController, existing !== vc {
-            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                existing.dismiss(animated: false) { cont.resume() }
-            }
-        }
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             host.present(vc, animated: true) {
                 cont.resume()
@@ -303,7 +297,6 @@ final class InAppMessagePresenter: NSObject {
         if let webView = viewController?.webView {
             InAppMessageWebViewFactory.tearDown(webView: webView, bridge: bridge)
         }
-        InAppMessagePresentationGate.shared.release(host: self)
         viewController = nil
         bridge = nil
         currentMessageId = nil

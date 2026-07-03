@@ -78,7 +78,20 @@ final class GalvaMockURLProtocol: URLProtocol {
 
         // Resolve a specific communication (deep link or stream message).
         if method == "POST", path.contains("/identities/communications/"), path.hasSuffix("/resolve") {
-            finish(status: 200, json: MockFixtures.resolve(for: Self.scenario))
+            let body = MockFixtures.resolve(for: Self.scenario)
+            // deepLinkRace: serve the DEEP LINK's resolve with ~2s of simulated
+            // network latency (the mock's answer, not the SDK's behavior). This
+            // deterministically opens the real-world race window — a message
+            // polled during the flight completes its whole pipeline before the
+            // deep link is ready to present. Poll-message resolves stay instant.
+            if Self.scenario == .deepLinkRace,
+               path.contains(MockFixtures.deepLinkCommunicationId) {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) { [self] in
+                    finish(status: 200, json: body)
+                }
+                return
+            }
+            finish(status: 200, json: body)
             return
         }
 

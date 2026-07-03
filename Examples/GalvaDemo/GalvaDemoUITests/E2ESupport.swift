@@ -14,6 +14,7 @@ enum E2EScenarioArg: String {
     case showInAppMessageUIKit
     case showInAppMessageTwice
     case deepLinkTarget
+    case deepLinkRace
     case noMessages
 }
 

@@ -37,7 +37,7 @@ enum MockFixtures {
             return message(id: pollMessageId)
         case .showInAppMessageTwice:
             return message(id: second ? secondMessageId : pollMessageId)
-        case .deepLinkTarget:
+        case .deepLinkTarget, .deepLinkRace:
             // Nothing until the test flips `second` (via "Next message"), which
             // delivers a poll message that must YIELD to an active deep-link.
             return second ? message(id: secondMessageId) : #"{"success":true,"data":[],"meta":{"nextCursor":null}}"#
@@ -58,7 +58,7 @@ enum MockFixtures {
         switch scenario {
         case .noMessages:
             return #"{"data":{"valid":false}}"#
-        case .showInAppMessage, .showInAppMessageUIKit, .showInAppMessageTwice, .deepLinkTarget:
+        case .showInAppMessage, .showInAppMessageUIKit, .showInAppMessageTwice, .deepLinkTarget, .deepLinkRace:
             return """
             {"data":{"valid":true,"webviewVersion":"1.0.0","payload":{"title":"E2E Offer","communicationId":"\(deepLinkCommunicationId)","source":"e2e"}}}
             """

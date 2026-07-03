@@ -25,6 +25,12 @@ enum E2EScenario: String {
     case showInAppMessageTwice
     /// Poll returns nothing; only a deep link resolves a message.
     case deepLinkTarget
+    /// Reproduces the real-world deep-link/poll race: the deep link's resolve
+    /// is served with ~2s of simulated network latency, so a message polled
+    /// via "Next message" lands squarely INSIDE the deep-link flight window.
+    /// Without delivery deferral the polled message presents mid-flight and
+    /// the two presentations collide.
+    case deepLinkRace
     /// Poll returns nothing and resolve is invalid (quiet baseline).
     case noMessages
 }
