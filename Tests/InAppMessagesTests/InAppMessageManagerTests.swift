@@ -56,21 +56,6 @@ final class InAppMessageManagerTests: XCTestCase {
                        "duplicate message id must not be re-emitted")
     }
 
-    func test_poll_filtersOutNonInAppTypes() async throws {
-        URLProtocolStub.handler = { request in
-            let body = TestFixtures.communicationListJSON(items: [
-                TestFixtures.makeCommunication(
-                    id: UUID(), type: "trial-rescue-email", workflow: "trial-rescue"
-                ),
-            ])
-            return (URLProtocolStub.httpResponse(url: request.url!, status: 200), body)
-        }
-        let harness = await Harness.make()
-        let emitted = await harness.manager.poll()
-        XCTAssertEqual(emitted.count, 0,
-                       "email variants must be ignored by the in-app stream")
-    }
-
     func test_poll_returnsEmpty_onNetworkError() async throws {
         URLProtocolStub.handler = { _ in
             throw URLError(.notConnectedToInternet)

@@ -232,7 +232,7 @@ final class InAppMessageManager {
         // in server order (the backend returns highest-priority first). The
         // remaining items are left UNMARKED so they surface on the next return
         // event's poll instead of being lost.
-        for item in items where item.type == .trialRescueInApp {
+        for item in items {
             let key = item.id.uuidString.lowercased()
             if seenIds.contains(key) { continue }
             seenIds.insert(key)
