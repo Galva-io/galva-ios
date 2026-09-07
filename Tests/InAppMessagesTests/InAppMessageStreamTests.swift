@@ -51,8 +51,7 @@ final class InAppMessageStreamTests: XCTestCase {
         let sample = InAppMessages.Message(
             id: "00000000-0000-0000-0000-000000000001",
             workflowType: .trialRescue,
-            createdAt: Date(timeIntervalSince1970: 0),
-            rawType: "trial-rescue-in-app"
+            createdAt: Date(timeIntervalSince1970: 0)
         )
         var attempts = 0
         while !result.received && attempts < 500 {

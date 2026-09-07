@@ -32,19 +32,9 @@ struct CommunicationListResponse: Sendable, Codable, Hashable {
 /// One row in the communication list. Drives the public `InAppMessages.Message`.
 struct CommunicationItem: Sendable, Codable, Hashable {
     let id: UUID
-    let type: CommunicationType
+//    let type: CommunicationType
     let workflowType: WorkflowType?
     let createdAt: Date
-
-    /// Server-side enum of channel-specific message types. Includes both
-    /// in-app variants and non-in-app variants (we filter on the request
-    /// side, so this is mostly for forward compatibility).
-    enum CommunicationType: String, Sendable, Codable, Hashable {
-        case paymentRecoveryEmail            = "payment-recovery-email"
-        case paymentRecoveryPushNotification = "payment-recovery-push-notification"
-        case trialRescueEmail                = "trial-rescue-email"
-        case trialRescueInApp                = "trial-rescue-in-app"
-    }
 
     /// Workflow the communication came from. Nullable on the wire — the
     /// server returns null for broadcast / manual sends.

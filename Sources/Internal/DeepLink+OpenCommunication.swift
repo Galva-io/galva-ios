@@ -47,8 +47,7 @@ extension SDKCore {
         let message = InAppMessages.Message(
             id: communicationId,
             workflowType: nil,
-            createdAt: Date(),
-            rawType: "deeplink"
+            createdAt: Date()
         )
         logger.info(.lifecycle, "openCommunication — presenting", metadata: [
             "communicationId": communicationId,

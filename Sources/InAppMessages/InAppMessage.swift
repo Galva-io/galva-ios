@@ -38,21 +38,15 @@ public extension InAppMessages {
         /// burst of foreground polls.
         public let createdAt: Date
 
-        /// Raw server-side channel/type discriminator (e.g.
-        /// `"trial-rescue-in-app"`). Surfaced for logging — the typed
-        /// `workflowType` is the supported way to branch on workflow.
-        public let rawType: String
 
         public init(
             id: String,
             workflowType: WorkflowType?,
-            createdAt: Date,
-            rawType: String
+            createdAt: Date
         ) {
             self.id = id
             self.workflowType = workflowType
             self.createdAt = createdAt
-            self.rawType = rawType
         }
     }
 
@@ -117,8 +111,7 @@ extension CommunicationItem {
         InAppMessages.Message(
             id: id.uuidString.lowercased(),
             workflowType: workflowType?.toPublic(),
-            createdAt: createdAt,
-            rawType: type.rawValue
+            createdAt: createdAt
         )
     }
 }
