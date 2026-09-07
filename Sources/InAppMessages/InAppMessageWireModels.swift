@@ -39,8 +39,11 @@ struct CommunicationItem: Sendable, Codable, Hashable {
     /// Workflow the communication came from. Nullable on the wire — the
     /// server returns null for broadcast / manual sends.
     enum WorkflowType: String, Sendable, Codable, Hashable {
-        case prechurnSave    = "prechurn-save"
+        case cancellationRecovery    = "cancellation-recovery"
+        case winback = "winback"
+        /// Failed-payment recovery.
         case paymentRecovery = "payment-recovery"
+        /// Trial-to-paid conversion rescue.
         case trialRescue     = "trial-rescue"
     }
 

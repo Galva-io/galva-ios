@@ -53,8 +53,8 @@ public extension InAppMessages {
     /// Workflow categories surfaced by the server. New cases will be added
     /// over time; switch on this enum with a `@unknown default` branch.
     enum WorkflowType: String, Sendable, Hashable, CaseIterable {
-        /// Pre-churn (subscriber rescue) save offer.
-        case prechurnSave    = "prechurn-save"
+        case cancellationRecovery    = "cancellation-recovery"
+        case winback = "winback"
         /// Failed-payment recovery.
         case paymentRecovery = "payment-recovery"
         /// Trial-to-paid conversion rescue.
@@ -119,9 +119,10 @@ extension CommunicationItem {
 extension CommunicationItem.WorkflowType {
     func toPublic() -> InAppMessages.WorkflowType {
         switch self {
-        case .prechurnSave:    return .prechurnSave
+        case .cancellationRecovery: return .cancellationRecovery
+        case .trialRescue: return .trialRescue
+        case .winback: return .winback
         case .paymentRecovery: return .paymentRecovery
-        case .trialRescue:     return .trialRescue
         }
     }
 }
