@@ -43,9 +43,11 @@ targets: [
 
 </details>
 
-### 3. Configure Galva and show in-app messages
+### 3. Configure Galva
 
-In SwiftUI, add two modifiers to your root view:
+Call `Galva.configure` once at launch. From then on, Galva presents its in-app messages on its own, as a sheet on your app's active window.
+
+In SwiftUI, configure Galva in your `App` initializer, and forward Galva links from your root view:
 
 ```swift
 import SwiftUI
@@ -53,11 +55,14 @@ import Galva
 
 @main
 struct MyApp: App {
+    init() {
+        Galva.configure(apiKey: "pk_your_app_id")
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .galvaConfigure(apiKey: "pk_your_app_id")  // configures Galva and opens Galva links
-                .autoDisplayInAppMessages()                // presents Galva's in-app messages
+                .onOpenURL { url in Galva.handleOpenURL(url) }  // opens Galva links
         }
     }
 }
@@ -78,23 +83,15 @@ func application(
 }
 ```
 
-Forward Galva links and present in-app messages from your scene delegate:
+Forward Galva links from your scene delegate:
 
 ```swift
-private var messageTask: Task<Void, Never>?
-
 func scene(
     _ scene: UIScene,
     willConnectTo session: UISceneSession,
     options connectionOptions: UIScene.ConnectionOptions
 ) {
     Galva.scene(scene, willConnectTo: session, options: connectionOptions)
-    messageTask = Task { @MainActor in
-        for await message in InAppMessages.messages {
-            guard let windowScene = scene as? UIWindowScene else { continue }
-            try? await message.show(in: windowScene)
-        }
-    }
 }
 
 func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
@@ -106,7 +103,7 @@ Apps without scenes forward links with `Galva.application(_:didFinishLaunchingWi
 
 </details>
 
-Replace `pk_your_app_id` with your App ID. While you integrate, add `logLevel: .debug` to see everything the SDK does.
+Replace `pk_your_app_id` with your App ID. While you integrate, add `logLevel: .debug` to see everything the SDK does. To decide yourself when messages appear, see [Present messages yourself](#present-messages-yourself).
 
 ### 4. Identify subscribers
 
@@ -187,6 +184,40 @@ func application(
 ```
 
 Asking for permission and registering for remote notifications stay in your app; Galva never prompts. To report taps on Galva notifications, see [Send push tokens](https://docs.galva.io/sdks/ios/push).
+
+## Present messages yourself
+
+By default Galva presents each in-app message as soon as it's ready. To control when and where messages appear, for example only after onboarding, configure `.manual` presentation with a handler. Galva hands each message to it and presents nothing itself:
+
+```swift
+Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual { message in
+    guard let scene = UIApplication.shared.connectedScenes
+        .compactMap({ $0 as? UIWindowScene })
+        .first(where: { $0.activationState == .foregroundActive })
+    else { return }
+    try? await message.show(in: scene)
+})
+```
+
+In SwiftUI, route each message into state and present it with `.inAppMessageSheet`:
+
+```swift
+@MainActor final class MessageCenter: ObservableObject {
+    static let shared = MessageCenter()
+    @Published var message: InAppMessages.Message?
+}
+
+// In your App initializer:
+Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual { message in
+    MessageCenter.shared.message = message
+})
+
+// On your root view, with @ObservedObject var messageCenter = MessageCenter.shared:
+ContentView()
+    .inAppMessageSheet($messageCenter.message)
+```
+
+The handler gets messages one at a time, on the main actor. Each message is also published on `InAppMessages.messages`, and `message.workflowType` tells you which recovery flow sent it.
 
 ## Using RevenueCat
 

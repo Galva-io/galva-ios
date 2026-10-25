@@ -21,7 +21,7 @@ Sources/
 │                                 StorageMigrator (schema + quarantine)
 ├── Models/                     ← AnyJSONValue, MessageContext, Endpoint
 ├── Networking/                 ← APIClient, Uploader, durable request queue
-├── SwiftUI/                    ← .galvaConfigure, in-app message modifiers
+├── SwiftUI/                    ← .inAppMessageSheet, for .manual presentation
 └── Logger/                     ← GalvaLogger, OSLogLogger, LevelFilter
 
 Tests/                          ← one folder per area, mirroring Sources/
@@ -96,7 +96,7 @@ The suite is organised by behavioural contract, not by source-file mirror. When 
 | `MessageStorageContractTests` | shared contract both InMemory + SQLite must satisfy |
 | `StorageMigrationTests` | schema migrations, quarantine, downgrade safety |
 | `SDKCore*Tests` | integration tests using `SDKHarness` (no network, no real disk) |
-| `InAppMessage*Tests`, `Bridge*Tests` | message delivery, display budget, native bridge wire format |
+| `InAppMessage*Tests`, `Bridge*Tests` | message delivery (automatic and manual), display budget, native bridge wire format |
 | `PurchaseControllerTests` | purchase-controller dispatch and bridge error codes |
 | `IntegrationSPITests` | the `@_spi` surface integration packages build on |
 | `PublicAPIReturnLatencyTests`, `BoundedQueueTests`, `FilteredLogPerformanceTests`, `MainThreadBudgetTests` | API return latency, queue cap, filtered-log cost, main-thread budgets |

@@ -10,11 +10,11 @@ First public release.
 
 ### Added
 
-- **Setup:** `Galva.configure(apiKey:)` and the SwiftUI `.galvaConfigure(apiKey:)` modifier, with production, development and custom environments, log levels, custom loggers (`GalvaLogger`), and automatic `session_start` and Apple Search Ads attribution.
+- **Setup:** `Galva.configure(apiKey:)`, with production, development and custom environments, log levels, custom loggers (`GalvaLogger`), and automatic `session_start` and Apple Search Ads attribution.
 - **Subscribers:** `AppUser.identify(userId:appAccountToken:)`, `AppUser.logOut()`, built-in and custom attributes with `AppUser.set`, and synchronous `AppUser.identifiedUserId` and `AppUser.appAccountToken`.
 - **Events:** `AppEvents.track`, including typed events. Calls are saved to disk and uploaded in batches, with retry and backoff.
-- **In-app messages:** `.autoDisplayInAppMessages()`, `.inAppMessageSheet(_:)`, `InAppMessages.messages` with `show(in:)`, and `InAppMessages.checkForMessages()`. Offers in messages are bought with StoreKit, with Galva-signed promotional offers and the subscriber's app account token. `InAppMessages.WorkflowType` carries any workflow type, including ones Galva adds after this release.
-- **Deep links:** your app's `gv-` URL scheme opens Galva's messages and offers. `.galvaConfigure` forwards links automatically; UIKit apps forward them from their app and scene delegates.
+- **In-app messages:** Galva presents each message automatically, as a sheet on the app's active window. With `inAppMessages: .manual { message in … }`, your app presents them instead, with `message.show(in:)` or `.inAppMessageSheet(_:)`. Every message is also published on `InAppMessages.messages`, and `InAppMessages.checkForMessages()` checks on demand. Offers in messages are bought with StoreKit, with Galva-signed promotional offers and the subscriber's app account token. `InAppMessages.WorkflowType` carries any workflow type, including ones Galva adds after this release.
+- **Deep links:** your app's `gv-` URL scheme opens Galva's messages and offers. SwiftUI apps forward links with `.onOpenURL { url in Galva.handleOpenURL(url) }`; UIKit apps forward them from their app and scene delegates.
 - **Push:** device token registration, and tap and dismiss tracking for Galva's notifications.
 - **Purchases:** `Galva.reconcileTransactions()` and an automatic StoreKit transaction sweep match purchases to subscribers.
 - **Purchase controllers:** `GalvaPurchaseController` and `Galva.setPurchaseController(_:)` run offer purchases through your own billing code.
