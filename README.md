@@ -237,6 +237,7 @@ You can also buy through your own purchase API instead of `purchaseWithStoreKit(
 - **It never blocks your app.** Every call returns immediately and does its work on a background actor.
 - **Calls aren't lost.** They're saved to disk before upload and retried with backoff, so they survive crashes, app kills and offline periods.
 - **It stays out of your way.** No method swizzling, no IDFA or tracking prompt, and no network call before `configure`.
+- **It declares its data use.** The package ships a privacy manifest (`PrivacyInfo.xcprivacy`) listing the data it collects and its one required-reason API, `UserDefaults`, so Xcode's privacy report for your app includes it.
 - **Subscribers can opt out.** `Galva.setOptOut(true)` stops tracking; in-app messages keep working. See [Privacy and App Review](https://docs.galva.io/sdks/ios/privacy).
 
 ## Documentation

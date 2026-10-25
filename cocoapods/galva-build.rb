@@ -38,3 +38,19 @@ def galva_apply_build_settings(s)
   s.swift_versions = ['6.0']
   s.library        = 'sqlite3'
 end
+
+# Ships the SDK's privacy manifest in the pod, as Package.swift's
+# `resources: [.copy("Resources/PrivacyInfo.xcprivacy")]` does for SPM, so
+# React Native apps get the SDK's data-use and UserDefaults (CA92.1)
+# declarations in their privacy report. Pass the vendored `Sources/`
+# directory, relative to the podspec:
+#
+#     galva_apply_privacy_manifest(s, 'ios/galva/Sources')
+#
+# Opt-in so existing podspecs keep working until they call it. It sets
+# `resource_bundles`, replacing any the podspec set before.
+def galva_apply_privacy_manifest(s, sources_dir)
+  s.resource_bundles = {
+    'GalvaPrivacy' => ["#{sources_dir}/Resources/PrivacyInfo.xcprivacy"],
+  }
+end

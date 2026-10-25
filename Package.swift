@@ -28,6 +28,12 @@ let package = Package(
         .target(
             name: "Galva",
             path: "Sources",
+            // Declares the SDK's collected data and its one required-reason
+            // API (UserDefaults, CA92.1), so apps don't have to. Xcode folds
+            // it into the app's privacy report.
+            resources: [
+                .copy("Resources/PrivacyInfo.xcprivacy"),
+            ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
             ]
