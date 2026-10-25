@@ -289,6 +289,22 @@ struct LevelFilterLogger: GalvaLogger {
     }
 }
 
+// MARK: - CurrentSDKLogger
+
+/// Forwards every call to the SDK's current logger (`SDKCore.currentLogger`).
+/// Handed to integrations, which live outside `GalvaActor`, so their entries
+/// follow the configured level and any logger installed later with
+/// `Galva.setLogger(_:)`.
+struct CurrentSDKLogger: GalvaLogger {
+    func log(_ entry: Galva.LogEntry) {
+        SDKCore.currentLogger.log(entry)
+    }
+
+    func isEnabled(_ level: Galva.LogLevel) -> Bool {
+        SDKCore.currentLogger.isEnabled(level)
+    }
+}
+
 // MARK: - Disabled logger
 
 /// A no-op logger. Useful as a default before configure() runs and in

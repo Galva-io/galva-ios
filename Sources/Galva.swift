@@ -12,7 +12,7 @@
 //
 //      @main struct MyApp: App {
 //          init() {
-//              Galva.configure(apiKey: "pk_live_xxxxxxxx")
+//              Galva.configure(apiKey: "pk_your_app_id")
 //          }
 //          var body: some Scene { WindowGroup { ContentView() } }
 //      }
@@ -64,11 +64,10 @@ public enum Galva {
     /// are fully isolated — production data never crosses into development
     /// and vice versa.
     ///
-    /// Choose your environment per build target (e.g. `.development` for
-    /// in-house TestFlight builds, `.production` for App Store releases).
-    /// The same API key cannot be used across environments — `pk_live_*`
-    /// keys are valid against `.production` only; `pk_test_*` against
-    /// `.development`.
+    /// Each App ID works only in the environment that issued it, and Galva
+    /// rejects every request that pairs it with the other one. Leave this at
+    /// `.production` unless you have an App ID issued for Galva's
+    /// development environment.
     public enum Environment: Sendable, Hashable {
         
         /// `api.galva.io` + `webview.galva.io`. App Store releases ship
@@ -201,6 +200,9 @@ public enum Galva {
         case uploader
         /// App-level lifecycle (cold start, background, foreground).
         case lifecycle
+        /// Integrations with other SDKs installed via
+        /// `configure(…, integrations:)`, e.g. RevenueCat.
+        case integration
     }
     
     // MARK: configure
@@ -213,15 +215,16 @@ public enum Galva {
     /// Example:
     ///
     ///     Galva.configure(
-    ///         apiKey: "pk_live_xxx",
+    ///         apiKey: "pk_your_app_id",
     ///         environment: .production,
     ///         autoTrackCategories: [.lifecycle],
     ///         logLevel: .info
     ///     )
     ///
     /// - Parameters:
-    ///   - apiKey: Your Galva publishable API key. The server resolves your
-    ///     `appId` and environment from it.
+    ///   - apiKey: Your App ID, from **Admin → Settings → Connect → Client
+    ///     SDKs** in Galva. It starts with `pk_` and is safe to ship in your
+    ///     app. The server resolves your app and environment from it.
     ///   - environment: Backend to talk to. Default is `.production`. Use
     ///     `.development` for staging / TestFlight, or `.custom(...)` for
     ///     on-prem and proxy setups.
@@ -235,12 +238,17 @@ public enum Galva {
     ///     SDK logs into your own pipeline (Sentry, Datadog, file
     ///     logger, etc.). The configured `logLevel` is still applied to
     ///     filter entries before they reach your logger.
+    ///   - integrations: Connections to other SDKs in your app, from
+    ///     integration packages — e.g. `[.revenueCat()]` from
+    ///     `GalvaRevenueCat`. Installed in the background once Galva is
+    ///     configured. Default: none.
     public static func configure(
         apiKey: String,
         environment: Environment = .production,
         autoTrackCategories: AutoTrackCategory = [.lifecycle, .appleSearchAds],
         logLevel: LogLevel = .warning,
-        logger: (any GalvaLogger)? = nil
+        logger: (any GalvaLogger)? = nil,
+        integrations: [Integration] = []
     ) {
         Task { @GalvaActor in
             await SDKCore.shared.configure(
@@ -248,7 +256,8 @@ public enum Galva {
                 environment: environment,
                 autoTrack: autoTrackCategories,
                 logLevel: logLevel,
-                userLogger: logger
+                userLogger: logger,
+                integrations: integrations
             )
         }
     }
@@ -259,7 +268,7 @@ public enum Galva {
     /// **Not public.** Wrappers compile in the same Swift module as the core
     /// (e.g. the React Native pod builds the core + bridge together), so they
     /// reach this seam without it widening the public native API. Native apps
-    /// call ``configure(apiKey:environment:autoTrackCategories:logLevel:logger:)``.
+    /// call ``configure(apiKey:environment:autoTrackCategories:logLevel:logger:integrations:)``.
     ///
     /// `wrapper`'s name/version replace `ios`/`sdkVersion` in the
     /// `x-sdk-version` header, `context.library`, and the `sdk_version` event so
@@ -272,6 +281,7 @@ public enum Galva {
         autoTrackCategories: AutoTrackCategory = [.lifecycle, .appleSearchAds],
         logLevel: LogLevel = .warning,
         logger: (any GalvaLogger)? = nil,
+        integrations: [Integration] = [],
         wrapper: SDKWrapper?
     ) {
         // Set the reported identity synchronously, before any request is built,
@@ -282,7 +292,8 @@ public enum Galva {
             environment: environment,
             autoTrackCategories: autoTrackCategories,
             logLevel: logLevel,
-            logger: logger
+            logger: logger,
+            integrations: integrations
         )
     }
     

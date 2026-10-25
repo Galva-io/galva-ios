@@ -73,7 +73,7 @@ enum SDKConstants {
     /// Store Server Notifications that arrive without a matching
     /// `appAccountToken` (organic purchases, family-shared transactions,
     /// pre-identify activity). See the Store Notifications docs:
-    /// https://docs.galva.io/integrations/store-notifications/
+    /// https://docs.galva.io/integrations/app-store
     static let transactionsObservePath = "/v1/transactions/observe"
 
     /// Build the file URL for a WebView bundle on the supplied CDN. Used

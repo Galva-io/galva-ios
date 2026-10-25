@@ -104,7 +104,7 @@ final class SDKCore {
     /// purchases (native paywall, restored, family-shared) can be joined
     /// to the right user even when no `appAccountToken` made it onto the
     /// App Store receipt. See
-    /// https://docs.galva.io/integrations/store-notifications/#user-mapping
+    /// https://docs.galva.io/integrations/app-store#match-purchases-to-subscribers
     #if canImport(StoreKit)
     var transactionObserver: StoreKitTransactionObserver?
     #endif
@@ -157,6 +157,28 @@ final class SDKCore {
     /// `configure()`.
     nonisolated private static let _appAccountTokenLock = NSLock()
     nonisolated(unsafe) private static var _appAccountToken: UUID?
+
+    /// Thread-safe mirror of `logger`, refreshed by `rebuildLogger()`. Read
+    /// by `CurrentSDKLogger`, which integrations log through, so their output
+    /// follows the configured level and any logger installed later with
+    /// `Galva.setLogger(_:)` — unlike a snapshot taken at install time.
+    nonisolated private static let _currentLoggerLock = NSLock()
+    nonisolated(unsafe) private static var _currentLogger: any GalvaLogger = LevelFilterLogger(
+        minLevel: .warning,
+        wrapped: OSLogLogger()
+    )
+
+    nonisolated static var currentLogger: any GalvaLogger {
+        _currentLoggerLock.lock()
+        defer { _currentLoggerLock.unlock() }
+        return _currentLogger
+    }
+
+    nonisolated private static func setCurrentLogger(_ value: any GalvaLogger) {
+        _currentLoggerLock.lock()
+        _currentLogger = value
+        _currentLoggerLock.unlock()
+    }
 
     // MARK: Opt-out
     //
@@ -266,7 +288,8 @@ final class SDKCore {
         environment: Galva.Environment = .production,
         autoTrack: Galva.AutoTrackCategory,
         logLevel: Galva.LogLevel,
-        userLogger: (any GalvaLogger)? = nil
+        userLogger: (any GalvaLogger)? = nil,
+        integrations: [Galva.Integration] = []
     ) async {
         guard !configured else {
             logger.warning(.configuration, "configure called more than once — ignoring")
@@ -400,6 +423,25 @@ final class SDKCore {
                 #if canImport(StoreKit)
                 self.storeKitPrefetcher?.prefetch(productIds: live.storekitProductIds)
                 #endif
+            }
+        }
+
+        installIntegrations(integrations)
+    }
+
+    /// Install integrations once the SDK is configured. Each runs in its own
+    /// detached task — never on GalvaActor — so a slow or long-lived
+    /// integration can't hold up the SDK.
+    func installIntegrations(_ integrations: [Galva.Integration]) {
+        guard !integrations.isEmpty else { return }
+        let context = Galva.IntegrationContext(logger: CurrentSDKLogger())
+        for integration in integrations {
+            logger.info(.integration, "installing integration", metadata: [
+                "name": integration.name,
+                "version": integration.version,
+            ])
+            Task.detached {
+                await integration.install(context)
             }
         }
     }
@@ -554,6 +596,7 @@ final class SDKCore {
     /// `logLevel`. Called whenever either changes.
     private func rebuildLogger() {
         self.logger = LevelFilterLogger(minLevel: logLevel, wrapped: sinkLogger)
+        Self.setCurrentLogger(logger)
     }
 
     /// Handle a fresh APNs device token (hex). Persists it device-scoped,
