@@ -33,23 +33,16 @@ struct CommunicationListResponse: Sendable, Codable, Hashable {
 struct CommunicationItem: Sendable, Codable, Hashable {
     let id: UUID
 //    let type: CommunicationType
-    let workflowType: WorkflowType?
+    /// Workflow the communication came from, as the server's raw value
+    /// (`"trial-rescue"`, …). Nullable on the wire — the server returns null
+    /// for broadcast / manual sends.
+    ///
+    /// Deliberately a plain string, not a closed enum: the server adds
+    /// workflow types over time, and an enum would fail to decode an unknown
+    /// value — taking the whole communication list down with it. The public
+    /// `InAppMessages.WorkflowType` wraps whatever arrives.
+    let workflowType: String?
     let createdAt: Date
-
-    /// Workflow the communication came from. Nullable on the wire — the
-    /// server returns null for broadcast / manual sends.
-    enum WorkflowType: String, Sendable, Codable, Hashable {
-        case cancellationRecovery    = "cancellation-recovery"
-        case winback = "winback"
-        /// Failed-payment recovery.
-        case paymentRecovery = "payment-recovery"
-        /// Trial-to-paid conversion rescue.
-        case trialRescue     = "trial-rescue"
-    }
-
-    // The server returns workflowType as anyOf [enum, null]. Default Codable
-    // already accepts both because the field is optional in the Swift type;
-    // no custom decoder needed.
 }
 
 // MARK: - Resolve request

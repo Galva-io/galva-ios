@@ -252,3 +252,26 @@ final class SDKCoreLoggingTests: XCTestCase {
         )
     }
 }
+
+// MARK: - LogCategory
+
+final class LogCategoryTests: XCTestCase {
+
+    /// Console.app filters (`category:queue`) and the docs use these names.
+    func test_rawValues_areTheConsoleCategoryNames() {
+        XCTAssertEqual(
+            Galva.LogCategory.allCases.map(\.rawValue),
+            ["config", "identity", "queue", "storage", "uploader", "lifecycle", "integration"]
+        )
+    }
+
+    func test_categoryOutsideAllCases_stillReachesCustomLogger() {
+        let logger = RecordingLogger()
+        let custom = Galva.LogCategory(rawValue: "mysdk")
+
+        logger.info(custom, "hello")
+
+        XCTAssertEqual(logger.entries.first?.category, custom)
+        XCTAssertEqual(logger.entries.first?.category.rawValue, "mysdk")
+    }
+}

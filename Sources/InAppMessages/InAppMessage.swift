@@ -50,15 +50,44 @@ public extension InAppMessages {
         }
     }
 
-    /// Workflow categories surfaced by the server. New cases will be added
-    /// over time; switch on this enum with a `@unknown default` branch.
-    enum WorkflowType: String, Sendable, Hashable, CaseIterable {
-        case cancellationRecovery    = "cancellation-recovery"
-        case winback = "winback"
+    /// The recovery flow that sent a message.
+    ///
+    /// Galva adds flow types over time. A message from a type this SDK
+    /// version doesn't know still arrives, carrying the server's raw value,
+    /// so compare with the known values or switch with a `default` case:
+    ///
+    ///     switch message.workflowType {
+    ///     case .trialRescue?:          showTrialTheme()
+    ///     case .cancellationRecovery?: showSaveTheme()
+    ///     default:                     showDefaultTheme()
+    ///     }
+    ///
+    /// A struct rather than an enum, so adding a type never breaks your build.
+    struct WorkflowType: RawRepresentable, Sendable, Hashable, CaseIterable, CustomStringConvertible {
+
+        /// The server's identifier for the flow type, e.g. `"trial-rescue"`.
+        public let rawValue: String
+
+        public init(rawValue: String) {
+            self.rawValue = rawValue
+        }
+
+        /// Trial Recovery: trials about to end without converting.
+        public static let trialRescue = WorkflowType(rawValue: "trial-rescue")
+        /// Subscription Recovery, shown as Cancellation Recovery in the
+        /// dashboard: subscribers who turned off auto-renew.
+        public static let cancellationRecovery = WorkflowType(rawValue: "cancellation-recovery")
+        /// Win-Back: subscribers whose subscription has lapsed.
+        public static let winback = WorkflowType(rawValue: "winback")
         /// Failed-payment recovery.
-        case paymentRecovery = "payment-recovery"
-        /// Trial-to-paid conversion rescue.
-        case trialRescue     = "trial-rescue"
+        public static let paymentRecovery = WorkflowType(rawValue: "payment-recovery")
+
+        /// The flow types this SDK version knows. Messages can carry others.
+        public static let allCases: [WorkflowType] = [
+            .trialRescue, .cancellationRecovery, .winback, .paymentRecovery,
+        ]
+
+        public var description: String { rawValue }
     }
 }
 
@@ -110,19 +139,8 @@ extension CommunicationItem {
     func toPublicMessage() -> InAppMessages.Message {
         InAppMessages.Message(
             id: id.uuidString.lowercased(),
-            workflowType: workflowType?.toPublic(),
+            workflowType: workflowType.map(InAppMessages.WorkflowType.init(rawValue:)),
             createdAt: createdAt
         )
-    }
-}
-
-extension CommunicationItem.WorkflowType {
-    func toPublic() -> InAppMessages.WorkflowType {
-        switch self {
-        case .cancellationRecovery: return .cancellationRecovery
-        case .trialRescue: return .trialRescue
-        case .winback: return .winback
-        case .paymentRecovery: return .paymentRecovery
-        }
     }
 }

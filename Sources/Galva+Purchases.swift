@@ -147,6 +147,9 @@ public extension Galva {
     /// Structured purchase failures a ``GalvaPurchaseController`` can throw.
     /// Each one maps onto an error code the in-app message handles
     /// specifically; throw ``failed(_:)`` for anything else.
+    ///
+    /// Galva may add cases in minor releases. If you switch on this error,
+    /// add an `@unknown default` case.
     enum PurchaseError: Error, Sendable, Hashable {
         /// The App Store doesn't sell this product.
         case productUnavailable

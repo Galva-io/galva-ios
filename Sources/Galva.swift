@@ -187,22 +187,41 @@ public enum Galva {
     ///
     /// Custom `GalvaLogger` implementations receive the category on every
     /// `LogEntry` so they can route or annotate as they like.
-    public enum LogCategory: String, Sendable, CaseIterable {
+    ///
+    /// The SDK may add categories in minor releases. It's a struct rather
+    /// than an enum so that never breaks your build; if you switch on it,
+    /// include a `default` case.
+    public struct LogCategory: RawRepresentable, Sendable, Hashable, CaseIterable, CustomStringConvertible {
+
+        /// The category's name in Console.app, e.g. `"queue"`.
+        public let rawValue: String
+
+        public init(rawValue: String) {
+            self.rawValue = rawValue
+        }
+
         /// SDK setup and configuration.
-        case configuration = "config"
+        public static let configuration = LogCategory(rawValue: "config")
         /// Identity store reads/writes and identify/logout lifecycle.
-        case identity
+        public static let identity = LogCategory(rawValue: "identity")
         /// In-memory + on-disk message queue activity.
-        case queue
+        public static let queue = LogCategory(rawValue: "queue")
         /// SQLite-backed message storage.
-        case storage
+        public static let storage = LogCategory(rawValue: "storage")
         /// HTTP transport: every request, response status, and retry.
-        case uploader
+        public static let uploader = LogCategory(rawValue: "uploader")
         /// App-level lifecycle (cold start, background, foreground).
-        case lifecycle
+        public static let lifecycle = LogCategory(rawValue: "lifecycle")
         /// Integrations with other SDKs installed via
         /// `configure(…, integrations:)`, e.g. RevenueCat.
-        case integration
+        public static let integration = LogCategory(rawValue: "integration")
+
+        /// Every category this SDK version logs under.
+        public static let allCases: [LogCategory] = [
+            .configuration, .identity, .queue, .storage, .uploader, .lifecycle, .integration,
+        ]
+
+        public var description: String { rawValue }
     }
     
     // MARK: configure
@@ -884,6 +903,10 @@ public enum InAppMessages {
     }
 
     /// Errors surfaced from the in-app messaging pipeline.
+    ///
+    /// Galva may add cases in minor releases. If you switch on this error,
+    /// add an `@unknown default` case, so a new one only warns instead of
+    /// breaking your build.
     public enum Error: Swift.Error, Sendable, Hashable {
         /// SDK has not been configured.
         case notConfigured

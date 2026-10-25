@@ -41,6 +41,35 @@ final class InAppMessageManagerTests: XCTestCase {
         XCTAssertEqual(emitted.first?.workflowType, .trialRescue)
     }
 
+    func test_poll_unknownWorkflowType_stillDeliversMessage() async throws {
+        // Galva adds recovery types over time. A type this SDK version
+        // doesn't know must still reach the app, with its raw value — not
+        // fail decoding and take the whole message list down with it.
+        URLProtocolStub.handler = { request in
+            let body = TestFixtures.communicationListJSON(items: [
+                TestFixtures.makeInAppCommunication(id: UUID(), workflow: "price-increase"),
+            ])
+            return (URLProtocolStub.httpResponse(url: request.url!, status: 200), body)
+        }
+        let harness = await Harness.make()
+        let emitted = await harness.manager.poll()
+        XCTAssertEqual(emitted.count, 1)
+        XCTAssertEqual(emitted.first?.workflowType?.rawValue, "price-increase")
+    }
+
+    func test_poll_nullWorkflowType_deliversMessageWithoutOne() async throws {
+        URLProtocolStub.handler = { request in
+            let body = TestFixtures.communicationListJSON(items: [
+                TestFixtures.makeCommunication(id: UUID(), type: "trial-rescue-in-app", workflow: nil),
+            ])
+            return (URLProtocolStub.httpResponse(url: request.url!, status: 200), body)
+        }
+        let harness = await Harness.make()
+        let emitted = await harness.manager.poll()
+        XCTAssertEqual(emitted.count, 1)
+        XCTAssertNil(emitted.first?.workflowType)
+    }
+
     func test_poll_dedupesAcrossCalls() async throws {
         let id = UUID()
         URLProtocolStub.handler = { request in

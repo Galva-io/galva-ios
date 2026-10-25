@@ -233,9 +233,11 @@ struct OSLogLogger: GalvaLogger {
     }
 
     func log(_ entry: Galva.LogEntry) {
-        guard entry.level != .off, let logger = loggersByCategory[entry.category] else {
-            return
-        }
+        guard entry.level != .off else { return }
+        // A category outside `allCases` (built with `init(rawValue:)`) still
+        // logs, under its own name.
+        let logger = loggersByCategory[entry.category]
+            ?? os.Logger(subsystem: subsystem, category: entry.category.rawValue)
         let formatted = Self.format(entry)
         switch entry.level {
         case .debug:   logger.debug("\(formatted, privacy: .public)")
