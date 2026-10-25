@@ -118,8 +118,8 @@ final class SDKCore {
     /// the box is never mutated concurrently.
     nonisolated(unsafe) var lifecycleObserver: AppLifecycleObserver?
 
-    /// Presents published in-app messages, or hands them to the app's
-    /// `.manual` handler. `@MainActor`; held the same way as
+    /// Presents published in-app messages in `.automatic` mode; `nil` in
+    /// `.manual` mode. `@MainActor`; held the same way as
     /// `lifecycleObserver` for the SDK's lifetime.
     nonisolated(unsafe) var messageDelivery: InAppMessageDelivery?
 
@@ -562,18 +562,16 @@ final class SDKCore {
         let presentation = inAppMessagePresentation
         let stream = inAppMessageStream
         Task { @MainActor [weak self] in
-            // Subscribe the delivery BEFORE the observer starts: its first
-            // foreground poll may publish a message, and the stream only
-            // delivers to subscribers that already exist.
-            let delivery = InAppMessageDelivery()
-            delivery.start(
-                presentation,
-                messages: stream.makeStream(),
-                presentAutomatically: { [weak self] message in
+            // `.automatic`: subscribe the delivery BEFORE the observer starts,
+            // so its first foreground poll's message goes straight to the
+            // presenter. `.manual`: the app reads the stream itself.
+            if presentation == .automatic {
+                let delivery = InAppMessageDelivery()
+                delivery.start(messages: stream.makeStream()) { [weak self] message in
                     await self?.presentAutomatically(message)
                 }
-            )
-            self?.messageDelivery = delivery
+                self?.messageDelivery = delivery
+            }
 
             let observer = AppLifecycleObserver { [weak self] in
                 Task { @GalvaActor in
@@ -878,6 +876,10 @@ final class SDKCore {
         // gets the device's full historical mapping re-posted (the
         // server then aliases them onto whoever calls `identify` next).
         inAppMessageManager?.reset()
+        // A message held for the app's (not yet started) `.manual` loop was
+        // addressed to the previous identity — drop it.
+        let stream = inAppMessageStream
+        await MainActor.run { stream.discardHeldMessage() }
         #if canImport(StoreKit)
         transactionObserver?.reset()
         #endif

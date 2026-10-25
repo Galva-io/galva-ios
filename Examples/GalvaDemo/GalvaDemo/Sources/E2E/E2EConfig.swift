@@ -15,11 +15,11 @@ enum E2EScenario: String {
     /// Poll returns one in-app message → the SDK presents it itself
     /// (`.automatic`, the default).
     case showInAppMessage
-    /// Same message as `showInAppMessage`, in `.manual` mode: the app's
-    /// handler presents it through the UIKit `message.show(in:)` presenter
-    /// (the path the React Native wrapper uses).
+    /// Same message as `showInAppMessage`, in `.manual` mode: the app reads
+    /// `InAppMessages.messages` and presents it with the UIKit
+    /// `message.show(in:)` presenter (the path the React Native wrapper uses).
     case showInAppMessageUIKit
-    /// Same message, in `.manual` mode: the handler routes it into SwiftUI
+    /// Same message, in `.manual` mode: the app reads the stream into SwiftUI
     /// state that `.inAppMessageSheet` presents.
     case showInAppMessageSwiftUISheet
     /// Two distinct messages sharing bundle `1.0.0`. The first caches the

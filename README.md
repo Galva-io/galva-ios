@@ -187,37 +187,41 @@ Asking for permission and registering for remote notifications stay in your app;
 
 ## Present messages yourself
 
-By default Galva presents each in-app message as soon as it's ready. To control when and where messages appear, for example only after onboarding, configure `.manual` presentation with a handler. Galva hands each message to it and presents nothing itself:
+By default Galva presents each in-app message as soon as it's ready. To decide when and where messages appear, for example only after onboarding, configure `.manual`. Galva then presents nothing itself; your app reads messages from `InAppMessages.messages` and presents them.
 
 ```swift
-Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual { message in
-    guard let scene = UIApplication.shared.connectedScenes
-        .compactMap({ $0 as? UIWindowScene })
-        .first(where: { $0.activationState == .foregroundActive })
-    else { return }
-    try? await message.show(in: scene)
-})
+Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual)
 ```
 
-In SwiftUI, route each message into state and present it with `.inAppMessageSheet`:
+In SwiftUI, read the stream into state and present it with `.inAppMessageSheet`:
 
 ```swift
-@MainActor final class MessageCenter: ObservableObject {
-    static let shared = MessageCenter()
-    @Published var message: InAppMessages.Message?
+struct RootView: View {
+    @State private var message: InAppMessages.Message?
+
+    var body: some View {
+        ContentView()
+            .task {
+                for await incoming in InAppMessages.messages {
+                    message = incoming
+                }
+            }
+            .inAppMessageSheet($message)
+    }
 }
-
-// In your App initializer:
-Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual { message in
-    MessageCenter.shared.message = message
-})
-
-// On your root view, with @ObservedObject var messageCenter = MessageCenter.shared:
-ContentView()
-    .inAppMessageSheet($messageCenter.message)
 ```
 
-The handler gets messages one at a time, on the main actor. Each message is also published on `InAppMessages.messages`, and `message.workflowType` tells you which recovery flow sent it.
+In UIKit, read the stream and call `show()`, which presents on your app's active window:
+
+```swift
+Task { @MainActor in
+    for await message in InAppMessages.messages {
+        try? await message.show()
+    }
+}
+```
+
+To filter, check `message.workflowType`, the recovery flow that sent the message. To wait, keep the message and present it later. A message that arrives before your loop starts is held and handed to it when it does, so starting the loop a moment after launch is fine. Present each message in one place.
 
 ## Using RevenueCat
 

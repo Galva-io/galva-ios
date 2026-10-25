@@ -249,8 +249,8 @@ public enum Galva {
     ///     environment, or `.custom(...)` for proxy setups.
     ///   - inAppMessages: How in-app messages reach the screen. Default:
     ///     `.automatic`, which presents each message as a sheet on your app's
-    ///     active window. Pass `.manual { message in … }` to present them
-    ///     yourself.
+    ///     active window. Pass `.manual` to present them yourself from
+    ///     `InAppMessages.messages`.
     ///   - autoTrackCategories: Which categories of events the SDK should
     ///     collect automatically. Default: `[.lifecycle, .appleSearchAds]`.
     ///   - logLevel: Minimum severity to log. Default: `.warning`.
@@ -869,8 +869,9 @@ public enum AppUser {
 ///
 /// - `.automatic` (default): the SDK presents it as a sheet on your app's
 ///   active window. There's nothing to write.
-/// - `.manual { message in … }`: the SDK hands it to your handler, and your
-///   app presents it with `message.show(in:)` or `.inAppMessageSheet(_:)`.
+/// - `.manual`: the SDK presents nothing. Your app reads `messages` and
+///   presents each one with `.inAppMessageSheet(_:)` (SwiftUI) or
+///   `message.show()` (UIKit).
 ///
 /// Either way, the SDK handles the page download and cache, identity, and the
 /// native bridge (purchase prompt, dismissal, deep link, manage-subscription
@@ -882,8 +883,12 @@ public enum InAppMessages {
     /// foreground poll; multiple consumers may iterate concurrently.
     ///
     /// Every message is published here in both presentation modes. In
-    /// `.automatic` mode the SDK already presents it, so read the stream
-    /// only to observe messages, not to present them again.
+    /// `.manual` mode, this is where your app gets messages to present. A
+    /// message published before your loop starts is held and handed to the
+    /// first subscriber, so a loop that starts a moment after launch doesn't
+    /// miss it. In `.automatic` mode the SDK already presents each message,
+    /// so read the stream only to observe messages, not to present them
+    /// again.
     ///
     /// `@MainActor`: the stream is main-actor-isolated, so when you iterate
     /// it from a MainActor context — a SwiftUI `.task { … }` or

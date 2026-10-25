@@ -92,27 +92,16 @@ public extension InAppMessages {
 
     /// How in-app messages reach the screen. Pass it to
     /// `Galva.configure(apiKey:…, inAppMessages:)`.
-    enum Presentation: Sendable {
+    enum Presentation: Sendable, Hashable {
 
         /// Galva presents each message itself, as a sheet on your app's
         /// active window, as soon as it's ready. The default.
         case automatic
 
-        /// Galva hands each message to `handler` on the main actor and
-        /// presents nothing itself. Your app decides when and where the
-        /// message appears, for example with `message.show(in:)`:
-        ///
-        ///     Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual { message in
-        ///         guard let scene = myActiveWindowScene() else { return }
-        ///         try? await message.show(in: scene)
-        ///     })
-        ///
-        /// Messages arrive one at a time: the next one waits until
-        /// `handler` returns. They're also published on
-        /// `InAppMessages.messages`, so SwiftUI apps can present them with
-        /// `.inAppMessageSheet(_:)` instead — present each message in one
-        /// place only.
-        case manual(handler: @MainActor @Sendable (InAppMessages.Message) async -> Void)
+        /// Galva presents nothing itself. Read `InAppMessages.messages` and
+        /// present each message when and where you choose: with
+        /// `.inAppMessageSheet(_:)` in SwiftUI, or `message.show()` in UIKit.
+        case manual
     }
 }
 
@@ -129,26 +118,23 @@ public extension InAppMessages.Message {
     /// `present(_:animated:completion:)`. Idempotent — calling `show` a
     /// second time with the same message is a no-op while it is on screen.
     ///
-    /// Use this from your `for await message in InAppMessages.messages`
-    /// loop:
+    /// Use this in `.manual` mode, from your
+    /// `for await message in InAppMessages.messages` loop:
     ///
     ///     Task { @MainActor in
     ///         for await message in InAppMessages.messages {
-    ///             guard let scene = UIApplication.shared
-    ///                 .connectedScenes
-    ///                 .first(where: { $0.activationState == .foregroundActive })
-    ///                 as? UIWindowScene
-    ///             else { continue }
-    ///             try? await message.show(in: scene)
+    ///             try? await message.show()
     ///         }
     ///     }
     ///
+    /// - Parameter scene: The window scene to present in. Default: your
+    ///   app's active window scene.
     /// - Throws: `InAppMessages.Error.notConfigured` if `Galva.configure`
     ///   hasn't run, `.messageNotFound` if the server says the message is
     ///   no longer valid (workflow exited / invalidated), or
     ///   `.bundleUnavailable` if the WebView bundle for the resolved
     ///   version can't be downloaded and isn't cached on disk.
-    func show(in scene: UIWindowScene) async throws {
+    func show(in scene: UIWindowScene? = nil) async throws {
         try await SDKCore.shared.showInAppMessage(self, in: scene)
     }
 }

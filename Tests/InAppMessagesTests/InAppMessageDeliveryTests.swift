@@ -2,21 +2,18 @@
 //  InAppMessageDeliveryTests.swift
 //  GalvaTests
 //
-//  `InAppMessageDelivery` puts each published message on screen the way
-//  `configure(…, inAppMessages:)` asked: the SDK presents it in `.automatic`
-//  mode, the app's handler gets it in `.manual` mode. Messages go one at a
-//  time, in order.
+//  `InAppMessageDelivery` is `.automatic` presentation: it presents every
+//  published message, one at a time, in order.
 //
 
 import Foundation
 @testable import Galva
 import XCTest
 
-/// Records deliveries; the handlers run on the main actor.
+/// Records presentations; runs on the main actor.
 @MainActor
 private final class Recorder {
-    var automatic: [String] = []
-    var manual: [String] = []
+    var presented: [String] = []
     var concurrent = 0
     var maxConcurrent = 0
 }
@@ -37,96 +34,64 @@ final class InAppMessageDeliveryTests: XCTestCase {
         return condition()
     }
 
-    func test_automatic_presentsEveryMessage() async {
+    func test_presentsEveryMessage_inOrder() async {
         let recorder = Recorder()
         let (messages, publish) = AsyncStream<InAppMessages.Message>.makeStream()
         let delivery = InAppMessageDelivery()
-        delivery.start(.automatic, messages: messages, presentAutomatically: { message in
-            recorder.automatic.append(message.id)
-        })
+        delivery.start(messages: messages) { message in
+            recorder.presented.append(message.id)
+        }
         defer { delivery.stop() }
 
         publish.yield(message("a"))
         publish.yield(message("b"))
 
-        let delivered = await eventually { recorder.automatic == ["a", "b"] }
-        XCTAssertTrue(delivered, "got \(recorder.automatic)")
+        let presented = await eventually { recorder.presented == ["a", "b"] }
+        XCTAssertTrue(presented, "got \(recorder.presented)")
     }
 
-    func test_manual_handsEveryMessageToTheHandler_andPresentsNothing() async {
+    func test_presentsOneAtATime() async {
+        // The next message waits until the current presentation returns,
+        // so two presentations never overlap.
         let recorder = Recorder()
         let (messages, publish) = AsyncStream<InAppMessages.Message>.makeStream()
         let delivery = InAppMessageDelivery()
-        delivery.start(
-            .manual { message in recorder.manual.append(message.id) },
-            messages: messages,
-            presentAutomatically: { message in recorder.automatic.append(message.id) }
-        )
-        defer { delivery.stop() }
-
-        publish.yield(message("a"))
-        publish.yield(message("b"))
-
-        let delivered = await eventually { recorder.manual == ["a", "b"] }
-        XCTAssertTrue(delivered, "got \(recorder.manual)")
-        XCTAssertEqual(recorder.automatic, [], "the SDK must not present in manual mode")
-    }
-
-    func test_messagesArriveOneAtATime() async {
-        // The next message waits until the handler for the current one
-        // returns, so two presentations never overlap.
-        let recorder = Recorder()
-        let (messages, publish) = AsyncStream<InAppMessages.Message>.makeStream()
-        let delivery = InAppMessageDelivery()
-        delivery.start(
-            .manual { message in
-                recorder.concurrent += 1
-                recorder.maxConcurrent = max(recorder.maxConcurrent, recorder.concurrent)
-                try? await Task.sleep(nanoseconds: 30_000_000)
-                recorder.manual.append(message.id)
-                recorder.concurrent -= 1
-            },
-            messages: messages,
-            presentAutomatically: { _ in }
-        )
+        delivery.start(messages: messages) { message in
+            recorder.concurrent += 1
+            recorder.maxConcurrent = max(recorder.maxConcurrent, recorder.concurrent)
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            recorder.presented.append(message.id)
+            recorder.concurrent -= 1
+        }
         defer { delivery.stop() }
 
         publish.yield(message("a"))
         publish.yield(message("b"))
         publish.yield(message("c"))
 
-        let delivered = await eventually { recorder.manual == ["a", "b", "c"] }
-        XCTAssertTrue(delivered, "got \(recorder.manual)")
+        let presented = await eventually { recorder.presented == ["a", "b", "c"] }
+        XCTAssertTrue(presented, "got \(recorder.presented)")
         XCTAssertEqual(recorder.maxConcurrent, 1)
     }
 
     func test_start_isIdempotent() async {
         let recorder = Recorder()
         let (messages, publish) = AsyncStream<InAppMessages.Message>.makeStream()
-        let (otherMessages, _) = AsyncStream<InAppMessages.Message>.makeStream()
+        let (otherMessages, otherPublish) = AsyncStream<InAppMessages.Message>.makeStream()
         let delivery = InAppMessageDelivery()
-        delivery.start(.automatic, messages: messages, presentAutomatically: { message in
-            recorder.automatic.append(message.id)
-        })
+        delivery.start(messages: messages) { message in
+            recorder.presented.append(message.id)
+        }
         // A second start must not replace the first subscription.
-        delivery.start(.manual { message in recorder.manual.append(message.id) },
-                       messages: otherMessages,
-                       presentAutomatically: { _ in })
+        delivery.start(messages: otherMessages) { message in
+            recorder.presented.append("other-\(message.id)")
+        }
         defer { delivery.stop() }
 
         publish.yield(message("a"))
+        otherPublish.yield(message("b"))
 
-        let delivered = await eventually { recorder.automatic == ["a"] }
-        XCTAssertTrue(delivered)
-        XCTAssertEqual(recorder.manual, [])
-    }
-
-    func test_manualHandler_trailingClosureSyntax() {
-        // Pins the call-site shape the docs use:
-        // `Galva.configure(apiKey: "…", inAppMessages: .manual { message in … })`
-        let presentation: InAppMessages.Presentation = .manual { message in
-            _ = message.id
-        }
-        guard case .manual = presentation else { return XCTFail("expected .manual") }
+        let presented = await eventually { recorder.presented == ["a"] }
+        XCTAssertTrue(presented, "got \(recorder.presented)")
     }
 }

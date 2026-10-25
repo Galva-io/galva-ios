@@ -6,7 +6,7 @@
 //  mock: poll → resolve → bundle download → WebView present → native bridge.
 //  Tapping "Check for messages" forces the poll (cold-start activation can
 //  race the SDK's lifecycle subscription), then the SDK presents the message
-//  itself (`.automatic`) or the scenario's `.manual` handler does.
+//  itself (`.automatic`) or the app presents it from the stream (`.manual`).
 //
 
 import XCTest
@@ -42,14 +42,15 @@ final class InAppMessageUITests: XCTestCase {
     }
 
     func test_pageContext_injectsNonZeroSafeArea_swiftUISheet() {
-        // `.manual` mode with SwiftUI: the handler routes the message into
-        // state that `.inAppMessageSheet` presents.
+        // `.manual` mode with SwiftUI: the app reads the stream into state
+        // that `.inAppMessageSheet` presents.
         assertNonZeroSafeArea(scenario: .showInAppMessageSwiftUISheet)
     }
 
     func test_pageContext_injectsNonZeroSafeArea_uikitPresenter() {
-        // `.manual` mode whose handler calls the UIKit `show(in:)` presenter
-        // (the path the React Native wrapper drives through `showMessage`).
+        // `.manual` mode: the app reads the stream and calls the UIKit
+        // `show(in:)` presenter (the path the React Native wrapper drives
+        // through `showMessage`).
         // That presenter previously loaded the bundle in
         // viewDidLoad, so getPageContext() could run before the sheet was laid
         // out and read a `.zero` safe area. The VC now defers the load to

@@ -48,27 +48,20 @@ public extension View {
     /// — the user never sees a sheet flash open and close.
     ///
     /// Use it with `inAppMessages: .manual` to control which messages render
-    /// and when — queueing, filtering by workflow, waiting for a screen to
-    /// close. Route each message from your handler into state the view
-    /// binds to:
+    /// and when — filtering by workflow, waiting for a screen to close. Read
+    /// `InAppMessages.messages` into state and bind the sheet to it:
     ///
     /// ```swift
-    /// @MainActor final class MessageCenter: ObservableObject {
-    ///     static let shared = MessageCenter()
-    ///     @Published var message: InAppMessages.Message?
-    /// }
-    ///
-    /// // At launch
-    /// Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual { message in
-    ///     MessageCenter.shared.message = message
-    /// })
-    ///
-    /// // On your root view
-    /// @ObservedObject var messages = MessageCenter.shared
+    /// @State private var message: InAppMessages.Message?
     ///
     /// var body: some View {
     ///     ContentView()
-    ///         .inAppMessageSheet($messages.message)
+    ///         .task {
+    ///             for await incoming in InAppMessages.messages {
+    ///                 message = incoming
+    ///             }
+    ///         }
+    ///         .inAppMessageSheet($message)
     /// }
     /// ```
     ///
