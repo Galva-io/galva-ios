@@ -9,11 +9,12 @@
 //       dispatched from `NativeBridge.handle(envelope:)` for the
 //       `.requestPurchase` method.
 //
-//  Everything else in this file is private: payload parsing
+//  Everything else in this file is private payload parsing
 //  (`ParsedPurchaseRequest`, `parsePurchaseRequest`,
-//  `parsePromotionalOffer`) and StoreKit outcome / failure encoding
-//  (`encodeOutcome`, `mapFailure`). Add a new purchase-related helper
-//  here rather than touching the core bridge file.
+//  `parsePromotionalOffer`). Outcome / failure encoding and controller
+//  dispatch live in `PurchaseBridgeCodec` (host-testable on macOS). Add a
+//  new purchase-related helper here rather than touching the core bridge
+//  file.
 //
 
 import Foundation
@@ -57,6 +58,10 @@ extension NativeBridge {
     /// `BridgeError.Code` cases (`productUnavailable`,
     /// `purchaseNotAllowed`, `ineligibleForOffer`, `invalidOffer`,
     /// `verificationFailed`, `networkError`, `purchaseFailed` catch-all).
+    ///
+    /// When the host installed a `GalvaPurchaseController`, the purchase
+    /// runs through it instead of StoreKit directly; the response shape is
+    /// identical either way.
     func handleRequestPurchase(
         payload: [String: AnyJSONValue]?,
         activeMessageId: String
@@ -72,16 +77,46 @@ extension NativeBridge {
         #if canImport(StoreKit)
         // 2. Snapshot the SDK's attribution token across the actor hop.
         let appAccountToken = await identity.purchaseAttributionToken
+        let controller = PurchaseControllerRegistry.current
 
         logger.info(.identity, "bridge requestPurchase", metadata: [
             "productId": parsed.productId,
             "messageId": activeMessageId,
             "promo": parsed.promotionalOffer == nil ? "false" : "true",
+            "controller": controller.map { String(describing: type(of: $0)) } ?? "storekit",
         ])
 
-        // 3. Hand off to the typed StoreKit wrapper. Throws on real
-        //    failures; flow outcomes (cancelled / pending) come back as
-        //    success results.
+        // 3a. Host-installed controller (RevenueCat, in-house billing, …).
+        //     It can still reach the built-in StoreKit flow through
+        //     `purchaseWithStoreKit()` — e.g. for a Galva-signed offer its
+        //     billing SDK can't apply.
+        if let controller {
+            let prefetcher = storeKitPrefetcher
+            let logger = self.logger
+            let request = Galva.PurchaseRequest(
+                productId: parsed.productId,
+                promotionalOffer: parsed.promotionalOffer,
+                appAccountToken: appAccountToken,
+                messageId: activeMessageId,
+                storeKitPurchase: {
+                    do {
+                        return try await StoreKitPurchaser(prefetcher: prefetcher, logger: logger)
+                            .performPurchase(
+                                productId: parsed.productId,
+                                promotionalOffer: parsed.promotionalOffer,
+                                appAccountToken: appAccountToken
+                            )
+                    } catch let failure as StoreKitPurchaser.Failure {
+                        throw failure.publicError
+                    }
+                }
+            )
+            return await PurchaseBridgeCodec.run(request, with: controller, logger: logger)
+        }
+
+        // 3b. Built-in path — hand off to the typed StoreKit wrapper. Throws
+        //     on real failures; flow outcomes (cancelled / pending) come back
+        //     as success results.
         let purchaser = StoreKitPurchaser(
             prefetcher: storeKitPrefetcher,
             logger: logger
@@ -92,9 +127,9 @@ extension NativeBridge {
                 promotionalOffer: parsed.promotionalOffer,
                 appAccountToken: appAccountToken
             )
-            return .success(.object(Self.encodeOutcome(outcome)))
+            return .success(.object(PurchaseBridgeCodec.encode(outcome)))
         } catch let failure as StoreKitPurchaser.Failure {
-            return .failure(Self.mapFailure(failure))
+            return .failure(PurchaseBridgeCodec.bridgeError(for: failure))
         } catch {
             return .failure(BridgeError(
                 code: .purchaseFailed,
@@ -185,71 +220,6 @@ extension NativeBridge {
         }
 
         return .success(.init(offerId: offerId, compactJWS: jws))
-    }
-
-    // MARK: - StoreKit outcome / failure encoding
-
-    private static func encodeOutcome(
-        _ outcome: StoreKitPurchaser.Outcome
-    ) -> [String: AnyJSONValue] {
-        switch outcome {
-        case .pending:
-            return ["outcome": .string("pending")]
-        case .cancelled:
-            return ["outcome": .string("cancelled")]
-        case .completed(let verified, let transactionId, let originalId,
-                        let productId, let purchaseDate, let expirationDate,
-                        let appAccountToken):
-            var transaction: [String: AnyJSONValue] = [
-                "id":                  .string(String(transactionId)),
-                "originalId":          .string(String(originalId)),
-                "productId":           .string(productId),
-                "purchaseDate":        .string(ISO8601DateFormatter.galva.string(from: purchaseDate)),
-                "verified":            .bool(verified),
-            ]
-            if let exp = expirationDate {
-                transaction["expirationDate"] = .string(ISO8601DateFormatter.galva.string(from: exp))
-            }
-            if let tok = appAccountToken {
-                transaction["appAccountToken"] = .string(tok.uuidString.lowercased())
-            }
-            return [
-                "outcome": .string("completed"),
-                "transaction": .object(transaction),
-            ]
-        }
-    }
-
-    private static func mapFailure(
-        _ failure: StoreKitPurchaser.Failure
-    ) -> BridgeError {
-        switch failure {
-        case .productUnavailable:
-            return BridgeError(code: .productUnavailable,
-                               message: "App Store doesn't recognize this productId")
-        case .purchaseNotAllowed:
-            return BridgeError(code: .purchaseNotAllowed,
-                               message: "Purchases not allowed on this device")
-        case .ineligibleForOffer:
-            return BridgeError(code: .ineligibleForOffer,
-                               message: "User is not eligible for this offer")
-        case .invalidOffer(let detail):
-            return BridgeError(code: .invalidOffer,
-                               message: "Promotional offer rejected by StoreKit: \(detail)")
-        case .verificationFailed(let detail):
-            return BridgeError(code: .verificationFailed,
-                               message: "Transaction signature did not verify: \(detail)")
-        case .notAvailableInStorefront:
-            return BridgeError(code: .notAvailableInStorefront,
-                               message: "Product not sold in current storefront")
-        case .networkError(let underlying):
-            return BridgeError(code: .networkError,
-                               message: "App Store unreachable: \(String(describing: underlying))")
-        case .invalidPayload(let detail):
-            return BridgeError(code: .invalidPayload, message: detail)
-        case .underlying(let error):
-            return BridgeError(code: .purchaseFailed, message: String(describing: error))
-        }
     }
     #endif // canImport(StoreKit)
 }

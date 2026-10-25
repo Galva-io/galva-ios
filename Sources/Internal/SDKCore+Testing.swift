@@ -39,7 +39,8 @@ extension SDKCore {
         queue: MessageQueue,
         contextProvider: ContextProvider,
         logger: any GalvaLogger = OSLogLogger(),
-        minLogLevel: Galva.LogLevel = .debug
+        minLogLevel: Galva.LogLevel = .debug,
+        integrations: [Galva.Integration] = []
     ) async {
         guard !configured else {
             logger.warning(.configuration, "configureForTesting called more than once — ignoring")
@@ -62,5 +63,6 @@ extension SDKCore {
         ])
         // Seed identity with device traits, matching production behaviour.
         await identify(userId: nil, appAccountToken: nil, traits: nil)
+        installIntegrations(integrations)
     }
 }

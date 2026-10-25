@@ -36,7 +36,8 @@ final class GalvaConfigureAPITests: XCTestCase {
                 environment: .development,
                 autoTrackCategories: [.lifecycle],
                 logLevel: .debug,
-                logger: nil
+                logger: nil,
+                integrations: []
             )
         )
     }

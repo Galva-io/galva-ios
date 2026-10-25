@@ -11,10 +11,12 @@
 //          var body: some Scene {
 //              WindowGroup {
 //                  ContentView()
-//                      .galvaConfigure(apiKey: "pk_live_…")
+//                      .galvaConfigure(apiKey: "pk_your_app_id")
 //              }
 //          }
 //      }
+//
+//  Integrations ride along: `.galvaConfigure(apiKey: "…", integrations: [.revenueCat()])`.
 //
 //  Lives in its own file gated only on `canImport(SwiftUI)` (not WebKit /
 //  UIKit) so it's available to SwiftUI apps on every platform the SDK
@@ -40,7 +42,7 @@ public extension View {
     ///     var body: some Scene {
     ///         WindowGroup {
     ///             ContentView()
-    ///                 .galvaConfigure(apiKey: "pk_live_xxxxxxxx")
+    ///                 .galvaConfigure(apiKey: "pk_your_app_id")
     ///         }
     ///     }
     /// }
@@ -60,14 +62,16 @@ public extension View {
         environment: Galva.Environment = .production,
         autoTrackCategories: Galva.AutoTrackCategory = [.lifecycle, .appleSearchAds],
         logLevel: Galva.LogLevel = .warning,
-        logger: (any GalvaLogger)? = nil
+        logger: (any GalvaLogger)? = nil,
+        integrations: [Galva.Integration] = []
     ) -> some View {
         modifier(GalvaConfigureModifier(
             apiKey: apiKey,
             environment: environment,
             autoTrackCategories: autoTrackCategories,
             logLevel: logLevel,
-            logger: logger
+            logger: logger,
+            integrations: integrations
         ))
     }
 }
@@ -82,6 +86,7 @@ private struct GalvaConfigureModifier: ViewModifier {
     let autoTrackCategories: Galva.AutoTrackCategory
     let logLevel: Galva.LogLevel
     let logger: (any GalvaLogger)?
+    let integrations: [Galva.Integration]
 
     @State private var didConfigure = false
 
@@ -95,7 +100,8 @@ private struct GalvaConfigureModifier: ViewModifier {
                     environment: environment,
                     autoTrackCategories: autoTrackCategories,
                     logLevel: logLevel,
-                    logger: logger
+                    logger: logger,
+                    integrations: integrations
                 )
             }
             .onOpenURL { url in

@@ -8,30 +8,37 @@ Thanks for digging into the SDK internals. This doc is for people working **on**
 
 ```
 Sources/
-├── Galva.swift                 ← public API surface
-├── Internal/                   ← SDKCore, IdentityStore, UUIDv7, SDKConstants
+├── Galva.swift                 ← public API: Galva, AppEvents, AppUser, InAppMessages
+├── Galva+*.swift               ← public API extensions: deep links, notifications,
+│                                 purchase controllers, integrations
+├── Internal/                   ← SDKCore, IdentityStore, deep links, sessions,
+│                                 Apple Search Ads, UUIDv7, SDKConstants
+├── InAppMessages/              ← message manager + presenter, WebView, native bridge,
+│                                 StoreKit purchaser + product prefetcher
+├── Initialization/             ← /sdk/initialize client + on-disk cache
+├── Transactions/               ← Transaction.all sweep (purchase → user mapping)
 ├── Messages/                   ← MessageQueue, SQLite/InMemory storage,
 │                                 StorageMigrator (schema + quarantine)
 ├── Models/                     ← AnyJSONValue, MessageContext, Endpoint
-├── Networking/                 ← Uploader, UploadConsumer
+├── Networking/                 ← APIClient, Uploader, durable request queue
+├── SwiftUI/                    ← .galvaConfigure, in-app message modifiers
 └── Logger/                     ← GalvaLogger, OSLogLogger, LevelFilter
 
-Tests/
-├── MessageQueueTests/          ← queue contracts, resilience, durability
-├── ModelsTests/                ← Codable round-trips
-├── InternalTests/              ← UUIDv7, Backoff, SDKCore integration
-├── NetworkingTests/            ← Uploader (URLProtocolStub), UploadConsumer
-├── LoggerTests/                ← level filtering, format, SDK breadcrumbs
-└── PerformanceTests/           ← contract tests (latency, queue cap, etc.)
+Tests/                          ← one folder per area, mirroring Sources/
+
+Examples/GalvaDemo/             ← SwiftUI demo app + XCUITest E2E and perf suites
+                                  (Tuist project; regenerate with `tuist generate`)
 
 scripts/
 ├── lint.sh                     ← canonical perf-hazard + crash-pattern checks
-└── build-xcframework.sh        ← release XCFramework builder
+├── e2e.sh                      ← generates the demo project, runs the UI tests
+└── perf.sh                     ← measures SDK overhead against a no-SDK baseline
 
 .github/workflows/
-├── ci.yml                      ← lint + test on every PR
-└── release.yml                 ← build + publish XCFramework on tag
+├── ci.yml                      ← lint, unit tests, E2E and perf on every PR
+└── notify-react-native.yml     ← tells galva-react-native about a new tag
 
+cocoapods/galva-build.rb        ← build settings for galva-react-native's vendored pod
 .swiftlint.yml                  ← optional richer rules (if you install SwiftLint)
 ```
 
@@ -39,10 +46,14 @@ scripts/
 
 ## Local development
 
+Galva builds with **Xcode 26 or later**: the StoreKit offer path uses an iOS 26 SDK API, back-deployed so apps still run on iOS 15.
+
 ```bash
 swift build
-swift test                      # ~20s, 200+ tests
+swift test                      # 440+ tests, ~15s once built
 ./scripts/lint.sh               # host-app perf hazards, crash patterns
+./scripts/e2e.sh                # UI tests against an in-process mock (needs Tuist)
+./scripts/perf.sh               # SDK overhead report (needs Tuist)
 ```
 
 Open `Package.swift` directly in Xcode to get the SwiftPM-generated workspace.
@@ -85,7 +96,10 @@ The suite is organised by behavioural contract, not by source-file mirror. When 
 | `MessageStorageContractTests` | shared contract both InMemory + SQLite must satisfy |
 | `StorageMigrationTests` | schema migrations, quarantine, downgrade safety |
 | `SDKCore*Tests` | integration tests using `SDKHarness` (no network, no real disk) |
-| `PerformanceContractTests` | API return latency, queue cap, filtered-log cost |
+| `InAppMessage*Tests`, `Bridge*Tests` | message delivery, display budget, native bridge wire format |
+| `PurchaseControllerTests` | purchase-controller dispatch and bridge error codes |
+| `IntegrationSPITests` | the `@_spi` surface integration packages build on |
+| `PublicAPIReturnLatencyTests`, `BoundedQueueTests`, `FilteredLogPerformanceTests`, `MainThreadBudgetTests` | API return latency, queue cap, filtered-log cost, main-thread budgets |
 | `Uploader*Tests` | HTTP request shape + status classification via `URLProtocolStub` |
 
 Pure-logic suites (Codable, UUIDv7, Backoff) live alongside the source they cover.
@@ -96,24 +110,21 @@ Avoid wall-clock-dependent assertions. Use the `eventually(timeout:condition:)` 
 
 ## Architecture notes worth knowing
 
-### Two SPM products
+### One SPM product, source only
 
-[`Package.swift`](Package.swift) declares two library products:
+[`Package.swift`](Package.swift) declares a single `Galva` library product. Galva ships as source through Swift Package Manager only — no XCFramework, no CocoaPods trunk pod — and SwiftPM / the consuming target decides static vs dynamic linking.
 
-```swift
-.library(name: "Galva",         targets: ["Galva"]),                    // static — SPM consumers
-.library(name: "Galva_dynamic", type: .dynamic, targets: ["Galva"]),    // dynamic — XCFramework only
-```
+The swift-tools-version stays at 6.0 so the manifest parses on every Xcode that can build the SDK; don't use newer manifest features without bumping it deliberately.
 
-Why two: `xcodebuild archive` against a static SPM product produces a single `.o` file, not a `.framework` bundle. To get a framework for the XCFramework, we need a dynamic product. SPM consumers ignore `Galva_dynamic` (the static `Galva` is what their dependency graph picks). The XCFramework script archives `Galva_dynamic` and renames the resulting framework to `Galva.framework` for distribution.
+### Integrations live in their own packages
 
-RevenueCat, Sentry, and similar SDKs ship a separate wrapper Xcode project to solve the same problem. The naming hack is simpler — same end result with one fewer file to maintain.
+SDKs that integrate with another vendor's SDK (e.g. [`galva-ios-revenuecat`](https://github.com/Galva-io/galva-ios-revenuecat)) are separate packages. SwiftPM fetches and pins every dependency a package declares, even ones only used by products an app doesn't link, so a vendor dependency in this `Package.swift` would reach every Galva app.
 
-### `-no-verify-emitted-module-interface` in the XCFramework build
+Integration packages plug in through `Galva.configure(…, integrations:)`. They build a `Galva.Integration` with the `@_spi(GalvaIntegration)` initializer, and unit-test purchase controllers with `@_spi(Testing)` `Galva.PurchaseRequest` values. `IntegrationSPITests` pins that surface, so changing it breaks a test here before it breaks an integration package.
 
-When the module name (`Galva`) matches a top-level public type name (`enum Galva`), Swift's swiftinterface verifier emits `Galva.Galva.LogCategory` references that fail self-verification. The emitted interface is functionally consumable by downstream code; only the verifier false-positives. The XCFramework build passes `OTHER_SWIFT_FLAGS=-no-verify-emitted-module-interface` to skip the broken check.
+### React Native vendors this source
 
-If the Swift compiler ever fixes this collision, drop the flag.
+[`galva-react-native`](https://github.com/Galva-io/galva-react-native) compiles a pinned snapshot of `Sources/` into its own CocoaPods pod, using the build settings in [`cocoapods/galva-build.rb`](cocoapods/galva-build.rb). When you change `Package.swift`'s platforms, Swift version or linker settings, update that file in the same commit. Wrappers report their own identity through the internal `Galva.configure(…, wrapper:)` seam.
 
 ### SQLite schema migrations
 
@@ -128,7 +139,7 @@ Short version:
 
 Public surface in [`Sources/Logger/Logger.swift`](Sources/Logger/Logger.swift). All internal call sites use the typed convenience methods (`logger.warning(.uploader, "…")`) — `lint.sh` enforces no raw `print`.
 
-Default sink is `OSLogLogger`, writing to subsystem `co.galva.sdk` (visible in Console.app). Custom loggers are wrapped in `LevelFilterLogger` so the `logLevel` set at configure time always applies, even after `Galva.setLogger(_:)`.
+Default sink is `OSLogLogger`, writing to subsystem `co.galva.sdk` (visible in Console.app). Custom loggers are wrapped in `LevelFilterLogger` so the `logLevel` set at configure time always applies, even after `Galva.setLogger(_:)`. Integrations log through `CurrentSDKLogger`, which always forwards to the SDK's current logger.
 
 The convenience methods short-circuit on filtered levels (an `isEnabled(_:)` check runs before the autoclosure message is evaluated) — a `logger.debug(.queue, "expensive \(work)")` in a hot loop costs ~zero when filtered out. Locked in by `FilteredLogPerformanceTests`.
 
@@ -136,31 +147,28 @@ The convenience methods short-circuit on filtered levels (an `isEnabled(_:)` che
 
 ## Release process
 
-Each tagged release ships two artifacts: the source SPM tag itself, and `Galva.xcframework.zip` attached to the GitHub Release.
+A release is a Git tag on `main`. SwiftPM resolves it directly; there are no binary artifacts to build or upload.
 
 ### Cutting a release
 
-```bash
-git tag v1.2.3
-git push --tags
-```
+1. Bump `version` in [`Sources/Internal/SDKConstants.swift`](Sources/Internal/SDKConstants.swift). It's reported in the `x-sdk-version` header and by `Galva.sdkVersion`, so it must match the tag.
+2. Merge to `main` with CI green.
+3. Tag and push:
 
-[`.github/workflows/release.yml`](.github/workflows/release.yml) does the rest:
+   ```bash
+   git tag v1.2.3
+   git push origin v1.2.3
+   ```
 
-1. Re-runs `lint.sh` + `swift test` against the tagged commit (cheap insurance).
-2. Builds the XCFramework via `scripts/build-xcframework.sh`.
-3. Creates / updates the GitHub Release with auto-generated install snippets for all three paths (source SPM, drag-and-drop XCFramework, binary-target SPM).
-4. Uploads `Galva.xcframework.zip` and the SPM checksum.
+4. Create the GitHub Release with notes:
 
-To re-run the release for an existing tag (e.g. you fixed something in the build script), trigger the workflow manually via the Actions UI and pass the tag name as input. `--clobber` on the upload step replaces existing assets.
+   ```bash
+   gh release create v1.2.3 --generate-notes
+   ```
 
-### Building the XCFramework locally
+Pushing a tag also runs [`notify-react-native.yml`](.github/workflows/notify-react-native.yml), which asks `galva-react-native` to open a bump-and-re-vendor PR.
 
-```bash
-./scripts/build-xcframework.sh
-```
-
-Outputs `build/Galva.xcframework`, `build/Galva.xcframework.zip`, and a checksum file. Takes ~30s. Useful for smoke-testing the build before tagging.
+Integration packages depend on a released version of this SDK, so release here first, then update and release them.
 
 ### CI
 
@@ -168,8 +176,10 @@ Outputs `build/Galva.xcframework`, `build/Galva.xcframework.zip`, and a checksum
 
 - `lint` — `scripts/lint.sh`
 - `test` — `swift test --parallel`
+- `e2e` — `scripts/e2e.sh`, the demo app's UI tests against an in-process mock
+- `perf` — `scripts/perf.sh`, which fails if the SDK's memory overhead passes its budget
 
-Both must pass for a PR to be mergeable (set up the branch protection rule under **Settings → Branches**).
+All must pass for a PR to be mergeable (set up the branch protection rule under **Settings → Branches**).
 
 ---
 
@@ -184,7 +194,7 @@ The SDK's perf-safety story is locked in by tests in `Tests/PerformanceTests/`:
 | Queue cap evicts oldest | `test_queueRespectsMaxStoredCount_evictsOldest` |
 | Filtered logs skip the autoclosure | `test_filteredOutEntries_doNotInvokeMessageClosure` |
 
-Loose bounds (50µs / 5µs ceilings) catch orders-of-magnitude regressions without flaking on slow CI.
+Loose bounds (50µs / 5µs ceilings) catch orders-of-magnitude regressions without flaking on slow CI. `scripts/perf.sh` measures the real overhead in the demo app (memory, launch, CPU) against a baseline without the SDK.
 
 When adding new code on a hot path, lock the contract here too.
 

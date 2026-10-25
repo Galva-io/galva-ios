@@ -67,13 +67,14 @@ struct SDKHarness: Sendable {
     }
 
     @GalvaActor
-    func configure() async {
+    func configure(integrations: [Galva.Integration] = []) async {
         let queue = MessageQueueAccess.queue(for: consumer, storage: storage)
         await core.configureForTesting(
             identity: identity,
             queue: queue,
             contextProvider: ContextProvider(),
-            logger: SilentLogger()
+            logger: SilentLogger(),
+            integrations: integrations
         )
     }
 

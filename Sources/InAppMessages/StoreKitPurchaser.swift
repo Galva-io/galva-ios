@@ -39,11 +39,14 @@
 //      • `networkError(underlying)`        — App Store unreachable
 //      • `underlying(error)`               — anything else
 //
-//  We do NOT call `transaction.finish()` here. The host app's
-//  `Transaction.updates` listener (RevenueCat, in-house, etc.) receives
-//  the same transaction broadcast and owns the lifecycle. Calling
-//  finish() ourselves would race with that listener and could lose
-//  receipt-based entitlement state.
+//  We do NOT call `transaction.finish()` here — the host app's billing
+//  pipeline (RevenueCat, in-house, etc.) owns the lifecycle, and finishing
+//  before it has recorded the transaction could lose entitlement state.
+//  Note StoreKit does NOT broadcast a `Product.purchase(options:)`
+//  transaction on `Transaction.updates`; the host's listener only receives
+//  it, as unfinished, on the next launch. Hosts that need it in-session
+//  install a `GalvaPurchaseController` (see `Galva+Purchases.swift`), which
+//  reaches this flow through `performPurchase(...)`.
 //
 
 import Foundation
@@ -68,12 +71,9 @@ struct StoreKitPurchaser {
     /// SDK passes the JWS straight through to
     /// `Product.PurchaseOption.promotionalOffer(_:compactJWS:)` — none of
     /// the historical 5-tuple components (keyID, nonce, timestamp) are
-    /// surfaced because the JWS already carries them.
-    struct PromotionalOffer: Sendable, Hashable {
-        let offerId: String
-        /// JWS compact serialization of the offer's signed claims.
-        let compactJWS: String
-    }
+    /// surfaced because the JWS already carries them. Public as
+    /// `Galva.PromotionalOffer` so purchase controllers receive it too.
+    typealias PromotionalOffer = Galva.PromotionalOffer
 
     /// What the user / App Store ended up doing. Bundles render different
     /// UI for completed vs. cancelled vs. pending — keep them on the
@@ -111,6 +111,23 @@ struct StoreKitPurchaser {
         promotionalOffer: PromotionalOffer?,
         appAccountToken: UUID
     ) async throws -> Outcome {
+        let result = try await performPurchase(
+            productId: productId,
+            promotionalOffer: promotionalOffer,
+            appAccountToken: appAccountToken
+        )
+        return try await mapResult(result, fallbackProductId: productId)
+    }
+
+    /// Resolve the product and drive `Product.purchase(options:)` with the
+    /// attribution token and optional JWS offer attached. Returns StoreKit's
+    /// raw result with the transaction unfinished. Shared by `purchase(...)`
+    /// and `Galva.PurchaseRequest.purchaseWithStoreKit()`.
+    func performPurchase(
+        productId: String,
+        promotionalOffer: PromotionalOffer?,
+        appAccountToken: UUID
+    ) async throws -> Product.PurchaseResult {
         let product = try await resolveProduct(productId: productId)
 
         var options: Set<Product.PurchaseOption> = []
@@ -123,9 +140,8 @@ struct StoreKitPurchaser {
                 }
         }
 
-        let result: Product.PurchaseResult
         do {
-            result = try await product.purchase(options: options)
+            return try await product.purchase(options: options)
         } catch let error as Product.PurchaseError {
             throw mapPurchaseError(error)
         } catch let error as StoreKitError {
@@ -133,8 +149,6 @@ struct StoreKitPurchaser {
         } catch {
             throw Failure.underlying(error)
         }
-
-        return try await mapResult(result, fallbackProductId: productId)
     }
 
     // MARK: - Product resolution
@@ -175,15 +189,7 @@ struct StoreKitPurchaser {
                     "productId": transaction.productID,
                     "transactionId": String(transaction.id),
                 ])
-                return .completed(
-                    verified: true,
-                    transactionId: transaction.id,
-                    originalId: transaction.originalID,
-                    productId: transaction.productID,
-                    purchaseDate: transaction.purchaseDate,
-                    expirationDate: transaction.expirationDate,
-                    appAccountToken: transaction.appAccountToken
-                )
+                return .verified(transaction)
             case .unverified(_, let error):
                 logger.warning(.identity, "purchase unverified", error: error)
                 throw Failure.verificationFailed(detail: String(describing: error))
@@ -252,6 +258,13 @@ struct StoreKitPurchaser {
             return .invalidOffer(detail: "missingOfferParameters")
         case .invalidQuantity:
             return .invalidPayload(detail: "invalidQuantity")
+        #if compiler(>=6.3.2)
+        case .paymentMethodBindingConfigurationRequired:
+            // Added with billing plans in the iOS 26.5 SDK (Xcode 26.5).
+            // Nothing offer-specific to report — a generic purchase failure.
+            // Gated so Xcode 26.0–26.4 still compile.
+            return .underlying(error)
+        #endif
         @unknown default:
             return .underlying(error)
         }
@@ -281,8 +294,62 @@ struct StoreKitPurchaser {
             return .underlying(error)
         case .unknown:
             return .underlying(error)
+        #if compiler(>=6.4)
+        case .invalidPresentationContext:
+            // Added in the iOS 27 SDK (Xcode 27): StoreKit had no valid
+            // context to present the purchase sheet in. Gated so Xcode 26
+            // still compiles.
+            return .underlying(error)
+        #endif
         @unknown default:
             return .underlying(error)
+        }
+    }
+}
+
+// MARK: - Purchase controller interop
+
+extension StoreKitPurchaser.Outcome {
+
+    /// `.completed` for a verified transaction — shared by the built-in flow
+    /// and by results a `GalvaPurchaseController` reports.
+    static func verified(_ transaction: Transaction) -> Self {
+        .completed(
+            verified: true,
+            transactionId: transaction.id,
+            originalId: transaction.originalID,
+            productId: transaction.productID,
+            purchaseDate: transaction.purchaseDate,
+            expirationDate: transaction.expirationDate,
+            appAccountToken: transaction.appAccountToken
+        )
+    }
+
+    /// Outcome for a controller-reported result. Controllers hand back
+    /// verified transactions only (see `Galva.PurchaseResult.completed`).
+    init(_ result: Galva.PurchaseResult) {
+        switch result {
+        case .completed(let transaction): self = .verified(transaction)
+        case .pending:                    self = .pending
+        case .cancelled:                  self = .cancelled
+        }
+    }
+}
+
+extension StoreKitPurchaser.Failure {
+
+    /// Public form thrown from `Galva.PurchaseRequest.purchaseWithStoreKit()`.
+    var publicError: Galva.PurchaseError {
+        switch self {
+        case .productUnavailable:             return .productUnavailable
+        case .purchaseNotAllowed:             return .purchaseNotAllowed
+        case .ineligibleForOffer:             return .ineligibleForOffer
+        case .notAvailableInStorefront:       return .notAvailableInStorefront
+        case .invalidOffer(let detail):       return .invalidOffer(detail)
+        case .verificationFailed(let detail): return .verificationFailed(detail)
+        case .networkError(let underlying):   return .networkError(String(describing: underlying))
+        case .invalidPayload(let detail):     return .failed(detail)
+        case .underlying(let error):          return .failed(String(describing: error))
         }
     }
 }
