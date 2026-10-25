@@ -58,6 +58,8 @@ final class SDKCore {
     private(set) var environment: Galva.Environment = .production
     private var autoTrack: Galva.AutoTrackCategory = []
     private var logLevel: Galva.LogLevel = .warning
+    /// How in-app messages reach the screen — `configure(…, inAppMessages:)`.
+    private var inAppMessagePresentation: InAppMessages.Presentation = .automatic
 
     var identity: IdentityStore?
     var queue: MessageQueue?
@@ -115,6 +117,11 @@ final class SDKCore {
     /// and we only ever assign / read it through GalvaActor code paths —
     /// the box is never mutated concurrently.
     nonisolated(unsafe) var lifecycleObserver: AppLifecycleObserver?
+
+    /// Presents published in-app messages, or hands them to the app's
+    /// `.manual` handler. `@MainActor`; held the same way as
+    /// `lifecycleObserver` for the SDK's lifetime.
+    nonisolated(unsafe) var messageDelivery: InAppMessageDelivery?
 
     /// Session tracker (auto-emits `session_start`). Created only when
     /// `autoTrackCategories` includes `.lifecycle` — `nil` otherwise so
@@ -289,6 +296,7 @@ final class SDKCore {
         autoTrack: Galva.AutoTrackCategory,
         logLevel: Galva.LogLevel,
         userLogger: (any GalvaLogger)? = nil,
+        inAppMessages: InAppMessages.Presentation = .automatic,
         integrations: [Galva.Integration] = []
     ) async {
         guard !configured else {
@@ -298,6 +306,7 @@ final class SDKCore {
 
         self.apiKey = apiKey
         self.environment = environment
+        self.inAppMessagePresentation = inAppMessages
         self.autoTrack = autoTrack
         self.logLevel = logLevel
         if let userLogger {
@@ -550,7 +559,22 @@ final class SDKCore {
         // StoreKit transaction sweep, and the session tracker. All
         // three run on every foreground (cold start + return from
         // background); each gates internally on the relevant config.
+        let presentation = inAppMessagePresentation
+        let stream = inAppMessageStream
         Task { @MainActor [weak self] in
+            // Subscribe the delivery BEFORE the observer starts: its first
+            // foreground poll may publish a message, and the stream only
+            // delivers to subscribers that already exist.
+            let delivery = InAppMessageDelivery()
+            delivery.start(
+                presentation,
+                messages: stream.makeStream(),
+                presentAutomatically: { [weak self] message in
+                    await self?.presentAutomatically(message)
+                }
+            )
+            self?.messageDelivery = delivery
+
             let observer = AppLifecycleObserver { [weak self] in
                 Task { @GalvaActor in
                     guard let self else { return }
@@ -638,8 +662,8 @@ final class SDKCore {
     private(set) var deferredDeepLink: DeepLink?
 
     /// Router for incoming Galva deep links, forwarded from
-    /// `Galva.handleOpenURL(_:)` (auto-attached by the SwiftUI
-    /// `.galvaConfigure(...)` modifier, or called manually from UIKit). The
+    /// `Galva.handleOpenURL(_:)` (called from a SwiftUI `onOpenURL`, or by the
+    /// UIKit delegate mirrors in `Galva+OpenURL.swift`). The
     /// caller has already confirmed the `gv` scheme; here we parse the URL
     /// into a typed `DeepLink` and route it — dispatching now, or deferring
     /// until the SDK can resolve it (see `route(_:)`).
@@ -980,6 +1004,26 @@ final class SDKCore {
     }
 
     // MARK: In-app messages
+
+    /// `.automatic` presentation: show `message` on the app's active window
+    /// scene. A failure — no window yet, the message is no longer valid, its
+    /// page can't download — is logged and nothing appears, the same as a
+    /// deep link that can't present.
+    func presentAutomatically(_ message: InAppMessages.Message) async {
+        #if canImport(UIKit) && canImport(WebKit)
+        do {
+            try await showInAppMessage(message)
+        } catch {
+            logger.info(.identity, "in-app message not shown", metadata: [
+                "messageId": message.id,
+            ], error: error)
+        }
+        #else
+        logger.debug(.identity, "in-app message not shown — automatic presentation needs UIKit", metadata: [
+            "messageId": message.id,
+        ])
+        #endif
+    }
 
     #if canImport(UIKit) && canImport(WebKit)
     /// Drive the WebView overlay for a single message. Throws if the

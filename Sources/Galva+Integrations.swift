@@ -35,7 +35,7 @@ public extension Galva {
 
     /// Connects Galva to another SDK in your app. Get one from an integration
     /// package — e.g. `.revenueCat()` from `GalvaRevenueCat` — and pass it to
-    /// `Galva.configure(apiKey:…, integrations:)` or `.galvaConfigure(…, integrations:)`.
+    /// `Galva.configure(apiKey:…, integrations:)`.
     struct Integration: Sendable {
         /// Short identifier, e.g. `"revenuecat"`.
         public let name: String

@@ -17,9 +17,10 @@
 //      | cold (scenes)      | scene(_:willConnectTo:options:)           |
 //      | warm (scenes)      | scene(_:openURLContexts:)                 |
 //
-//  SwiftUI-lifecycle apps don't need any of this — `.galvaConfigure(...)`
-//  attaches `.onOpenURL`, which fires for both cold and warm. Only custom
-//  `gv://` schemes are claimed; `http(s)` / universal links return `false`.
+//  SwiftUI-lifecycle apps don't need any of this — they forward from
+//  `.onOpenURL { url in Galva.handleOpenURL(url) }`, which fires for both cold
+//  and warm. Only custom `gv://` schemes are claimed; `http(s)` / universal
+//  links return `false`.
 //
 
 import Foundation

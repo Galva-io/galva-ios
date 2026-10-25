@@ -2,18 +2,16 @@
 //  GalvaSwiftUIAPITests.swift
 //  GalvaTests
 //
-//  Surface-level compile + identity check for the SwiftUI integration
-//  modifiers. We can't unit-test the actual sheet presentation without
-//  ViewInspector or running the app in a UI test target, so these tests
-//  pin the *shape* of the API:
+//  Surface-level compile + identity check for the SwiftUI presentation
+//  modifier used in `.manual` mode. We can't unit-test the actual sheet
+//  presentation without ViewInspector or running the app in a UI test
+//  target, so these tests pin the *shape* of the API:
 //
 //      • `.inAppMessageSheet($binding)` exists on `View` and returns a
 //        `View` (preserves chaining).
-//      • `.autoDisplayInAppMessages()` exists on `View` and returns a
-//        `View`.
 //
-//  If either modifier is renamed / removed / changes return type, the
-//  test target fails to build — catches regressions before they ship.
+//  If the modifier is renamed / removed / changes return type, the test
+//  target fails to build — catches regressions before they ship.
 //
 //  Implementation note: `let _: some View = …` is rejected by the Swift
 //  compiler because `some` requires a *named* property declaration. We
@@ -37,10 +35,6 @@ final class GalvaSwiftUIAPITests: XCTestCase {
     func test_inAppMessageSheet_modifier_exists() {
         let binding: Binding<InAppMessages.Message?> = .constant(nil)
         assertIsView(Text("anything").inAppMessageSheet(binding))
-    }
-
-    func test_autoDisplayInAppMessages_modifier_exists() {
-        assertIsView(Text("anything").autoDisplayInAppMessages())
     }
 
     func test_inAppMessageSheet_acceptsLiveBinding() {

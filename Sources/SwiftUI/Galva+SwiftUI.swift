@@ -2,7 +2,9 @@
 //  Galva+SwiftUI.swift
 //  Galva
 //
-//  SwiftUI integration for in-app messaging. Two public modifiers:
+//  SwiftUI presentation for in-app messages in `.manual` mode. With the
+//  default `.automatic` mode the SDK presents messages itself and apps need
+//  none of this.
 //
 //      • `.inAppMessageSheet($message)` — present the WebView sheet driven
 //        by a `Binding<InAppMessages.Message?>`. The SDK resolves + downloads
@@ -10,11 +12,6 @@
 //        the WebView is ready. A failed resolve / download is silent — no
 //        sheet ever appears, no spinner flashes, the caller's binding is
 //        cleared.
-//
-//      • `.autoDisplayInAppMessages()` — convenience that iterates
-//        `InAppMessages.messages` internally and feeds each value into an
-//        `.inAppMessageSheet`. Drop on any root view for zero-config
-//        rendering.
 //
 //  Architecture: the modifier owns a coordinator (`@StateObject`) that
 //  resolves the payload, downloads the bundle, and builds the `WKWebView` +
@@ -50,42 +47,37 @@ public extension View {
     /// download fails, the binding is cleared silently and no sheet is shown
     /// — the user never sees a sheet flash open and close.
     ///
-    /// Use this when you want full control over which messages render —
-    /// e.g. queueing, filtering by workflow, gating on app state.
+    /// Use it with `inAppMessages: .manual` to control which messages render
+    /// and when — queueing, filtering by workflow, waiting for a screen to
+    /// close. Route each message from your handler into state the view
+    /// binds to:
     ///
     /// ```swift
-    /// @State var presenting: InAppMessages.Message?
+    /// @MainActor final class MessageCenter: ObservableObject {
+    ///     static let shared = MessageCenter()
+    ///     @Published var message: InAppMessages.Message?
+    /// }
+    ///
+    /// // At launch
+    /// Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual { message in
+    ///     MessageCenter.shared.message = message
+    /// })
+    ///
+    /// // On your root view
+    /// @ObservedObject var messages = MessageCenter.shared
     ///
     /// var body: some View {
     ///     ContentView()
-    ///         .task {
-    ///             for await message in InAppMessages.messages {
-    ///                 presenting = message
-    ///             }
-    ///         }
-    ///         .inAppMessageSheet($presenting)
+    ///         .inAppMessageSheet($messages.message)
     /// }
     /// ```
+    ///
+    /// With the default `.automatic` mode the SDK presents messages itself;
+    /// don't present them again here.
     func inAppMessageSheet(
         _ message: Binding<InAppMessages.Message?>
     ) -> some View {
         modifier(InAppMessageSheetModifier(presentingMessage: message))
-    }
-
-    /// Auto-iterate `InAppMessages.messages` and present each new value
-    /// as a sheet. Equivalent to writing the `for await` loop +
-    /// `.inAppMessageSheet($state)` by hand — most apps that just want
-    /// "render in-app messages as the SDK delivers them" can drop this
-    /// on any root view.
-    ///
-    /// ```swift
-    /// var body: some View {
-    ///     ContentView()
-    ///         .autoDisplayInAppMessages()
-    /// }
-    /// ```
-    func autoDisplayInAppMessages() -> some View {
-        modifier(AutoDisplayInAppMessagesModifier())
     }
 }
 
@@ -127,23 +119,6 @@ private struct InAppMessageSheetModifier: ViewModifier {
             // binding too so the next message can flow in.
             .onChange(of: coordinator.readyMessage?.id) { newValue in
                 if newValue == nil { presentingMessage = nil }
-            }
-    }
-}
-
-/// `for await` consumer of `InAppMessages.messages` + automatic
-/// `.inAppMessageSheet` plumbing. Latest message wins — `inAppMessageSheet`
-/// handles the prepare-before-present pipeline for each one.
-private struct AutoDisplayInAppMessagesModifier: ViewModifier {
-    @State private var presenting: InAppMessages.Message?
-
-    func body(content: Content) -> some View {
-        content
-            .inAppMessageSheet($presenting)
-            .task {
-                for await message in InAppMessages.messages {
-                    presenting = message
-                }
             }
     }
 }

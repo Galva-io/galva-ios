@@ -89,6 +89,31 @@ public extension InAppMessages {
 
         public var description: String { rawValue }
     }
+
+    /// How in-app messages reach the screen. Pass it to
+    /// `Galva.configure(apiKey:…, inAppMessages:)`.
+    enum Presentation: Sendable {
+
+        /// Galva presents each message itself, as a sheet on your app's
+        /// active window, as soon as it's ready. The default.
+        case automatic
+
+        /// Galva hands each message to `handler` on the main actor and
+        /// presents nothing itself. Your app decides when and where the
+        /// message appears, for example with `message.show(in:)`:
+        ///
+        ///     Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual { message in
+        ///         guard let scene = myActiveWindowScene() else { return }
+        ///         try? await message.show(in: scene)
+        ///     })
+        ///
+        /// Messages arrive one at a time: the next one waits until
+        /// `handler` returns. They're also published on
+        /// `InAppMessages.messages`, so SwiftUI apps can present them with
+        /// `.inAppMessageSheet(_:)` instead — present each message in one
+        /// place only.
+        case manual(handler: @MainActor @Sendable (InAppMessages.Message) async -> Void)
+    }
 }
 
 // MARK: - Rendering

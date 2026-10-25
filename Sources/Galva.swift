@@ -245,8 +245,12 @@ public enum Galva {
     ///     SDKs** in Galva. It starts with `pk_` and is safe to ship in your
     ///     app. The server resolves your app and environment from it.
     ///   - environment: Backend to talk to. Default is `.production`. Use
-    ///     `.development` for staging / TestFlight, or `.custom(...)` for
-    ///     on-prem and proxy setups.
+    ///     `.development` only with an App ID issued for Galva's development
+    ///     environment, or `.custom(...)` for proxy setups.
+    ///   - inAppMessages: How in-app messages reach the screen. Default:
+    ///     `.automatic`, which presents each message as a sheet on your app's
+    ///     active window. Pass `.manual { message in … }` to present them
+    ///     yourself.
     ///   - autoTrackCategories: Which categories of events the SDK should
     ///     collect automatically. Default: `[.lifecycle, .appleSearchAds]`.
     ///   - logLevel: Minimum severity to log. Default: `.warning`.
@@ -264,6 +268,7 @@ public enum Galva {
     public static func configure(
         apiKey: String,
         environment: Environment = .production,
+        inAppMessages: InAppMessages.Presentation = .automatic,
         autoTrackCategories: AutoTrackCategory = [.lifecycle, .appleSearchAds],
         logLevel: LogLevel = .warning,
         logger: (any GalvaLogger)? = nil,
@@ -276,6 +281,7 @@ public enum Galva {
                 autoTrack: autoTrackCategories,
                 logLevel: logLevel,
                 userLogger: logger,
+                inAppMessages: inAppMessages,
                 integrations: integrations
             )
         }
@@ -287,7 +293,7 @@ public enum Galva {
     /// **Not public.** Wrappers compile in the same Swift module as the core
     /// (e.g. the React Native pod builds the core + bridge together), so they
     /// reach this seam without it widening the public native API. Native apps
-    /// call ``configure(apiKey:environment:autoTrackCategories:logLevel:logger:integrations:)``.
+    /// call ``configure(apiKey:environment:inAppMessages:autoTrackCategories:logLevel:logger:integrations:)``.
     ///
     /// `wrapper`'s name/version replace `ios`/`sdkVersion` in the
     /// `x-sdk-version` header, `context.library`, and the `sdk_version` event so
@@ -297,6 +303,7 @@ public enum Galva {
     static func configure(
         apiKey: String,
         environment: Environment = .production,
+        inAppMessages: InAppMessages.Presentation = .automatic,
         autoTrackCategories: AutoTrackCategory = [.lifecycle, .appleSearchAds],
         logLevel: LogLevel = .warning,
         logger: (any GalvaLogger)? = nil,
@@ -309,6 +316,7 @@ public enum Galva {
         configure(
             apiKey: apiKey,
             environment: environment,
+            inAppMessages: inAppMessages,
             autoTrackCategories: autoTrackCategories,
             logLevel: logLevel,
             logger: logger,
@@ -425,10 +433,14 @@ public enum Galva {
         }
     }
 
-    /// Hand an incoming URL to Galva. SwiftUI apps using `.galvaConfigure(...)`
-    /// get this wired up automatically (the modifier attaches `onOpenURL`), so
-    /// they never call it directly. UIKit apps forward from their App / Scene
-    /// delegates — the `Galva.application(...)` / `Galva.scene(...)` mirrors in
+    /// Hand an incoming URL to Galva. SwiftUI apps call it from `onOpenURL` on
+    /// their root view:
+    ///
+    ///     ContentView()
+    ///         .onOpenURL { url in Galva.handleOpenURL(url) }
+    ///
+    /// UIKit apps forward from their App / Scene delegates — the
+    /// `Galva.application(...)` / `Galva.scene(...)` mirrors in
     /// `Galva+OpenURL.swift` cover every entry point (cold + warm) and call
     /// this under the hood.
     ///
@@ -852,34 +864,26 @@ public enum AppUser {
 /// Galva fetches pending in-app messages from active workflows on every
 /// app foreground event (cold start + return from background). The
 /// highest-priority message — resolved server-side from the workflow
-/// waterfall — is published on the `messages` stream.
+/// waterfall — reaches the screen the way `Galva.configure(…, inAppMessages:)`
+/// says:
 ///
-/// To render a message, await it on the stream and call `show(in:)` on
-/// it. The SDK presents a sheet hosting a `WKWebView` that loads the
-/// versioned HTML bundle. Bundle download, on-disk cache, identity, and
-/// the native bridge (purchase prompt, dismissal, deep link, manage-
-/// subscription URL) are all handled internally.
+/// - `.automatic` (default): the SDK presents it as a sheet on your app's
+///   active window. There's nothing to write.
+/// - `.manual { message in … }`: the SDK hands it to your handler, and your
+///   app presents it with `message.show(in:)` or `.inAppMessageSheet(_:)`.
 ///
-/// Example:
-///
-///     Task { @MainActor in
-///         for await message in InAppMessages.messages {
-///             guard let scene = UIApplication.shared
-///                 .connectedScenes
-///                 .first(where: { $0.activationState == .foregroundActive })
-///                 as? UIWindowScene
-///             else { continue }
-///             try? await message.show(in: scene)
-///         }
-///     }
-///
-/// To opt out: simply don't consume `messages`. The SDK still polls (so
-/// suppression analytics stay accurate) but nothing renders.
+/// Either way, the SDK handles the page download and cache, identity, and the
+/// native bridge (purchase prompt, dismissal, deep link, manage-subscription
+/// URL).
 public enum InAppMessages {
 
     /// Async stream of pending in-app messages addressed to the current
     /// identity. The SDK publishes the winning message after each
     /// foreground poll; multiple consumers may iterate concurrently.
+    ///
+    /// Every message is published here in both presentation modes. In
+    /// `.automatic` mode the SDK already presents it, so read the stream
+    /// only to observe messages, not to present them again.
     ///
     /// `@MainActor`: the stream is main-actor-isolated, so when you iterate
     /// it from a MainActor context — a SwiftUI `.task { … }` or
