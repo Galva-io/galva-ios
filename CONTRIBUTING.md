@@ -116,6 +116,12 @@ Avoid wall-clock-dependent assertions. Use the `eventually(timeout:condition:)` 
 
 The swift-tools-version stays at 6.0 so the manifest parses on every Xcode that can build the SDK; don't use newer manifest features without bumping it deliberately.
 
+### Public value sets that grow are structs
+
+SwiftPM builds this package from source, without library evolution, so adding a case to a public enum breaks every app that switches over it exhaustively. Sets that grow with the product, like `InAppMessages.WorkflowType` and `Galva.LogCategory`, are `RawRepresentable` structs with static values instead: adding one is a minor release, and an unknown server value still decodes.
+
+Public error enums (`InAppMessages.Error`, `Galva.PurchaseError`) stay enums. Their docs tell apps to switch with `@unknown default`, which turns a new case into a warning rather than a build failure, so they may gain cases in minor releases too. Closed sets (`Galva.LogLevel`, `Galva.Environment`, `Galva.PurchaseResult`) are plain enums.
+
 ### Integrations live in their own packages
 
 SDKs that integrate with another vendor's SDK (e.g. [`galva-ios-revenuecat`](https://github.com/Galva-io/galva-ios-revenuecat)) are separate packages. SwiftPM fetches and pins every dependency a package declares, even ones only used by products an app doesn't link, so a vendor dependency in this `Package.swift` would reach every Galva app.
@@ -152,15 +158,16 @@ A release is a Git tag on `main`. SwiftPM resolves it directly; there are no bin
 ### Cutting a release
 
 1. Bump `version` in [`Sources/Internal/SDKConstants.swift`](Sources/Internal/SDKConstants.swift). It's reported in the `x-sdk-version` header and by `Galva.sdkVersion`, so it must match the tag.
-2. Merge to `main` with CI green.
-3. Tag and push:
+2. In [`CHANGELOG.md`](CHANGELOG.md), give the release its version and date, and list its changes. Merge PRs with a CHANGELOG line for anything an app developer would notice.
+3. Merge to `main` with CI green.
+4. Tag and push:
 
    ```bash
    git tag v1.2.3
    git push origin v1.2.3
    ```
 
-4. Create the GitHub Release with notes:
+5. Create the GitHub Release with notes:
 
    ```bash
    gh release create v1.2.3 --generate-notes
