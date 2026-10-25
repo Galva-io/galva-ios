@@ -1,7 +1,8 @@
 # GalvaDemo — example app & end-to-end tests
 
 A real SwiftUI app that integrates the Galva SDK exactly as a host app would
-(`.galvaConfigure(...)` + `.autoDisplayInAppMessages()`), plus an XCUITest
+(`Galva.configure(...)` at launch, `.onOpenURL` for Galva links, and the SDK
+presenting in-app messages on its own), plus an XCUITest
 suite that drives the **full stack** — configure → poll → resolve → bundle
 download → `WKWebView` → native bridge → deep link — and asserts behavior.
 
@@ -34,11 +35,15 @@ cache → WebView → bridge path still runs. The SDK is pointed at the mock via
 
 UI tests select a scenario through launch environment:
 
-| `GALVA_E2E_SCENARIO` | Poll returns | Used by |
-|---|---|---|
-| `showInAppMessage` | one in-app message | in-app message + bridge tests |
-| `deepLinkTarget` | nothing (deep link only) | deep-link + deferral tests |
-| `noMessages` | nothing | identity/track upload tests |
+| `GALVA_E2E_SCENARIO` | Poll returns | Presentation | Used by |
+|---|---|---|---|
+| `showInAppMessage` | one in-app message | `.automatic` | in-app message + bridge tests |
+| `showInAppMessageUIKit` | the same message | `.manual`, presented with `show(in:)` | UIKit presenter safe-area test |
+| `showInAppMessageSwiftUISheet` | the same message | `.manual`, presented with `.inAppMessageSheet` | SwiftUI sheet safe-area test |
+| `deepLinkTarget` | nothing (deep link only) | `.automatic` | deep-link + deferral tests |
+| `noMessages` | nothing | `.automatic` | identity/track upload tests |
+
+[`DemoPresentation`](GalvaDemo/Sources/DemoPresentation.swift) maps each scenario to the mode `GalvaDemoApp` configures.
 
 `E2EBootstrap` wipes identity + caches on each launch so tests are independent.
 

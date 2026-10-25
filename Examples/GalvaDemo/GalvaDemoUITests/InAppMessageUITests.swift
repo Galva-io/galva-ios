@@ -5,7 +5,8 @@
 //  End-to-end coverage of the in-app message stack against the in-process
 //  mock: poll → resolve → bundle download → WebView present → native bridge.
 //  Tapping "Check for messages" forces the poll (cold-start activation can
-//  race the SDK's lifecycle subscription), then auto-display renders the sheet.
+//  race the SDK's lifecycle subscription), then the SDK presents the message
+//  itself (`.automatic`) or the scenario's `.manual` handler does.
 //
 
 import XCTest
@@ -17,7 +18,7 @@ final class InAppMessageUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func test_autoDisplaysMessage_andRendersResolvedPayload() {
+    func test_presentsMessageAutomatically_andRendersResolvedPayload() {
         let app = launchApp(scenario: .showInAppMessage)
         tapControl(app, "checkMessages")
 
@@ -34,14 +35,22 @@ final class InAppMessageUITests: XCTestCase {
         // The WebView must receive the presented sheet's real safe area (notch /
         // home-indicator insets), not `.zero`. On a notched simulator the bundle
         // surfaces a `safeArea:nonzero…` marker (top>0 OR bottom>0) once
-        // getPageContext resolves. This exercises the SwiftUI auto-display path.
-        // Requires a notched device — CI pins iPhone 16 Pro.
+        // getPageContext resolves. This exercises automatic presentation, the
+        // SDK's own UIKit presenter. Requires a notched device — CI pins
+        // iPhone 16 Pro.
         assertNonZeroSafeArea(scenario: .showInAppMessage)
     }
 
+    func test_pageContext_injectsNonZeroSafeArea_swiftUISheet() {
+        // `.manual` mode with SwiftUI: the handler routes the message into
+        // state that `.inAppMessageSheet` presents.
+        assertNonZeroSafeArea(scenario: .showInAppMessageSwiftUISheet)
+    }
+
     func test_pageContext_injectsNonZeroSafeArea_uikitPresenter() {
-        // The UIKit `show(in:)` presenter (the path the React Native wrapper
-        // drives through `showMessage`) previously loaded the bundle in
+        // `.manual` mode whose handler calls the UIKit `show(in:)` presenter
+        // (the path the React Native wrapper drives through `showMessage`).
+        // That presenter previously loaded the bundle in
         // viewDidLoad, so getPageContext() could run before the sheet was laid
         // out and read a `.zero` safe area. The VC now defers the load to
         // viewDidAppear; assert the WebView receives non-zero insets.

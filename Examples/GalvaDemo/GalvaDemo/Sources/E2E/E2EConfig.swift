@@ -12,12 +12,16 @@ import Galva
 
 /// Selects which canned backend responses the in-process mock serves.
 enum E2EScenario: String {
-    /// Poll returns one in-app message → SwiftUI auto-display renders it.
+    /// Poll returns one in-app message → the SDK presents it itself
+    /// (`.automatic`, the default).
     case showInAppMessage
-    /// Same message as `showInAppMessage`, but presented through the UIKit
-    /// `message.show(in:)` presenter (the path the React Native wrapper uses)
-    /// instead of the SwiftUI auto-display modifier.
+    /// Same message as `showInAppMessage`, in `.manual` mode: the app's
+    /// handler presents it through the UIKit `message.show(in:)` presenter
+    /// (the path the React Native wrapper uses).
     case showInAppMessageUIKit
+    /// Same message, in `.manual` mode: the handler routes it into SwiftUI
+    /// state that `.inAppMessageSheet` presents.
+    case showInAppMessageSwiftUISheet
     /// Two distinct messages sharing bundle `1.0.0`. The first caches the
     /// bundle; the "Next message" control serves the second, which reuses the
     /// cached bundle and boots instantly — reproducing the cached-second-

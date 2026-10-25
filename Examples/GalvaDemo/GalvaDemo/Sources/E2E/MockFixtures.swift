@@ -33,7 +33,7 @@ enum MockFixtures {
     /// by the demo's "Next message" control).
     static func poll(for scenario: E2EScenario, second: Bool = false) -> String {
         switch scenario {
-        case .showInAppMessage, .showInAppMessageUIKit:
+        case .showInAppMessage, .showInAppMessageUIKit, .showInAppMessageSwiftUISheet:
             return message(id: pollMessageId)
         case .showInAppMessageTwice:
             return message(id: second ? secondMessageId : pollMessageId)
@@ -58,7 +58,8 @@ enum MockFixtures {
         switch scenario {
         case .noMessages:
             return #"{"data":{"valid":false}}"#
-        case .showInAppMessage, .showInAppMessageUIKit, .showInAppMessageTwice, .deepLinkTarget, .deepLinkRace:
+        case .showInAppMessage, .showInAppMessageUIKit, .showInAppMessageSwiftUISheet,
+             .showInAppMessageTwice, .deepLinkTarget, .deepLinkRace:
             return """
             {"data":{"valid":true,"webviewVersion":"1.0.0","payload":{"title":"E2E Offer","communicationId":"\(deepLinkCommunicationId)","source":"e2e"}}}
             """
