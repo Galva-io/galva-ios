@@ -42,3 +42,8 @@ Examples/**/perf-report.md
 
 build/
 .swiftpm/*
+
+# Local agent tooling — personal settings and skills, not part of the SDK
+.claude/settings.local.json
+.agents/
+skills-lock.json
