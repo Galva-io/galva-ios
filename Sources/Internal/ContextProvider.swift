@@ -115,17 +115,11 @@ struct ContextProvider: Sendable {
         MessageContext(
             app: appContext(),
             device: deviceContext(),
-            ip: nil,
             library: libraryContext(),
             locale: Locale.current.identifier,
-            network: nil,
             os: osContext(),
-            page: nil,
-            referrer: nil,
             screen: screenContext(),
-            timezone: TimeZone.current.identifier,
-            userAgent: nil,
-            userAgentData: nil
+            timezone: TimeZone.current.identifier
         )
     }
 
@@ -169,14 +163,11 @@ struct ContextProvider: Sendable {
     private func deviceContext() -> MessageContext.Device {
         MessageContext.Device(
             id: snapshot.deviceId,
-            advertisingId: nil,
-            adTrackingEnabled: nil,
             manufacturer: "Apple",
             model: hardwareModel(),
             name: snapshot.deviceName,
             type: snapshot.deviceType,
-            token: deviceToken,
-            version: nil
+            token: deviceToken
         )
     }
 

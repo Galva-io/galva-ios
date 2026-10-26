@@ -223,7 +223,8 @@ struct OSLogLogger: GalvaLogger {
     /// One `os.Logger` per category, cached at construction.
     private let loggersByCategory: [Galva.LogCategory: os.Logger]
 
-    init(subsystem: String = OSLogLogger.defaultSubsystem) {
+    init() {
+        let subsystem = Self.defaultSubsystem
         self.subsystem = subsystem
         var cache: [Galva.LogCategory: os.Logger] = [:]
         for category in Galva.LogCategory.allCases {
@@ -291,28 +292,13 @@ struct LevelFilterLogger: GalvaLogger {
     }
 }
 
-// MARK: - CurrentSDKLogger
-
-/// Forwards every call to the SDK's current logger (`SDKCore.currentLogger`).
-/// Handed to integrations, which live outside `GalvaActor`, so their entries
-/// follow the configured level and any logger installed later with
-/// `Galva.setLogger(_:)`.
-struct CurrentSDKLogger: GalvaLogger {
-    func log(_ entry: Galva.LogEntry) {
-        SDKCore.currentLogger.log(entry)
-    }
-
-    func isEnabled(_ level: Galva.LogLevel) -> Bool {
-        SDKCore.currentLogger.isEnabled(level)
-    }
-}
-
 // MARK: - LiveLogger
 
 /// Forwards every call to `target`, which can be swapped after this logger is
 /// handed out. SDKCore logs through one and hands it to every subsystem it
-/// builds, so `Galva.setLogger(_:)` and level changes reach loggers captured
-/// at configure time. Lock-protected, hence `@unchecked Sendable`.
+/// builds and every integration it installs, so `Galva.setLogger(_:)` and
+/// level changes reach loggers captured at configure time. Lock-protected,
+/// hence `@unchecked Sendable`.
 final class LiveLogger: GalvaLogger, @unchecked Sendable {
     private let lock = NSLock()
     private var _target: any GalvaLogger

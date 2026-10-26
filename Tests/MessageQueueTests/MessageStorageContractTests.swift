@@ -154,10 +154,10 @@ class MessageStorageContractTests: XCTestCase {
         let round = fetched[0]
         XCTAssertEqual(round.endUserId, "user-7")
         XCTAssertEqual(round.anonymousId, "anon-7")
-        XCTAssertEqual(round.traits?["email"], .string("a@b.co"))
-        XCTAssertEqual(round.traits?["count"], .int(42))
-        XCTAssertEqual(round.traits?["ratio"], .double(1.5))
-        XCTAssertEqual(round.traits?["active"], .bool(true))
+        XCTAssertEqual(round.identifyTraits?["email"], .string("a@b.co"))
+        XCTAssertEqual(round.identifyTraits?["count"], .int(42))
+        XCTAssertEqual(round.identifyTraits?["ratio"], .double(1.5))
+        XCTAssertEqual(round.identifyTraits?["active"], .bool(true))
     }
 }
 

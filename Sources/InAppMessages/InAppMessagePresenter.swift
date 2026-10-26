@@ -86,10 +86,9 @@ final class InAppMessagePresenter: NSObject {
     /// `noPresentingViewController`.
     var presentTimeout: TimeInterval = 5
 
-    /// Convenience accessors used by `NativeBridge` to reach UIKit state
-    /// it doesn't own.
+    /// The active sheet's WebView — the `InAppMessageHost` requirement the
+    /// bridge reaches it through.
     var webView: WKWebView? { viewController?.webView }
-    var window: UIWindow? { viewController?.view.window }
 
     #if canImport(StoreKit)
     init(
@@ -192,13 +191,11 @@ final class InAppMessagePresenter: NSObject {
         // 1. Resolve payload (server pin → /sdk/initialize fallback for
         //    the webview version). The bridge serves the payload back to
         //    the bundle via `getMessageData()`.
-        let resolved = try await messageManager.resolve(messageId: message.id)
-        guard let resolved else {
+        guard let version = try await messageManager.resolve(messageId: message.id) else {
             logger.warning(.inAppMessages, "show(in:) — server returned invalid",
                            metadata: ["messageId": message.id])
             throw InAppMessageError.messageNotFound
         }
-        let version = resolved.webviewVersion
 
         // 2. Resolve the bundle (download from S3 on cache miss).
         let bundleURL: URL
@@ -391,7 +388,7 @@ final class InAppMessagePresenter: NSObject {
                 vc.isModalInPresentation = false
             }
         }
-        await teardown(vc, reason: reason)
+        await teardown(vc)
     }
 
     /// Give up on a sheet UIKit hasn't presented: tear it down, and if
@@ -401,7 +398,7 @@ final class InAppMessagePresenter: NSObject {
         vc.isDiscarded = true
         vc.isModalInPresentation = false
         vc.delegate = nil
-        await teardown(vc, reason: "not_presented")
+        await teardown(vc)
     }
 
     /// Drop every reference to `vc`'s presentation, if it's still the
@@ -415,14 +412,13 @@ final class InAppMessagePresenter: NSObject {
     /// bridge. That guarantees the WebView — the heaviest object in the
     /// presentation — is releasable the instant UIKit lets go of the VC,
     /// even if a bridge dispatch Task is still in flight elsewhere.
-    private func teardown(_ vc: InAppMessageViewController, reason: String?) async {
+    private func teardown(_ vc: InAppMessageViewController) async {
         guard viewController === vc else { return }
         InAppMessageWebViewFactory.tearDown(webView: vc.webView, bridge: bridge)
         viewController = nil
         bridge = nil
         currentMessageId = nil
         await messageManager.setActiveMessageId(nil)
-        _ = reason
     }
 
     // MARK: - Host VC discovery
@@ -493,7 +489,7 @@ extension InAppMessagePresenter: InAppMessageViewControllerDelegate {
         // The app dismissed the sheet, or a VC under it. UIKit already took
         // it off screen — just drop the presentation.
         Task { @MainActor in
-            await self.teardown(controller, reason: "removed_by_app")
+            await self.teardown(controller)
         }
     }
 }

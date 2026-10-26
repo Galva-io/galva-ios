@@ -64,7 +64,7 @@ enum PurchaseBridgeCodec {
             return ["outcome": .string("pending")]
         case .cancelled:
             return ["outcome": .string("cancelled")]
-        case .completed(let verified, let transactionId, let originalId,
+        case .completed(let transactionId, let originalId,
                         let productId, let purchaseDate, let expirationDate,
                         let appAccountToken):
             var transaction: [String: AnyJSONValue] = [
@@ -72,7 +72,7 @@ enum PurchaseBridgeCodec {
                 "originalId":          .string(String(originalId)),
                 "productId":           .string(productId),
                 "purchaseDate":        .string(ISO8601DateFormatter.galva.string(from: purchaseDate)),
-                "verified":            .bool(verified),
+                "verified":            .bool(true),
             ]
             if let exp = expirationDate {
                 transaction["expirationDate"] = .string(ISO8601DateFormatter.galva.string(from: exp))

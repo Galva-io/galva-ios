@@ -227,10 +227,10 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             )
 
         case .openManageSubscription:
-            return openURL(from: envelope.payload, key: "url", logTag: "openManageSubscription")
+            return openURL(from: envelope.payload, logTag: "openManageSubscription")
 
         case .openDeepLink:
-            return openURL(from: envelope.payload, key: "url", logTag: "openDeepLink")
+            return openURL(from: envelope.payload, logTag: "openDeepLink")
 
         case .apiFetch:
             return await handleAPIFetch(payload: envelope.payload)

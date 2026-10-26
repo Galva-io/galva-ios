@@ -71,7 +71,7 @@ final class SDKCoreDeviceTokenTests: XCTestCase {
         // the developer never resent it.
         await eventually {
             await Self.pushEndpointMessages(harness).contains {
-                $0.userId == "user_42" && Self.token(of: $0) == "deadbeef"
+                $0.endUserId == "user_42" && Self.token(of: $0) == "deadbeef"
             }
         }
     }
@@ -93,7 +93,7 @@ final class SDKCoreDeviceTokenTests: XCTestCase {
         }
         let lastAnon = await Self.pushEndpointMessages(harness).last
         XCTAssertEqual(Self.token(of: lastAnon), "deadbeef")
-        XCTAssertNil(lastAnon?.userId, "post-logout registration is for the anonymous user")
+        XCTAssertNil(lastAnon?.endUserId, "post-logout registration is for the anonymous user")
     }
 
     // MARK: - Helpers

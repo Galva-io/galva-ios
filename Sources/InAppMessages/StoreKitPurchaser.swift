@@ -26,16 +26,17 @@
 //  would silently drop the discount.
 //
 //  Outputs:
-//      • `Outcome.completed(Transaction)`  — verified + completed
+//      • `Outcome.completed(…)`            — verified + completed
 //      • `Outcome.pending`                 — Ask to Buy / SCA pending
 //      • `Outcome.cancelled`               — user dismissed the sheet or sign-in
-//      • `Outcome.unverified(error)`       — App Store signature failed
 //      Or, thrown as `Failure`:
 //      • `productUnavailable`              — App Store doesn't sell it
 //      • `purchaseNotAllowed`              — device-level restriction
 //      • `ineligibleForOffer`              — user can't redeem this offer
 //      • `invalidOffer(detail)`            — bad offer-signing inputs
+//      • `verificationFailed(detail)`      — App Store signature failed
 //      • `notAvailableInStorefront`        — wrong region
+//      • `invalidPayload(detail)`          — malformed purchase request
 //      • `networkError(underlying)`        — App Store unreachable
 //      • `underlying(error)`               — anything else
 //
@@ -80,7 +81,7 @@ struct StoreKitPurchaser {
     /// "success" side of the bridge response so the bundle's
     /// purchase-result switch is uniform.
     enum Outcome: Sendable {
-        case completed(verified: Bool, transactionId: UInt64, originalId: UInt64,
+        case completed(transactionId: UInt64, originalId: UInt64,
                        productId: String, purchaseDate: Date, expirationDate: Date?,
                        appAccountToken: UUID?)
         case pending
@@ -328,7 +329,6 @@ extension StoreKitPurchaser.Outcome {
     /// and by results a `GalvaPurchaseController` reports.
     static func verified(_ transaction: Transaction) -> Self {
         .completed(
-            verified: true,
             transactionId: transaction.id,
             originalId: transaction.originalID,
             productId: transaction.productID,

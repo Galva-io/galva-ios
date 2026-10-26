@@ -128,11 +128,4 @@ final class SessionTracker {
 
         await trackHandler(contextProvider.sessionStartEvent())
     }
-
-    /// Test helper — drops the persisted timestamp so the next
-    /// `handleForeground` always takes the cold-start path.
-    func reset() {
-        lastSessionStart = nil
-        defaults.removeObject(forKey: Self.lastSessionStartKey)
-    }
 }

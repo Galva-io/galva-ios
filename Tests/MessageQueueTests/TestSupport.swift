@@ -141,7 +141,7 @@ extension Message {
             endUserId: userId,
             timestamp: Date(),
             context: nil,
-            body: .track(event: event, properties: properties, sourceType: nil, sourceId: nil)
+            body: .track(event: event, properties: properties)
         )
     }
 
@@ -166,6 +166,12 @@ extension Message {
         (0 ..< count).map { idx in
             makeTrack(event: "\(prefix)-\(String(format: "%03d", idx))")
         }
+    }
+
+    /// The event name of a `.track` body, or `nil` — the assertion key.
+    var event: String? {
+        if case .track(let event, _) = body { return event }
+        return nil
     }
 }
 

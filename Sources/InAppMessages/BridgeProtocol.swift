@@ -89,8 +89,6 @@ struct BridgeError: Error, Sendable, Hashable, Codable {
         /// Bundle passed a malformed payload (missing productId, malformed
         /// promotional offer fields, etc.).
         case invalidPayload
-        /// SDK exceeded the bridge call timeout.
-        case timeout
         /// Generic StoreKit / billing failure — used as a catch-all when
         /// no more specific code applies. Inspect `message` for detail.
         case purchaseFailed
@@ -137,7 +135,7 @@ enum BridgeMethod: String, Sendable, Hashable, Codable {
     case ready
     /// Close the overlay. Payload may carry `{ "reason": "..." }`.
     case dismiss
-    /// Return identity / locale / safe-area / sessionToken context.
+    /// Return identity / locale / safe-area / storefront context.
     case getPageContext
     /// Return the cached resolved-communication payload.
     case getMessageData
@@ -163,7 +161,6 @@ enum BridgeMethod: String, Sendable, Hashable, Codable {
 /// coordinating a `bridgeProtocolVersion` bump.
 struct BridgePageContext: Sendable, Hashable, Codable {
     let messageId: String
-    let sessionToken: String?
     let bridgeProtocol: String
     let sdkVersion: String
     let platform: String
@@ -171,7 +168,6 @@ struct BridgePageContext: Sendable, Hashable, Codable {
     let appBuild: String?
     let pushAuthorization: PushAuthorization?
     let locale: String
-    let appColorScheme: AppColorScheme?
     let safeArea: SafeArea
     /// Apple App Store storefront country code (ISO 3166-1 alpha-3, e.g.
     /// `"USA"`, `"GBR"`, `"JPN"`). Read from `StoreKit.Storefront.current`.
@@ -193,10 +189,6 @@ struct BridgePageContext: Sendable, Hashable, Codable {
 
     enum PushAuthorization: String, Sendable, Hashable, Codable {
         case notDetermined, denied, authorized, provisional, ephemeral
-    }
-
-    enum AppColorScheme: String, Sendable, Hashable, Codable {
-        case light, dark
     }
 
     struct SafeArea: Sendable, Hashable, Codable {

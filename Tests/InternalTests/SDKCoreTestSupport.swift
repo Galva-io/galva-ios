@@ -198,23 +198,9 @@ extension Message {
     }
 
     /// Convenience for tests — extract the endpoint from a
-    /// create/delete-communication-endpoint message.
+    /// create-communication-endpoint message.
     var communicationEndpoint: CommunicationEndpoint? {
-        switch body {
-        case .createCommunicationEndpoint(let ep),
-             .deleteCommunicationEndpoint(let ep):
-            return ep
-        default:
-            return nil
-        }
-    }
-
-    /// Convenience for tests — extract `(channelType, disabled, categories)`
-    /// from a set-communication-preference message.
-    var preferenceTuple: (CommunicationEndpoint.ChannelType, Bool?, [String: Bool]?)? {
-        if case .setCommunicationPreference(let c, let d, let cats) = body {
-            return (c, d, cats)
-        }
+        if case .createCommunicationEndpoint(let ep) = body { return ep }
         return nil
     }
 }

@@ -8,7 +8,6 @@
 //  Used by:
 //    • `traits`     — Message.identify
 //    • `properties` — Message.track
-//    • `categories` — Message.setCommunicationPreference (Bool-only)
 //
 //  Supports the full JSON value space: null, bool, number, string, array,
 //  object. Round-trips losslessly through JSONEncoder/Decoder.
@@ -20,8 +19,8 @@
 
 import Foundation
 
-/// INTERNAL type-erased JSON value used for the wire `traits`, `properties`,
-/// and `categories` maps. Integrators interact with `GalvaCompatibleValue`
+/// INTERNAL type-erased JSON value used for the wire `traits` and
+/// `properties` maps. Integrators interact with `GalvaCompatibleValue`
 /// instead — `AnyJSONValue` is constructed by the SDK on the way to the
 /// uploader.
 enum AnyJSONValue: Sendable, Hashable {

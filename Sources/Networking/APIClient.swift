@@ -10,7 +10,7 @@
 //
 //  Separate from `Uploader` because:
 //      • The batch uploader is a single-purpose actor optimized for the hot
-//        identify/track/alias path. Pulling RPC calls into it would muddy
+//        identify/track path. Pulling RPC calls into it would muddy
 //        the contract and complicate retry semantics.
 //      • RPC calls have caller-visible Codable responses; the batch endpoint
 //        only cares about the HTTP outcome.
@@ -70,21 +70,19 @@ actor APIClient {
     /// Issue a JSON-bodied POST to `path`, decoding the response as `Response`.
     func post<Body: Encodable, Response: Decodable>(
         path: String,
-        body: Body,
-        responseType: Response.Type = Response.self
+        body: Body
     ) async throws -> Response {
         let url = baseURL.appendingPathComponent(path)
         var req = makeRequest(url: url, method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try encoder.encode(body)
-        return try await perform(req, responseType: Response.self)
+        return try await perform(req)
     }
 
     /// Issue a GET with optional query items, decoding the response as `Response`.
     func get<Response: Decodable>(
         path: String,
-        query: [URLQueryItem] = [],
-        responseType: Response.Type = Response.self
+        query: [URLQueryItem] = []
     ) async throws -> Response {
         var comps = URLComponents(
             url: baseURL.appendingPathComponent(path),
@@ -93,7 +91,7 @@ actor APIClient {
         if !query.isEmpty { comps?.queryItems = query }
         guard let url = comps?.url else { throw APIError.malformedURL(path) }
         let req = makeRequest(url: url, method: "GET")
-        return try await perform(req, responseType: Response.self)
+        return try await perform(req)
     }
 
     /// Download the raw bytes at `url` (no auth headers, no base URL). Used
@@ -107,7 +105,7 @@ actor APIClient {
                 throw APIError.invalidResponse
             }
             guard (200..<300).contains(http.statusCode) else {
-                throw APIError.http(status: http.statusCode, body: data)
+                throw APIError.http(status: http.statusCode)
             }
             return data
         } catch let error as APIError {
@@ -232,10 +230,7 @@ actor APIClient {
         return req
     }
 
-    private func perform<Response: Decodable>(
-        _ req: URLRequest,
-        responseType: Response.Type
-    ) async throws -> Response {
+    private func perform<Response: Decodable>(_ req: URLRequest) async throws -> Response {
         logger.debug(.uploader, "rpc \(req.httpMethod ?? "?")", metadata: [
             "url": req.url?.absoluteString ?? "<nil>",
         ])
@@ -249,7 +244,7 @@ actor APIClient {
                     "status": String(http.statusCode),
                     "url": req.url?.absoluteString ?? "<nil>",
                 ])
-                throw APIError.http(status: http.statusCode, body: data)
+                throw APIError.http(status: http.statusCode)
             }
             // Symmetric "request OK" log so the request/response pair is
             // visible end-to-end at .debug — the start log alone leaves a
@@ -276,7 +271,7 @@ actor APIClient {
 enum APIError: Error, @unchecked Sendable {
     case malformedURL(String)
     case invalidResponse
-    case http(status: Int, body: Data)
+    case http(status: Int)
     case transport(Error)
     case decoding(Error)
 }
@@ -291,7 +286,7 @@ extension APIError {
             return false
         case .invalidResponse, .transport:
             return true
-        case .http(let status, _):
+        case .http(let status):
             // 408/429/5xx → transient. 4xx → bad request / auth → permanent.
             return status == 408 || status == 429 || (500..<600).contains(status)
         }

@@ -99,15 +99,6 @@ final class InAppMessageStream {
         }
     }
 
-    /// Drop every subscriber. Called when the SDK shuts down or logs out
-    /// — pending iterations resolve cleanly with no further yield.
-    func terminateAll() {
-        for sub in subscribers {
-            sub.continuation.finish()
-        }
-        subscribers.removeAll()
-    }
-
     // MARK: - Subscriber bookkeeping
 
     private func register(_ subscriber: Subscriber) {

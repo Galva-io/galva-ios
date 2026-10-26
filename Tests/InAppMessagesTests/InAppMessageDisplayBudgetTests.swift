@@ -130,7 +130,10 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
             (URLProtocolStub.httpResponse(url: request.url!, status: 200),
              BudgetFixtures.list(ids: [messageId]))
         }
-        await harness.manager.releaseDisplaySlot(messageId: "deep-link")
+        await harness.manager.presentationFailed(
+            messageId: "deep-link",
+            error: InAppMessageError.noPresentingViewController
+        )
         let nextStint = await harness.manager.poll()
         XCTAssertEqual(nextStint.map(\.id), [messageId.uuidString.lowercased()],
                        "a dropped message must surface on the next return event")
@@ -161,7 +164,7 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
                        "re-showing the on-screen message must not regress .used to .pending")
     }
 
-    func test_releaseDisplaySlot_restoresBudget_afterFailedShow() async throws {
+    func test_presentationFailed_restoresBudget_afterFailedShow() async throws {
         URLProtocolStub.handler = { request in
             (URLProtocolStub.httpResponse(url: request.url!, status: 200),
              BudgetFixtures.list(ids: [UUID()]))
@@ -169,7 +172,11 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
         let harness = await BudgetHarness.make()
 
         await harness.manager.claimDisplaySlot(messageId: "deep-link")
-        await harness.manager.releaseDisplaySlot(messageId: "deep-link") // resolve failed
+        // The deep link's resolve failed.
+        await harness.manager.presentationFailed(
+            messageId: "deep-link",
+            error: InAppMessageError.messageNotFound
+        )
         let emitted = await harness.manager.poll()
         XCTAssertEqual(emitted.count, 1, "a failed show must not burn the stint's budget")
     }
@@ -221,7 +228,7 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
             InAppMessageError.noPresentingViewController,
             InAppMessageError.bundleUnavailable,
             APIError.transport(URLError(.notConnectedToInternet)),
-            APIError.http(status: 503, body: Data()),
+            APIError.http(status: 503),
         ]
         for error in mightWorkLater {
             let again = await isDeliveredAgain(afterFailingWith: error)
@@ -231,7 +238,7 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
         let final: [any Error] = [
             InAppMessageError.messageNotFound,
             InAppMessageError.invalidMessageId,
-            APIError.http(status: 404, body: Data()),
+            APIError.http(status: 404),
             APIError.decoding(URLError(.cannotDecodeContentData)),
         ]
         for error in final {

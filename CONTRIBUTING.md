@@ -145,7 +145,7 @@ Short version:
 
 Public surface in [`Sources/Logger/Logger.swift`](Sources/Logger/Logger.swift); apps implement only `log(_:)`. All internal call sites use the typed convenience methods (`logger.warning(.uploader, "…")`), `@_spi(GalvaIntegration)` so integration packages can use them too — `lint.sh` enforces no raw `print`.
 
-Default sink is `OSLogLogger`, writing to subsystem `co.galva.sdk` (visible in Console.app). Custom loggers are wrapped in `LevelFilterLogger` so the `logLevel` set at configure time always applies, even after `Galva.setLogger(_:)`. Integrations log through `CurrentSDKLogger`, which always forwards to the SDK's current logger.
+Default sink is `OSLogLogger`, writing to subsystem `co.galva.sdk` (visible in Console.app). Custom loggers are wrapped in `LevelFilterLogger` so the `logLevel` set at configure time always applies, even after `Galva.setLogger(_:)`. Integrations get the same live logger as the SDK's own subsystems, so their output follows later level and logger changes too.
 
 The convenience methods short-circuit on filtered levels (an `isEnabled(_:)` check runs before the autoclosure message is evaluated) — a `logger.debug(.queue, "expensive \(work)")` in a hot loop costs ~zero when filtered out. Locked in by `FilteredLogPerformanceTests`.
 

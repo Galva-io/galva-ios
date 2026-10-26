@@ -77,10 +77,10 @@ final class InAppMessageManager {
     /// `getMessageData()` call resolves immediately from memory.
     private(set) var resolvedPayloads: [String: ResolvedCommunication.Valid] = [:]
 
-    /// The currently-displayed message id, if any. Used by `requestPurchase`
-    /// in the bridge to enforce "offers can only be claimed in the context
-    /// of a rendered message" (see docs).
-    var activeMessageId: String?
+    /// The currently-displayed message id, if any. The display-slot logic
+    /// reads it: a repeated claim for this message is a no-op, and a spent
+    /// slot stays spent while it's on screen.
+    private(set) var activeMessageId: String?
 
     // MARK: - Display budget (one message per foreground stint)
     //
@@ -123,7 +123,7 @@ final class InAppMessageManager {
     /// Roll back a claim whose presentation failed (resolve rejected, bundle
     /// unavailable, no host) — nothing was shown, so the stint's budget is
     /// restored and the next poll may fetch again.
-    func releaseDisplaySlot(messageId: String) {
+    private func releaseDisplaySlot(messageId: String) {
         switch displaySlot {
         case .pending(let id) where id == messageId:
             displaySlot = .available
@@ -203,7 +203,8 @@ final class InAppMessageManager {
     /// Hit GET /identities/communications, pick the FIRST unseen in-app
     /// message (server returns highest-priority first), publish it, and warm
     /// the bundle for its webview version. Called by the lifecycle observer on
-    /// every foreground (a "return event") and by `checkForMessages()`.
+    /// every foreground (a "return event") and by the public
+    /// `InAppMessages.checkForMessages()`.
     ///
     /// Display budget: at most one message per stint. The fetch is skipped
     /// entirely while a deep-link presentation is pending/on screen or a
@@ -278,14 +279,6 @@ final class InAppMessageManager {
         }
     }
 
-    /// Manually trigger a poll. Surfaces results synchronously to the
-    /// caller while still publishing to the broadcast stream. Used by the
-    /// public `InAppMessages.checkForMessages()` API.
-    @discardableResult
-    func checkForMessages() async -> [InAppMessages.Message] {
-        await poll()
-    }
-
     private func dispatch(items: [CommunicationItem]) async -> [InAppMessages.Message] {
         // Deliver exactly ONE message per stint — the first unseen in-app item
         // in server order (the backend returns highest-priority first), unless
@@ -338,7 +331,7 @@ final class InAppMessageManager {
     // MARK: - Resolve
 
     /// Resolve a single message via POST /identities/communications/{id}/resolve.
-    /// Returns a `Resolved` value with the payload + the webview version
+    /// Caches the payload for `payload(for:)` and returns the webview version
     /// the SDK should load (server-pinned, with the latest known version
     /// from /sdk/initialize as a fallback), or `nil` when the server says
     /// `valid: false`.
@@ -346,7 +339,7 @@ final class InAppMessageManager {
     /// Called by the show(message:in:) flow before opening the WebView so
     /// that the bridge's `getMessageData()` request can be served from
     /// memory the moment the bundle finishes parsing.
-    func resolve(messageId: String) async throws -> Resolved? {
+    func resolve(messageId: String) async throws -> String? {
         guard let messageUUID = UUID(uuidString: messageId) else {
             throw InAppMessageError.invalidMessageId
         }
@@ -383,7 +376,7 @@ final class InAppMessageManager {
                 "messageId": messageId,
                 "version": chosenVersion,
             ])
-            return Resolved(payload: valid, webviewVersion: chosenVersion)
+            return chosenVersion
         case .invalid:
             // Drop any stale cached payload — server has revoked.
             resolvedPayloads[messageId] = nil
@@ -394,20 +387,10 @@ final class InAppMessageManager {
         }
     }
 
-    /// Outcome of `resolve` — the resolved payload plus the chosen
-    /// `webviewVersion` (server pin > /sdk/initialize fallback).
-    struct Resolved: Sendable, Hashable {
-        let payload: ResolvedCommunication.Valid
-        let webviewVersion: String
-    }
-
     // MARK: - Active message tracking
 
     /// Set the active message id. Called by the presenter when a WebView
-    /// becomes visible, and reset to `nil` on dismiss. The bridge consults
-    /// this on every call to enforce "you can only request a purchase / read
-    /// page context / read message data while an in-app message is on
-    /// screen."
+    /// becomes visible, and reset to `nil` on dismiss.
     func setActiveMessageId(_ id: String?) {
         activeMessageId = id
         // A presentation going live consumes the stint's display budget —
@@ -431,10 +414,6 @@ final class InAppMessageManager {
     func hasPresented(messageId: String) -> Bool {
         presentedIds.contains(messageId)
     }
-
-    /// Accessor for the bridge layer (MainActor). Returns the current
-    /// active id under a single actor hop.
-    func currentActiveMessageId() -> String? { activeMessageId }
 
     /// Accessor for the bridge layer (MainActor). Returns the resolved
     /// payload for the given id, if cached.

@@ -28,7 +28,6 @@ protocol DurableProxyRequestStore: Actor {
     func count() async throws -> Int
     @discardableResult
     func dropOldest(_ count: Int) async throws -> Int
-    func clear() async throws
 }
 
 // MARK: - In-memory (fallback + tests)
@@ -63,8 +62,6 @@ actor InMemoryProxyRequestStore: DurableProxyRequestStore {
         rows.removeAll { victims.contains($0.id) }
         return victims.count
     }
-
-    func clear() async throws { rows.removeAll() }
 }
 
 // MARK: - SQLite (primary)
@@ -236,11 +233,5 @@ actor SQLiteProxyRequestStore: DurableProxyRequestStore {
             throw MessageStorageError.storageError("Failed to execute proxy dropOldest")
         }
         return Int(sqlite3_changes(db))
-    }
-
-    func clear() async throws {
-        if sqlite3_exec(db, "DELETE FROM proxy_requests;", nil, nil, nil) != SQLITE_OK {
-            throw MessageStorageError.storageError("Failed to clear proxy requests")
-        }
     }
 }

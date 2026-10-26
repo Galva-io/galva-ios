@@ -4,10 +4,9 @@
 //
 //  Verifies the opt-out kill switch:
 //
-//      • `setOptedOut(true)` causes subsequent `track`, `identify`,
-//        `createEndpoint`, `deleteEndpoint`, `setPreference` calls to
-//        become silent no-ops (no messages enqueued, no consumer
-//        invocation).
+//      • `setOptedOut(true)` causes subsequent `track`, `identify` and
+//        `createEndpoint` calls to become silent no-ops (no messages
+//        enqueued, no consumer invocation).
 //      • The on-disk event queue is purged on the false → true
 //        transition so pre-existing events don't leak.
 //      • `isOptedOut` returns synchronously from the lock-protected
@@ -113,26 +112,12 @@ final class SDKCoreOptOutTests: XCTestCase {
 
         let baseline = await harness.consumer.allMessages.count
         await Self.setOptedOut(true)
-        await harness.core.createEndpoint(.email("user@example.com"))
+        await harness.core.createEndpoint(.pushNotification(platform: .apns, token: "tok"))
         await eventually(timeout: 0.5) {
             await harness.consumer.allMessages.count == baseline
         }
         let messages = await harness.consumer.allMessages
         XCTAssertFalse(messages.contains(where: { $0.communicationEndpoint != nil }))
-    }
-
-    func test_setPreference_isNoOp_whenOptedOut() async {
-        let harness = await SDKHarness.makeConfigured()
-        defer { harness.cleanup() }
-
-        let baseline = await harness.consumer.allMessages.count
-        await Self.setOptedOut(true)
-        await harness.core.setPreference(channel: .email, disabled: true, categories: nil)
-        await eventually(timeout: 0.5) {
-            await harness.consumer.allMessages.count == baseline
-        }
-        let messages = await harness.consumer.allMessages
-        XCTAssertFalse(messages.contains(where: { $0.preferenceTuple != nil }))
     }
 
     // MARK: - Re-enable round-trip

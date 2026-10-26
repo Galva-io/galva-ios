@@ -98,7 +98,7 @@ final class InAppMessagePresenterTests: XCTestCase {
         XCTAssertTrue(finished, "show must not wait forever for UIKit's present completion")
         XCTAssertEqual(call.error as? InAppMessageError, .noPresentingViewController, "\(String(describing: call.error))")
         XCTAssertNil(presenter.viewController)
-        let active = await harness.core.inAppMessageManager?.currentActiveMessageId()
+        let active = await harness.core.inAppMessageManager?.activeMessageId
         XCTAssertNil(active)
         let shown = await harness.core.inAppMessageManager?.hasPresented(messageId: message.id)
         XCTAssertEqual(shown, false, "UIKit never presented it — the message stays deliverable")

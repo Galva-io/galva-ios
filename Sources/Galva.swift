@@ -943,7 +943,7 @@ public enum InAppMessages {
     /// (e.g. after the user completes an in-app action that should
     /// retrigger a workflow attempt).
     public static func checkForMessages() {
-        SDKCore.shared.submit { await $0.inAppMessageManager?.checkForMessages() }
+        SDKCore.shared.submit { await $0.inAppMessageManager?.poll() }
     }
 
     /// Errors `message.show(in:)` throws when a message can't be shown.

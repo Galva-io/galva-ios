@@ -216,7 +216,7 @@ final class DurableRequestQueue {
                 // Network down / DNS / TLS — the "network lost" case the
                 // queue exists for. Keep + retry.
                 return .retryable
-            case .http(let status, _):
+            case .http(let status):
                 return Self.isRetryable(status: status) ? .retryable : .permanent
             }
         } catch {

@@ -55,13 +55,6 @@ final class InitializationCacheTests: XCTestCase {
         XCTAssertEqual(cache.load(), updated)
     }
 
-    func test_clear_removesPersistedFile() throws {
-        try cache.save(sampleInit())
-        try cache.clear()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: tempFile.path))
-        XCTAssertNil(cache.load())
-    }
-
     // MARK: - Fixtures
 
     private func sampleInit() -> InitializationData {

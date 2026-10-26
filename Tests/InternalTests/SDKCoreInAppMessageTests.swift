@@ -112,7 +112,7 @@ final class SDKCoreInAppMessageTests: XCTestCase {
         // identify is still uploading.
         let identify = Task { await harness.core.identify(userId: "user_B", appAccountToken: nil, traits: nil) }
         await upload.reached.wait()
-        let check = Task { await manager.checkForMessages() }
+        let check = Task { await manager.poll() }
         await Self.waitForRequest()
         await upload.release.open()
         await identify.value
@@ -139,7 +139,7 @@ final class SDKCoreInAppMessageTests: XCTestCase {
         // started), so user_B's message is held for it.
         let identify = Task { await harness.core.identify(userId: "user_B", appAccountToken: nil, traits: nil) }
         await upload.reached.wait()
-        let delivered = await manager.checkForMessages()
+        let delivered = await manager.poll()
         XCTAssertEqual(delivered.map(\.id), [messageId.uuidString.lowercased()])
         await upload.release.open()
         await identify.value

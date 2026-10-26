@@ -131,8 +131,8 @@ actor SQLiteMessageStorage: MessageStorage {
                 // Undecodable payload. Likely from an older or future
                 // SDK build with an incompatible JSON shape, or a row
                 // tampered with on disk. Move it out of the active queue
-                // so we don't keep tripping on it; surface to logs +
-                // diagnostics via `quarantineCount`.
+                // so we don't keep tripping on it; `StorageMigrator.quarantine`
+                // logs it.
                 quarantined.append((id: id, payload: data, reason: "decode failed: \(error)"))
             }
         }
@@ -154,6 +154,7 @@ actor SQLiteMessageStorage: MessageStorage {
         return out
     }
 
+    /// Rows in the quarantine table. Test seam — production never reads it.
     func quarantineCount() async throws -> Int {
         try StorageMigrator.quarantineCount(db)
     }

@@ -57,8 +57,8 @@ final class InAppMessageViewController: UIViewController {
     /// File URL of the HTML bundle, loaded once the sheet appears.
     let bundleURL: URL
 
-    /// Server-side message id this VC is presenting. Bridge calls use it
-    /// to validate `activeMessageId`.
+    /// Server-side message id this VC is presenting. Tags its log entries;
+    /// the bridge carries its own copy to scope every call.
     let messageId: String
 
     /// Logger inherited from SDKCore.

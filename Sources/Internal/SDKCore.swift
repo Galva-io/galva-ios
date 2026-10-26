@@ -58,24 +58,13 @@ final class SDKCore {
     // extension.
 
     var configured = false
-    private var apiKey: String?
-    /// Selected backend (production / development / custom). Drives every
-    /// URL the SDK touches — base API, webview bundle CDN.
-    private(set) var environment: Galva.Environment = .production
-    private var autoTrack: Galva.AutoTrackCategory = []
     private var logLevel: Galva.LogLevel = .warning
     /// How in-app messages reach the screen — `configure(…, inAppMessages:)`.
     private var inAppMessagePresentation: InAppMessages.Presentation = .automatic
 
     var identity: IdentityStore?
     var queue: MessageQueue?
-    private var uploader: Uploader?
     var contextProvider: ContextProvider?
-
-    /// API client used for non-batch RPC calls (initialize, list/resolve
-    /// communications, bundle download). Independent of the batch
-    /// `Uploader` so the two surfaces evolve separately.
-    var apiClient: APIClient?
 
     /// SDK initialization: caches the /sdk/initialize response and exposes
     /// the resolved data (webview versions, batch config, products) to the
@@ -146,10 +135,11 @@ final class SDKCore {
     /// `LevelFilterLogger` whenever the level OR the sink changes.
     private var sinkLogger: any GalvaLogger = OSLogLogger()
 
-    /// Logger used by every SDK call site and handed to every subsystem.
-    /// Forwards to a `LevelFilterLogger` wrapping `sinkLogger`, swapped in by
-    /// `rebuildLogger()`, so subsystems built at configure follow later level
-    /// and sink changes. `nonisolated` so synchronous entry points can log.
+    /// Logger used by every SDK call site and handed to every subsystem and
+    /// integration. Forwards to a `LevelFilterLogger` wrapping `sinkLogger`,
+    /// swapped in by `rebuildLogger()`, so loggers handed out at configure
+    /// follow later level and sink changes. `nonisolated` so synchronous
+    /// entry points can log.
     nonisolated let logger = LiveLogger(LevelFilterLogger(
         minLevel: .warning,
         wrapped: OSLogLogger()
@@ -173,28 +163,6 @@ final class SDKCore {
     nonisolated private static let _appAccountTokenLock = NSLock()
     nonisolated(unsafe) private static var _appAccountToken: UUID?
 
-    /// Thread-safe mirror of `logger.target`, refreshed by `rebuildLogger()`. Read
-    /// by `CurrentSDKLogger`, which integrations log through, so their output
-    /// follows the configured level and any logger installed later with
-    /// `Galva.setLogger(_:)` — unlike a snapshot taken at install time.
-    nonisolated private static let _currentLoggerLock = NSLock()
-    nonisolated(unsafe) private static var _currentLogger: any GalvaLogger = LevelFilterLogger(
-        minLevel: .warning,
-        wrapped: OSLogLogger()
-    )
-
-    nonisolated static var currentLogger: any GalvaLogger {
-        _currentLoggerLock.lock()
-        defer { _currentLoggerLock.unlock() }
-        return _currentLogger
-    }
-
-    nonisolated private static func setCurrentLogger(_ value: any GalvaLogger) {
-        _currentLoggerLock.lock()
-        _currentLogger = value
-        _currentLoggerLock.unlock()
-    }
-
     // MARK: Opt-out
     //
     // Persisted "do not track" flag with a lock-protected mirror so the
@@ -204,8 +172,7 @@ final class SDKCore {
     // work included.
     //
     // When opted out the SDK:
-    //   • drops every `track` / `identify` / `createEndpoint` /
-    //     `deleteEndpoint` / `setPreference` call silently
+    //   • drops every `track` / `identify` / `createEndpoint` call silently
     //   • skips the auto-tracked `session_start` emission
     //   • skips `Transaction.all` sweeps
     //   • purges the persisted event queue on the false → true transition,
@@ -308,7 +275,6 @@ final class SDKCore {
     }
 
     var currentEndUserId: String? { identity?.endUserId }
-    var currentAnonymousId: String? { identity?.anonymousId }
 
     // MARK: Startup gate
     //
@@ -389,22 +355,19 @@ final class SDKCore {
 
     func configure(
         apiKey: String,
-        environment: Galva.Environment = .production,
+        environment: Galva.Environment,
         autoTrack: Galva.AutoTrackCategory,
         logLevel: Galva.LogLevel,
-        userLogger: (any GalvaLogger)? = nil,
-        inAppMessages: InAppMessages.Presentation = .automatic,
-        integrations: [Galva.Integration] = []
+        userLogger: (any GalvaLogger)?,
+        inAppMessages: InAppMessages.Presentation,
+        integrations: [Galva.Integration]
     ) async {
         guard beginConfiguring() else {
             logger.warning(.configuration, "configure called more than once — ignoring")
             return
         }
 
-        self.apiKey = apiKey
-        self.environment = environment
         self.inAppMessagePresentation = inAppMessages
-        self.autoTrack = autoTrack
         self.logLevel = logLevel
         if let userLogger {
             self.sinkLogger = userLogger
@@ -423,7 +386,8 @@ final class SDKCore {
         let snapshot = await MainActor.run { DeviceSnapshot.capture() }
         // Seed the context with any device push token persisted from a previous
         // launch so `context.device.token` is populated from the first message.
-        self.contextProvider = ContextProvider(deviceToken: identity.deviceToken, snapshot: snapshot)
+        let contextProvider = ContextProvider(deviceToken: identity.deviceToken, snapshot: snapshot)
+        self.contextProvider = contextProvider
         setCachedEndUserId(identity.endUserId)
         // Seed the resolved purchase token so `AppUser.appAccountToken` returns
         // the generated token (anonymousId-as-UUID) even before any identify().
@@ -435,7 +399,6 @@ final class SDKCore {
             session: .shared,
             logger: logger
         )
-        self.uploader = uploader
 
         let consumer = UploadConsumer(uploader: uploader, logger: logger)
         let queue = MessageQueue(
@@ -461,7 +424,7 @@ final class SDKCore {
         if autoTrack.contains(.lifecycle) {
             self.sessionTracker = SessionTracker(
                 logger: logger,
-                contextProvider: self.contextProvider ?? ContextProvider(),
+                contextProvider: contextProvider,
                 isOptedOut: { [weak self] in self?.isOptedOut ?? false },
                 trackHandler: { [weak self] event in
                     await self?.track(event)
@@ -561,7 +524,7 @@ final class SDKCore {
     /// integration can't hold up the SDK.
     func installIntegrations(_ integrations: [Galva.Integration]) {
         guard !integrations.isEmpty else { return }
-        let context = Galva.IntegrationContext(logger: CurrentSDKLogger())
+        let context = Galva.IntegrationContext(logger: logger)
         for integration in integrations {
             logger.info(.integration, "installing integration", metadata: [
                 "name": integration.name,
@@ -589,7 +552,6 @@ final class SDKCore {
             session: .shared,
             logger: logger
         )
-        self.apiClient = apiClient
 
         // Initialization cache — non-fatal if the disk path can't be made.
         let initCache: InitializationCache?
@@ -735,9 +697,7 @@ final class SDKCore {
     /// Rebuild `logger` to wrap the current `sinkLogger` at the current
     /// `logLevel`. Called whenever either changes.
     private func rebuildLogger() {
-        let filtered = LevelFilterLogger(minLevel: logLevel, wrapped: sinkLogger)
-        logger.target = filtered
-        Self.setCurrentLogger(filtered)
+        logger.target = LevelFilterLogger(minLevel: logLevel, wrapped: sinkLogger)
     }
 
     /// Handle a fresh APNs device token (hex). Persists it device-scoped,
@@ -1081,7 +1041,7 @@ final class SDKCore {
             anonymousId: identity.anonymousId,
             endUserId: identity.endUserId,
             context: contextProvider.currentContext(),
-            body: .track(event: event, properties: properties, sourceType: nil, sourceId: nil)
+            body: .track(event: event, properties: properties)
         )
         await queue.emit(msg)
     }
@@ -1099,12 +1059,6 @@ final class SDKCore {
             logger.warning(.identity, "createEndpoint called before configure() — dropping")
             return
         }
-        // Reject an invalid email at ingestion so it never reaches the server
-        // (mirrors the backend's validation). Don't log the address itself — PII.
-        if case .email(let address) = endpoint, !EmailValidator.isValid(address) {
-            logger.warning(.identity, "createEndpoint dropped — invalid email address")
-            return
-        }
         logger.debug(.identity, "createEndpoint", metadata: [
             "channel": endpoint.channelType.rawValue,
         ])
@@ -1113,34 +1067,6 @@ final class SDKCore {
             endUserId: identity.endUserId,
             context: contextProvider.currentContext(),
             body: .createCommunicationEndpoint(endpoint)
-        )
-        await queue.emit(msg)
-    }
-
-    func deleteEndpoint(_ endpoint: CommunicationEndpoint) async {
-        guard !isOptedOut else {
-            logger.debug(.identity, "deleteEndpoint dropped (opted out)", metadata: [
-                "channel": endpoint.channelType.rawValue,
-            ])
-            return
-        }
-        guard let queue, let identity, let contextProvider else {
-            logger.warning(.identity, "deleteEndpoint called before configure() — dropping")
-            return
-        }
-        // Same validation as create — never send a malformed address upstream.
-        if case .email(let address) = endpoint, !EmailValidator.isValid(address) {
-            logger.warning(.identity, "deleteEndpoint dropped — invalid email address")
-            return
-        }
-        logger.debug(.identity, "deleteEndpoint", metadata: [
-            "channel": endpoint.channelType.rawValue,
-        ])
-        let msg = Message(
-            anonymousId: identity.anonymousId,
-            endUserId: identity.endUserId,
-            context: contextProvider.currentContext(),
-            body: .deleteCommunicationEndpoint(endpoint)
         )
         await queue.emit(msg)
     }
@@ -1284,15 +1210,15 @@ final class SDKCore {
         //    On failure no sheet appears: roll back as `showInAppMessage`
         //    does, so a later poll can deliver the message again if it might
         //    show then.
-        let resolved: InAppMessageManager.Resolved
+        let webviewVersion: String
         let bundleURL: URL
         do {
-            guard let result = try await manager.resolve(messageId: message.id) else {
+            guard let version = try await manager.resolve(messageId: message.id) else {
                 throw InAppMessageError.messageNotFound
             }
-            resolved = result
+            webviewVersion = version
             do {
-                bundleURL = try await bundleCache.bundleURL(for: resolved.webviewVersion)
+                bundleURL = try await bundleCache.bundleURL(for: version)
             } catch {
                 throw InAppMessageError.bundleUnavailable
             }
@@ -1349,7 +1275,7 @@ final class SDKCore {
             // getPageContext() could read `.zero` insets off-screen.
             snapshotLogger.info(.inAppMessages, "SwiftUI sheet preparing", metadata: [
                 "messageId": message.id,
-                "version": resolved.webviewVersion,
+                "version": webviewVersion,
             ])
             return PreparedInAppMessage(webView: webView, bridge: bridge, bundleURL: bundleURL)
         }
@@ -1362,37 +1288,4 @@ final class SDKCore {
         inAppMessageManager?.setActiveMessageId(nil)
     }
     #endif
-
-    func setPreference(
-        channel: CommunicationEndpoint.ChannelType,
-        disabled: Bool?,
-        categories: [String: Bool]?
-    ) async {
-        guard !isOptedOut else {
-            logger.debug(.identity, "setPreference dropped (opted out)", metadata: [
-                "channel": channel.rawValue,
-            ])
-            return
-        }
-        guard let queue, let identity, let contextProvider else {
-            logger.warning(.identity, "setPreference called before configure() — dropping")
-            return
-        }
-        logger.debug(.identity, "setPreference", metadata: [
-            "channel": channel.rawValue,
-            "disabled": disabled.map(String.init(describing:)) ?? "<unset>",
-            "categoryCount": String(categories?.count ?? 0),
-        ])
-        let msg = Message(
-            anonymousId: identity.anonymousId,
-            endUserId: identity.endUserId,
-            context: contextProvider.currentContext(),
-            body: .setCommunicationPreference(
-                channelType: channel,
-                disabled: disabled,
-                categories: categories
-            )
-        )
-        await queue.emit(msg)
-    }
 }

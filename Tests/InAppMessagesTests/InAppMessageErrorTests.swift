@@ -36,8 +36,8 @@ final class InAppMessageErrorTests: XCTestCase {
 
     func test_resolveFailures_mapToRequestFailed() {
         let errors: [any Error] = [
-            APIError.http(status: 500, body: Data()),
-            APIError.http(status: 401, body: Data()),
+            APIError.http(status: 500),
+            APIError.http(status: 401),
             APIError.transport(URLError(.notConnectedToInternet)),
             APIError.invalidResponse,
             APIError.decoding(URLError(.cannotParseResponse)),

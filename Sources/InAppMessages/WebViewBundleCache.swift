@@ -77,21 +77,6 @@ actor WebViewBundleCache {
         Task { try? await download(version: version) }
     }
 
-    /// Tests only — drop every cached bundle.
-    func clear() throws {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: directoryURL.path) {
-            try fm.removeItem(at: directoryURL)
-        }
-        try Self.ensureDirectory(directoryURL)
-        inFlight.removeAll()
-    }
-
-    /// Tests / diagnostics — whether a given version is on disk right now.
-    func isCached(_ version: String) -> Bool {
-        FileManager.default.fileExists(atPath: cachedURL(for: version).path)
-    }
-
     // MARK: - Internals
 
     private func download(version: String) async throws -> URL {

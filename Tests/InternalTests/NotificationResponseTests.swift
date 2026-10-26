@@ -80,7 +80,7 @@ final class NotificationResponseTrackTests: XCTestCase {
             ))
         )
 
-        guard case .track(let event, let props, _, _) = await harness.consumer.allMessages.first?.body else {
+        guard case .track(let event, let props) = await harness.consumer.allMessages.first?.body else {
             return XCTFail("expected a .track message")
         }
         XCTAssertEqual(event, "$gv_notification_tapped")
