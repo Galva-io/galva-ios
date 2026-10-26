@@ -36,8 +36,9 @@
 //
 //  Cadence
 //  ───────
-//  • Sweeps on every foreground (cold start + return from background)
-//    via `AppLifecycleObserver` in SDKCore.
+//  • Sweeps every time the app becomes active (cold start, return from
+//    background, a system overlay closing) via `AppLifecycleObserver` in
+//    SDKCore.
 //  • Plus on demand via `Galva.reconcileTransactions()` — useful right
 //    after the host billing observer acknowledges a transaction inside
 //    the same session (no foreground transition will happen between
@@ -53,11 +54,7 @@
 //
 
 import Foundation
-#if canImport(StoreKit)
 import StoreKit
-#endif
-
-#if canImport(StoreKit)
 
 @GalvaActor
 final class StoreKitTransactionObserver {
@@ -121,9 +118,9 @@ final class StoreKitTransactionObserver {
         let anonymousId = identity.anonymousId
         let endUserId = identity.endUserId
 
-        // Snapshot the existing dedupe set so we can revert it on
-        // network failure — we only consider mappings "reported" after
-        // the server acks them.
+        // Mappings count as "reported" only once the server acks them: the
+        // ids this sweep newly inserts into `reportedIds` are collected in
+        // `fresh` and removed again if the post fails.
         var fresh: [String] = []
         for await result in Transaction.all {
             let transaction: Transaction
@@ -146,7 +143,7 @@ final class StoreKitTransactionObserver {
         }
 
         guard !fresh.isEmpty else {
-            logger.debug(.identity, "transaction sweep: nothing new")
+            logger.debug(.purchases, "transaction sweep: nothing new")
             return
         }
 
@@ -161,7 +158,7 @@ final class StoreKitTransactionObserver {
                 path: SDKConstants.transactionsObservePath,
                 body: request
             )
-            logger.info(.identity, "transactions observed", metadata: [
+            logger.info(.purchases, "transactions observed", metadata: [
                 "count": String(fresh.count),
                 "endUserId": endUserId ?? "<anonymous>",
             ])
@@ -176,15 +173,15 @@ final class StoreKitTransactionObserver {
             let severity: Galva.LogLevel = error.isRetryable ? .info : .warning
             switch severity {
             case .warning:
-                logger.warning(.identity, "transactions observe failed", error: error)
+                logger.warning(.purchases, "transactions observe failed", error: error)
             default:
-                logger.info(.identity, "transactions observe skipped (offline?)", error: error)
+                logger.info(.purchases, "transactions observe skipped (offline?)", error: error)
             }
         } catch {
             for raw in fresh {
                 if let id = UInt64(raw) { reportedIds.remove(id) }
             }
-            logger.warning(.identity, "transactions observe failed (unexpected)", error: error)
+            logger.warning(.purchases, "transactions observe failed (unexpected)", error: error)
         }
     }
 }
@@ -215,5 +212,3 @@ struct EmptyAPIResponse: Decodable, Sendable {
         _ = try? decoder.singleValueContainer().decode(AnyJSONValue.self)
     }
 }
-
-#endif // canImport(StoreKit)

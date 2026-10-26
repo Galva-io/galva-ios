@@ -7,19 +7,20 @@
 //  `present(animated:)` on the host app's topmost view controller.
 //
 //  Why a dedicated VC instead of a free-floating UIWindow overlay:
-//      • UIKit's modal presentation lifecycle (viewWillAppear,
-//        viewDidDisappear, presentationControllerDidDismiss) gives us
-//        clean hooks for setup + teardown.
+//      • UIKit's modal presentation lifecycle (viewDidAppear,
+//        viewDidDisappear) gives us clean hooks for setup + teardown.
 //      • Sheets render with the system's standard chrome (corner
 //        radius, dim-out behind) without us re-implementing any of it.
 //        The grabber is suppressed and swipe-to-dismiss is disabled
 //        (`isModalInPresentation = true`) so the bundle's own CTA /
-//        `galva.dismiss()` is the only path out — the
-//        adaptive-presentation delegate stays wired for WebView
-//        navigation-failure teardown.
+//        `galva.dismiss()` is the only path out. A page that can't load
+//        closes the sheet through `InAppMessageNavigationPolicy`.
 //      • Lives in the host scene's window hierarchy, so accessibility
 //        focus and system gestures (Reachability, Stage Manager) behave
 //        the same as any other app modal.
+//
+//  The WebView's navigation + UI delegate is the shared
+//  `InAppMessageNavigationPolicy` (installed by the factory), not this VC.
 //
 
 import Foundation
@@ -32,13 +33,14 @@ import UIKit
 
 #if canImport(WebKit) && canImport(UIKit)
 
-/// Notified by the VC when the sheet goes away outside the
-/// programmatic `dismiss(reason:)` path — only WebView load failures,
-/// now that swipe-to-dismiss is blocked by `isModalInPresentation`.
-/// The presenter uses it to clean up state on those failure paths.
+/// Notified by the VC when the sheet leaves the screen without the SDK
+/// dismissing it — the app dismissed it, or a view controller under it
+/// (e.g. a SwiftUI sheet whose `isPresented` went false). The presenter
+/// uses it to drop the presentation. The SDK's own dismiss detaches the
+/// delegate first.
 @MainActor
 protocol InAppMessageViewControllerDelegate: AnyObject {
-    func inAppMessageViewControllerDidInteractivelyDismiss(
+    func inAppMessageViewControllerDidDisappear(
         _ controller: InAppMessageViewController
     )
 }
@@ -52,12 +54,11 @@ final class InAppMessageViewController: UIViewController {
     /// dropped before us.
     let webView: WKWebView
 
-    /// File URL of the loaded HTML bundle. Used as the navigation
-    /// allowlist key.
+    /// File URL of the HTML bundle, loaded once the sheet appears.
     let bundleURL: URL
 
-    /// Server-side message id this VC is presenting. Bridge calls use it
-    /// to validate `activeMessageId`.
+    /// Server-side message id this VC is presenting. Tags its log entries;
+    /// the bridge carries its own copy to scope every call.
     let messageId: String
 
     /// Logger inherited from SDKCore.
@@ -73,6 +74,11 @@ final class InAppMessageViewController: UIViewController {
     /// `viewDidAppear` (see below), and this guards against a re-appear
     /// reloading it.
     private var didLoadBundle = false
+
+    /// Set by the presenter when it gives up on this sheet (UIKit didn't
+    /// present it in time) and tears it down. If UIKit shows it anyway, it
+    /// dismisses itself instead of sitting on screen blank.
+    var isDiscarded = false
 
     init(
         webView: WKWebView,
@@ -133,10 +139,12 @@ final class InAppMessageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // Hook the adaptive-presentation delegate here (not in init)
-        // because `presentationController` is only non-nil once the
-        // VC is attached to a presentation.
-        presentationController?.delegate = self
+        guard !isDiscarded else {
+            logger.info(.inAppMessages, "iam VC appeared after it was discarded — dismissing",
+                        metadata: ["messageId": messageId])
+            (presentingViewController ?? self).dismiss(animated: true)
+            return
+        }
 
         // Load the bundle now that the sheet is on screen and laid out — its
         // safe area is final, so the page's first `getPageContext()` reads the
@@ -147,8 +155,29 @@ final class InAppMessageViewController: UIViewController {
             bundleURL,
             allowingReadAccessTo: bundleURL.deletingLastPathComponent()
         )
-        logger.debug(.identity, "iam VC viewDidAppear — bundle loadFileURL",
+        logger.debug(.inAppMessages, "iam VC viewDidAppear — bundle loadFileURL",
                      metadata: ["messageId": messageId])
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // Gone for good — not just covered by something presented over it.
+        guard isLeavingPresentation else { return }
+        logger.info(.inAppMessages, "iam VC removed from screen", metadata: ["messageId": messageId])
+        delegate?.inAppMessageViewControllerDidDisappear(self)
+    }
+
+    /// Whether this sheet is leaving its presentation: being dismissed,
+    /// already detached from its presenter, or going down with a view
+    /// controller under it that's being dismissed.
+    private var isLeavingPresentation: Bool {
+        if isBeingDismissed || presentingViewController == nil { return true }
+        var ancestor = presentingViewController
+        while let vc = ancestor {
+            if vc.isBeingDismissed { return true }
+            ancestor = vc.presentingViewController
+        }
+        return false
     }
 
     // No deinit cleanup. The presenter's `teardown()` removes the
@@ -168,7 +197,7 @@ final class InAppMessageViewController: UIViewController {
         guard !hasRevealed else { return }
         hasRevealed = true
         webView.isHidden = false
-        logger.debug(.identity, "iam VC revealed", metadata: ["messageId": messageId])
+        logger.debug(.inAppMessages, "iam VC revealed", metadata: ["messageId": messageId])
     }
 
     // MARK: - Layout
@@ -182,85 +211,6 @@ final class InAppMessageViewController: UIViewController {
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
-    }
-}
-
-// MARK: - UIAdaptivePresentationControllerDelegate (swipe-to-dismiss)
-
-extension InAppMessageViewController: UIAdaptivePresentationControllerDelegate {
-    func presentationControllerDidDismiss(
-        _ presentationController: UIPresentationController
-    ) {
-        logger.info(.identity, "iam VC interactively dismissed",
-                    metadata: ["messageId": messageId])
-        delegate?.inAppMessageViewControllerDidInteractivelyDismiss(self)
-    }
-}
-
-// MARK: - WKNavigationDelegate (file:// allowlist + load failures)
-
-extension InAppMessageViewController: WKNavigationDelegate {
-
-    func webView(
-        _ webView: WKWebView,
-        decidePolicyFor navigationAction: WKNavigationAction,
-        // `@MainActor` matches the WKNavigationDelegate optional
-        // requirement's closure isolation in iOS 18+ SDKs. Without it
-        // Swift 6 emits a "nearly matches" warning that prevents the
-        // optional-requirement satisfaction from binding cleanly.
-        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
-    ) {
-        guard let target = navigationAction.request.url else {
-            decisionHandler(.cancel)
-            return
-        }
-        // Allow only the file URL we loaded. Anything else (network
-        // navigation, deep link tap inside the bundle) is rerouted
-        // through the explicit `galva.openDeepLink` bridge.
-        if target.scheme == "file", target.path == bundleURL.path {
-            decisionHandler(.allow)
-            return
-        }
-        logger.warning(.identity, "webview navigation blocked", metadata: [
-            "url": target.absoluteString,
-        ])
-        decisionHandler(.cancel)
-    }
-
-    func webView(
-        _ webView: WKWebView,
-        didFail navigation: WKNavigation!,
-        withError error: any Error
-    ) {
-        logger.warning(.identity, "webview navigation failed", error: error)
-        delegate?.inAppMessageViewControllerDidInteractivelyDismiss(self)
-    }
-
-    func webView(
-        _ webView: WKWebView,
-        didFailProvisionalNavigation navigation: WKNavigation!,
-        withError error: any Error
-    ) {
-        logger.warning(.identity, "webview provisional navigation failed", error: error)
-        delegate?.inAppMessageViewControllerDidInteractivelyDismiss(self)
-    }
-}
-
-// MARK: - WKUIDelegate (suppress bundle-initiated JS alerts)
-
-extension InAppMessageViewController: WKUIDelegate {
-    func webView(
-        _ webView: WKWebView,
-        runJavaScriptAlertPanelWithMessage message: String,
-        initiatedByFrame frame: WKFrameInfo,
-        // `@MainActor` to match the WKUIDelegate optional requirement's
-        // closure isolation in iOS 18+ SDKs (same reason as the nav
-        // delegate's decisionHandler above).
-        completionHandler: @escaping @MainActor () -> Void
-    ) {
-        logger.warning(.identity, "bundle attempted JS alert (suppressed)",
-                       metadata: ["message": message])
-        completionHandler()
     }
 }
 

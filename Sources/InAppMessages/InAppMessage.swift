@@ -6,9 +6,11 @@
 //  consume off the `InAppMessages.messages` AsyncStream.
 //
 //  Deliberately small. The full content (copy, layout, components,
-//  theming) lives inside the WebView bundle keyed by `webviewVersion`; the
-//  host app never inspects it. Developers typically read `id` and
-//  `workflowType`, then call `message.show(in: scene)` to render.
+//  theming) lives inside the WebView bundle; the host app never inspects
+//  it. With the default `.automatic` presentation apps don't present
+//  messages themselves; in `.manual` mode they read
+//  `InAppMessages.messages` and call `message.show()` or use
+//  `.inAppMessageSheet(_:)`.
 //
 
 import Foundation
@@ -19,8 +21,8 @@ import UIKit
 public extension InAppMessages {
 
     /// A single pending in-app message addressed to the current identity.
-    /// Receive these through `InAppMessages.messages` and pass them back to
-    /// `InAppMessages.show(_:in:)` to render.
+    /// Receive these through `InAppMessages.messages` and render them with
+    /// `show(in:)` or `.inAppMessageSheet(_:)`.
     struct Message: Sendable, Hashable, Identifiable {
 
         /// Server-generated communication id. Stable for the lifetime of
@@ -38,7 +40,10 @@ public extension InAppMessages {
         /// burst of foreground polls.
         public let createdAt: Date
 
-
+        /// Build a message by hand — for unit tests. Galva builds real
+        /// messages itself; one built here was never issued by Galva, so
+        /// `show(in:)` can't present it.
+        @_spi(Testing)
         public init(
             id: String,
             workflowType: WorkflowType?,
@@ -89,6 +94,22 @@ public extension InAppMessages {
 
         public var description: String { rawValue }
     }
+
+    /// How in-app messages reach the screen. Pass it to
+    /// `Galva.configure(apiKey:…, inAppMessages:)`.
+    enum Presentation: Sendable, Hashable {
+
+        /// Galva presents each message itself, as a sheet on your app's
+        /// active window, as soon as it's ready. The default.
+        case automatic
+
+        /// Galva doesn't present the messages it fetches. Read
+        /// `InAppMessages.messages` and present each message when and where
+        /// you choose: with `.inAppMessageSheet(_:)` in SwiftUI, or
+        /// `message.show()` in UIKit. A Galva link the user opens still
+        /// presents its message right away.
+        case manual
+    }
 }
 
 // MARK: - Rendering
@@ -102,28 +123,35 @@ public extension InAppMessages.Message {
     /// bridge, loads the cached HTML bundle for this message's webview
     /// version, and presents a managed view controller via
     /// `present(_:animated:completion:)`. Idempotent — calling `show` a
-    /// second time with the same message is a no-op while it is on screen.
+    /// second time with the same message is a no-op while it is on screen
+    /// or still being shown. Calls for different messages run one at a
+    /// time, in call order; each replaces the sheet before it.
     ///
-    /// Use this from your `for await message in InAppMessages.messages`
-    /// loop:
+    /// Use this in `.manual` mode, from your
+    /// `for await message in InAppMessages.messages` loop:
     ///
     ///     Task { @MainActor in
     ///         for await message in InAppMessages.messages {
-    ///             guard let scene = UIApplication.shared
-    ///                 .connectedScenes
-    ///                 .first(where: { $0.activationState == .foregroundActive })
-    ///                 as? UIWindowScene
-    ///             else { continue }
-    ///             try? await message.show(in: scene)
+    ///             try? await message.show()
     ///         }
     ///     }
     ///
-    /// - Throws: `InAppMessages.Error.notConfigured` if `Galva.configure`
-    ///   hasn't run, `.messageNotFound` if the server says the message is
-    ///   no longer valid (workflow exited / invalidated), or
+    /// If the message can't be shown for a reason that may clear up — no
+    /// window to present on, a network error — `InAppMessages.messages` may
+    /// deliver it again the next time your app becomes active.
+    ///
+    /// - Parameter scene: The window scene to present in. Default: your
+    ///   app's active window scene.
+    /// - Throws: `InAppMessages.Error`: `.notConfigured` if
+    ///   `Galva.configure` hasn't run, `.noPresentingViewController` if
+    ///   there's no foreground window scene or view controller to present
+    ///   on, or UIKit doesn't finish presenting the sheet within a few
+    ///   seconds, `.messageNotFound` if the server says the message is no longer
+    ///   valid (workflow exited / invalidated), `.requestFailed` if Galva's
+    ///   servers couldn't be reached or returned an error, or
     ///   `.bundleUnavailable` if the WebView bundle for the resolved
     ///   version can't be downloaded and isn't cached on disk.
-    func show(in scene: UIWindowScene) async throws {
+    func show(in scene: UIWindowScene? = nil) async throws {
         try await SDKCore.shared.showInAppMessage(self, in: scene)
     }
 }

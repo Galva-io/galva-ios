@@ -10,7 +10,8 @@
 //      when `minLevel == .off`
 //    • `OSLogLogger.format(...)` produces a stable, grep-friendly line
 //    • Custom logger installed via `SDKCore.installLogger(_:)` receives
-//      every SDK breadcrumb the level filter lets through
+//      every SDK breadcrumb the level filter lets through, including from
+//      loggers handed to subsystems at configure
 //
 //  We avoid asserting against the real OSLog backend (it writes to a
 //  system stream we can't read deterministically). Instead, a small
@@ -18,7 +19,7 @@
 //
 
 import Foundation
-@testable import Galva
+@_spi(GalvaIntegration) @testable import Galva
 import XCTest
 
 // MARK: - RecordingLogger
@@ -251,6 +252,32 @@ final class SDKCoreLoggingTests: XCTestCase {
             "First logger must not receive entries after it was replaced"
         )
     }
+
+    /// Subsystems (uploader, queue, in-app manager, …) take the core's logger
+    /// once, at configure. `Galva.setLogger` and level changes must still
+    /// reach them.
+    func test_loggerHandedOutAtConfigure_followsInstallLogger() async {
+        let firstLogger = RecordingLogger()
+        let secondLogger = RecordingLogger()
+        let harness = SDKHarness.make()
+        defer { harness.cleanup() }
+
+        await harness.core.configureForTesting(
+            identity: harness.identity,
+            queue: MessageQueueAccess.queue(for: harness.consumer, storage: harness.storage),
+            contextProvider: ContextProvider(),
+            logger: firstLogger
+        )
+        let subsystemLogger: any GalvaLogger = harness.core.logger
+        harness.core.installLogger(secondLogger, minLevel: .info)
+        firstLogger.reset()
+
+        subsystemLogger.debug(.queue, "below the new level")
+        subsystemLogger.info(.queue, "after setLogger")
+
+        XCTAssertEqual(secondLogger.entries.filter { $0.category == .queue }.map(\.message), ["after setLogger"])
+        XCTAssertTrue(firstLogger.entries.isEmpty, "Got: \(firstLogger.entries.map(\.message))")
+    }
 }
 
 // MARK: - LogCategory
@@ -261,7 +288,10 @@ final class LogCategoryTests: XCTestCase {
     func test_rawValues_areTheConsoleCategoryNames() {
         XCTAssertEqual(
             Galva.LogCategory.allCases.map(\.rawValue),
-            ["config", "identity", "queue", "storage", "uploader", "lifecycle", "integration"]
+            [
+                "config", "identity", "queue", "storage", "uploader", "lifecycle", "integration",
+                "inAppMessages", "purchases",
+            ]
         )
     }
 

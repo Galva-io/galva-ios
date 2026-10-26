@@ -13,8 +13,6 @@ import Foundation
 @testable import Galva
 import XCTest
 
-#if canImport(StoreKit)
-
 final class ObserveTransactionsRequestTests: XCTestCase {
 
     func test_encode_producesExpectedJSON() throws {
@@ -91,5 +89,3 @@ final class ObserveTransactionsRequestTests: XCTestCase {
         )
     }
 }
-
-#endif // canImport(StoreKit)

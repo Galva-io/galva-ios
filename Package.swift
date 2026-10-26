@@ -28,9 +28,13 @@ let package = Package(
         .target(
             name: "Galva",
             path: "Sources",
-            // Declares the SDK's collected data and its one required-reason
-            // API (UserDefaults, CA92.1), so apps don't have to. Xcode folds
-            // it into the app's privacy report.
+            // The privacy manifest: the data the SDK collects and its two
+            // required-reason APIs, UserDefaults (CA92.1) and system boot
+            // time (35F9.1), so apps don't declare them for Galva. Xcode
+            // folds it into the app's privacy report. Copying the one file
+            // puts it at the resource bundle's root. Never `.copy("Resources")`:
+            // that nests it, and iOS code signing rejects the bundle.
+            // scripts/lint.sh checks the manifest against Sources/.
             resources: [
                 .copy("Resources/PrivacyInfo.xcprivacy"),
             ],

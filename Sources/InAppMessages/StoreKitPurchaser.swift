@@ -20,22 +20,22 @@
 //  `promotionalOffer(offerID:keyID:nonce:signature:timestamp:)` form (and
 //  the iOS 17.4 `Signature`-wrapped variant) in favor of
 //  `promotionalOffer(_:compactJWS:)`. Galva commits to the JWS path so the
-//  server only needs one signing pipeline. Older OSes that don't have the
-//  JWS API surface `Failure.invalidOffer` so the bundle can present an
-//  "update iOS to redeem" state instead of attempting a fallback that
-//  would silently drop the discount.
+//  server only needs one signing pipeline. Apple back-deployed that API to
+//  the SDK's floor (iOS 15 / macOS 12), so there's no OS check and no
+//  fallback that could silently drop the discount.
 //
 //  Outputs:
-//      • `Outcome.completed(Transaction)`  — verified + completed
+//      • `Outcome.completed(…)`            — verified + completed
 //      • `Outcome.pending`                 — Ask to Buy / SCA pending
-//      • `Outcome.cancelled`               — user dismissed the sheet
-//      • `Outcome.unverified(error)`       — App Store signature failed
+//      • `Outcome.cancelled`               — user dismissed the sheet or sign-in
 //      Or, thrown as `Failure`:
 //      • `productUnavailable`              — App Store doesn't sell it
 //      • `purchaseNotAllowed`              — device-level restriction
 //      • `ineligibleForOffer`              — user can't redeem this offer
 //      • `invalidOffer(detail)`            — bad offer-signing inputs
+//      • `verificationFailed(detail)`      — App Store signature failed
 //      • `notAvailableInStorefront`        — wrong region
+//      • `invalidPayload(detail)`          — malformed purchase request
 //      • `networkError(underlying)`        — App Store unreachable
 //      • `underlying(error)`               — anything else
 //
@@ -50,11 +50,7 @@
 //
 
 import Foundation
-#if canImport(StoreKit)
 import StoreKit
-#endif
-
-#if canImport(StoreKit)
 
 @MainActor
 struct StoreKitPurchaser {
@@ -64,7 +60,7 @@ struct StoreKitPurchaser {
     let prefetcher: StoreKitProductPrefetcher?
     let logger: any GalvaLogger
 
-    // MARK: - Public types
+    // MARK: - Types
 
     /// Promotional offer parameters. Galva's backend signs offers as JWS
     /// compact strings (header.payload.signature, base64url-encoded). The
@@ -80,7 +76,7 @@ struct StoreKitPurchaser {
     /// "success" side of the bridge response so the bundle's
     /// purchase-result switch is uniform.
     enum Outcome: Sendable {
-        case completed(verified: Bool, transactionId: UInt64, originalId: UInt64,
+        case completed(transactionId: UInt64, originalId: UInt64,
                        productId: String, purchaseDate: Date, expirationDate: Date?,
                        appAccountToken: UUID?)
         case pending
@@ -140,8 +136,22 @@ struct StoreKitPurchaser {
                 }
         }
 
+        return try await Self.settle {
+            try await product.purchase(options: options)
+        }
+    }
+
+    /// Await StoreKit's purchase call, mapping what it throws onto
+    /// `Failure`. Static so the mapping is testable without a `Product`.
+    static func settle(
+        _ purchase: () async throws -> Product.PurchaseResult
+    ) async throws -> Product.PurchaseResult {
         do {
-            return try await product.purchase(options: options)
+            return try await purchase()
+        } catch StoreKitError.userCancelled {
+            // Thrown rather than returned when the user cancels the Apple ID
+            // sign-in StoreKit asks for. Still a cancel, not a failure.
+            return .userCancelled
         } catch let error as Product.PurchaseError {
             throw mapPurchaseError(error)
         } catch let error as StoreKitError {
@@ -165,7 +175,7 @@ struct StoreKitPurchaser {
         do {
             products = try await Product.products(for: [productId])
         } catch let error as StoreKitError {
-            throw mapStoreKitError(error)
+            throw Self.mapStoreKitError(error)
         } catch {
             throw Failure.underlying(error)
         }
@@ -185,26 +195,26 @@ struct StoreKitPurchaser {
         case .success(let verification):
             switch verification {
             case .verified(let transaction):
-                logger.info(.identity, "purchase completed", metadata: [
+                logger.info(.purchases, "purchase completed", metadata: [
                     "productId": transaction.productID,
                     "transactionId": String(transaction.id),
                 ])
                 return .verified(transaction)
             case .unverified(_, let error):
-                logger.warning(.identity, "purchase unverified", error: error)
+                logger.warning(.purchases, "purchase unverified", error: error)
                 throw Failure.verificationFailed(detail: String(describing: error))
             }
         case .userCancelled:
-            logger.info(.identity, "purchase cancelled by user")
+            logger.info(.purchases, "purchase cancelled by user")
             return .cancelled
         case .pending:
             // Ask to Buy / SCA / payment pending. The transaction will
             // arrive later via `Transaction.updates` to the host app's
             // observer; no further action from the bridge.
-            logger.info(.identity, "purchase pending (Ask to Buy / SCA)")
+            logger.info(.purchases, "purchase pending (Ask to Buy / SCA)")
             return .pending
         @unknown default:
-            logger.warning(.identity, "purchase result unknown — treating as failure")
+            logger.warning(.purchases, "purchase result unknown — treating as failure")
             throw Failure.underlying(StoreKitError.unknown)
         }
     }
@@ -217,15 +227,10 @@ struct StoreKitPurchaser {
     /// multiple internal options (offerID, signed timestamp, signature,
     /// etc.) that the purchase flow expects to find independently.
     ///
-    /// Availability: Apple back-deployed this API to iOS 15 / macOS 12
-    /// / tvOS 15 / watchOS 8 / visionOS 1 — the SDK's deployment floor —
-    /// via `@backDeployed(before: iOS 26.0, …)`. No runtime
-    /// `#available` gate is needed; the symbol is safe to call on every
-    /// supported OS.
-    ///
-    /// `throws` is preserved despite being a no-throw body today so a
-    /// future malformed-JWS check can land here without re-plumbing
-    /// every call site.
+    /// Availability: Apple back-deployed this API to iOS 15 / macOS 12 —
+    /// the SDK's deployment floor — via `@backDeployed(before: iOS 26.0, …)`.
+    /// No runtime `#available` gate is needed; the symbol is safe to call
+    /// on every supported OS.
     private func makePromotionalOptions(
         _ promo: PromotionalOffer
     ) -> [Product.PurchaseOption] {
@@ -240,7 +245,7 @@ struct StoreKitPurchaser {
 
     // MARK: - Error mapping
 
-    private func mapPurchaseError(_ error: Product.PurchaseError) -> Failure {
+    private static func mapPurchaseError(_ error: Product.PurchaseError) -> Failure {
         switch error {
         case .productUnavailable:
             return .productUnavailable
@@ -270,12 +275,11 @@ struct StoreKitPurchaser {
         }
     }
 
-    private func mapStoreKitError(_ error: StoreKitError) -> Failure {
+    private static func mapStoreKitError(_ error: StoreKitError) -> Failure {
         switch error {
         case .userCancelled:
-            // Treated as a flow outcome elsewhere; thrown here only if
-            // StoreKit raises it as an error (rare — usually returned as
-            // PurchaseResult.userCancelled). Surface as a no-op cancel.
+            // From the purchase itself `settle` returns it as
+            // `.userCancelled`; only a product lookup lands here.
             return .underlying(error)
         case .networkError(let underlying):
             return .networkError(underlying: underlying)
@@ -315,7 +319,6 @@ extension StoreKitPurchaser.Outcome {
     /// and by results a `GalvaPurchaseController` reports.
     static func verified(_ transaction: Transaction) -> Self {
         .completed(
-            verified: true,
             transactionId: transaction.id,
             originalId: transaction.originalID,
             productId: transaction.productID,
@@ -353,5 +356,3 @@ extension StoreKitPurchaser.Failure {
         }
     }
 }
-
-#endif // canImport(StoreKit)

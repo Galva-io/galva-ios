@@ -6,7 +6,8 @@
 //  receives the parsed request, its results encode to the same
 //  `requestPurchase` wire shape as the built-in StoreKit path, and its
 //  failures map onto the structured `BridgeError` codes the bundle switches
-//  on. `.completed` needs a real `StoreKit.Transaction`, so it's covered by
+//  on. A cancel StoreKit throws instead of returning stays a cancel on both
+//  paths. `.completed` needs a real `StoreKit.Transaction`, so it's covered by
 //  sandbox / device testing rather than here.
 //
 
@@ -14,7 +15,6 @@ import Foundation
 @_spi(Testing) @testable import Galva
 import XCTest
 
-#if canImport(StoreKit)
 import StoreKit
 
 @MainActor
@@ -115,6 +115,16 @@ final class PurchaseControllerTests: XCTestCase {
         }
     }
 
+    func test_run_controllerFailure_logsUnderPurchases() async {
+        let logger = RecordingLogger()
+        _ = await PurchaseBridgeCodec.run(
+            makeRequest(), with: StubController { _ in throw ForeignError() }, logger: logger
+        )
+
+        XCTAssertFalse(logger.entries.isEmpty)
+        XCTAssertEqual(Set(logger.entries.map(\.category)), [.purchases])
+    }
+
     func test_run_nonGalvaError_mapsToPurchaseFailed() async {
         let result = await PurchaseBridgeCodec.run(
             makeRequest(), with: StubController { _ in throw ForeignError() }, logger: SilentLogger()
@@ -160,6 +170,72 @@ final class PurchaseControllerTests: XCTestCase {
         }
     }
 
+    // MARK: - Thrown cancel
+    //
+    // StoreKit throws `StoreKitError.userCancelled` (rather than returning
+    // `.userCancelled`) when the user cancels the Apple ID sign-in it asks
+    // for. That's a cancel, never a purchase failure.
+
+    func test_builtInFlow_thrownUserCancelled_settlesAsUserCancelled() async throws {
+        let result = try await StoreKitPurchaser.settle { throw StoreKitError.userCancelled }
+        guard case .userCancelled = result else {
+            return XCTFail("expected .userCancelled, got \(result)")
+        }
+    }
+
+    func test_builtInFlow_otherThrownErrors_keepTheirFailures() async {
+        let cases: [(any Error, BridgeError.Code)] = [
+            (StoreKitError.networkError(URLError(.notConnectedToInternet)), .networkError),
+            (StoreKitError.notAvailableInStorefront, .notAvailableInStorefront),
+            (Product.PurchaseError.ineligibleForOffer, .ineligibleForOffer),
+            (ForeignError(), .purchaseFailed),
+        ]
+        for (thrown, expected) in cases {
+            do {
+                _ = try await StoreKitPurchaser.settle { throw thrown }
+                XCTFail("expected \(thrown) to throw")
+            } catch let failure as StoreKitPurchaser.Failure {
+                XCTAssertEqual(PurchaseBridgeCodec.bridgeError(for: failure).code, expected, "\(thrown)")
+            } catch {
+                XCTFail("expected a StoreKitPurchaser.Failure, got \(error)")
+            }
+        }
+    }
+
+    func test_run_controllerUsingStoreKit_thrownUserCancelled_encodesAsCancelled() async {
+        // `purchaseWithStoreKit()` as the bridge builds it, under a controller
+        // that maps the raw result the way the RevenueCat one does.
+        let request = makeRequest(storeKitPurchase: {
+            do {
+                return try await StoreKitPurchaser.settle { throw StoreKitError.userCancelled }
+            } catch let failure as StoreKitPurchaser.Failure {
+                throw failure.publicError
+            }
+        })
+        let controller = StubController { request in
+            switch try await request.purchaseWithStoreKit() {
+            case .userCancelled: return .cancelled
+            case .pending: return .pending
+            default: throw Galva.PurchaseError.failed("unexpected result")
+            }
+        }
+
+        let result = await PurchaseBridgeCodec.run(request, with: controller, logger: SilentLogger())
+
+        XCTAssertEqual(result, .success(.object(["outcome": .string("cancelled")])))
+    }
+
+    func test_run_controllerThrowingUserCancelled_encodesAsCancelled() async {
+        // A controller that drives StoreKit itself and lets the thrown cancel
+        // escape.
+        let result = await PurchaseBridgeCodec.run(
+            makeRequest(),
+            with: StubController { _ in throw StoreKitError.userCancelled },
+            logger: SilentLogger()
+        )
+        XCTAssertEqual(result, .success(.object(["outcome": .string("cancelled")])))
+    }
+
     // MARK: - Registry
 
     func test_setPurchaseController_installsAndClears() {
@@ -172,5 +248,3 @@ final class PurchaseControllerTests: XCTestCase {
         XCTAssertNil(PurchaseControllerRegistry.current)
     }
 }
-
-#endif // canImport(StoreKit)

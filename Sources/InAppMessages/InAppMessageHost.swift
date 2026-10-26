@@ -5,14 +5,15 @@
 //  Contract between `NativeBridge` and whatever is hosting the WebView
 //  presentation. The bridge doesn't care whether the WebView lives inside
 //  a UIKit sheet (`InAppMessagePresenter`) or a SwiftUI sheet
-//  (`InAppMessageSheetCoordinator`) — it only needs to:
+//  (`InAppMessagePresentationCoordinator`) — it only needs to:
 //
 //      • Read the `WKWebView` to post `evaluateJavaScript` responses.
 //      • Read safe-area insets for `getPageContext().safeArea`.
 //      • Tell the host to reveal the WebView when the bundle calls
 //        `galva.ready()` (anti-flash).
 //      • Tell the host to dismiss the presentation when the bundle calls
-//        `galva.dismiss(reason?)`.
+//        `galva.dismiss(reason?)` — or, from the WebView's navigation
+//        policy, when the page can't load or its process dies.
 //
 //  Both hosts conform to this protocol; the bridge holds a `weak var
 //  host: (any InAppMessageHost)?` reference.
@@ -29,10 +30,11 @@ import UIKit
 #if canImport(WebKit) && canImport(UIKit)
 
 /// Pair returned by `SDKCore.prepareInAppMessage(_:host:)` — the SwiftUI
-/// coordinator mounts the `webView` inside a `UIViewRepresentable` and
-/// retains the `bridge` strongly for the lifetime of the sheet (the
-/// `WKUserContentController.add(_:name:)` reference to the bridge is
-/// weak, so dropping the bridge tears the channel down).
+/// coordinator mounts the `webView` inside a `UIViewRepresentable` and keeps
+/// the `bridge` for the lifetime of the sheet. WebKit retains the bridge
+/// strongly as the script-message handler; the coordinator holds it to hand
+/// to `InAppMessageWebViewFactory.tearDown(webView:bridge:)`, which removes
+/// that handler on dismiss.
 ///
 /// `@unchecked Sendable` because both `WKWebView` and `NativeBridge` are
 /// `@MainActor`-isolated reference types — passing the pointer across
@@ -49,8 +51,8 @@ struct PreparedInAppMessage: @unchecked Sendable {
 
 /// What `NativeBridge` needs from its presentation owner. Both
 /// `InAppMessagePresenter` (UIKit sheet via `present(animated:)`) and
-/// `InAppMessageSheetCoordinator` (SwiftUI `.sheet(item:)` content)
-/// conform to this — the bridge stays platform-agnostic.
+/// `InAppMessagePresentationCoordinator` (drives the SwiftUI
+/// `.sheet(item:)`) conform to this — the bridge stays platform-agnostic.
 ///
 /// Marked `Sendable` so `any InAppMessageHost` values can cross from
 /// `SDKCore`'s `@GalvaActor` context into the `MainActor.run` block
@@ -77,7 +79,9 @@ protocol InAppMessageHost: AnyObject, Sendable {
     /// switches from the loading placeholder to the WebView.
     func reveal()
 
-    /// Bundle called `galva.dismiss(reason?)` — close the presentation.
+    /// Bundle called `galva.dismiss(reason?)`, or its page failed to load
+    /// or its web content process died (`InAppMessageNavigationPolicy`) —
+    /// close the presentation.
     /// In UIKit this calls `dismiss(animated:)` on the presenting VC;
     /// in SwiftUI this clears the `@Binding` that drives the sheet, which
     /// triggers SwiftUI to dismiss.

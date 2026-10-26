@@ -11,6 +11,7 @@
 //    • the anonymous seed/trait `identify(userId: nil)` must NOT flush it
 //    • a real `identify(userId:)` replays + clears it
 //    • already-identified → dispatched immediately, never deferred
+//    • configure() replays a link deferred before it, even when opted out
 //    • latest-wins while deferred
 //
 //  Uses the SDKHarness (a fresh, non-singleton SDKCore) so identity state
@@ -82,6 +83,24 @@ final class DeepLinkDeferralTests: XCTestCase {
         await harness.core.handleOpenURL(url("gvtest://openCommunication?communicationId=c1"))
         XCTAssertNil(harness.core.deferredDeepLink,
                      "identified user → dispatch now, never defer")
+    }
+
+    func test_replaysOnConfigure_whenOptedOut() async {
+        // A returning, identified user who opted out. In-app messages keep
+        // working under opt-out, so a cold-start link must still replay.
+        let harness = SDKHarness.make()
+        defer { harness.cleanup() }
+        harness.identity.setEndUserId("u1")
+        let defaults = UserDefaults(suiteName: harness.userDefaultsSuiteName)!
+        SDKCore.setOptedOutFlag(true, defaults: defaults)
+        defer { SDKCore.setOptedOutFlag(false, defaults: defaults) }
+
+        await harness.core.handleOpenURL(url("gvtest://openCommunication?communicationId=c1"))
+        XCTAssertNotNil(harness.core.deferredDeepLink)
+
+        await harness.configure()
+        XCTAssertNil(harness.core.deferredDeepLink,
+                     "configure() should replay + clear the deferred link even when opted out")
     }
 
     func test_latestWins_whileDeferred() async {

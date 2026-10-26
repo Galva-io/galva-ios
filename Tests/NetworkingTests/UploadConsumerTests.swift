@@ -96,6 +96,6 @@ private func sampleMessage(event: String = "evt") -> Message {
         anonymousId: "anon",
         endUserId: nil,
         context: nil,
-        body: .track(event: event, properties: nil, sourceType: nil, sourceId: nil)
+        body: .track(event: event, properties: nil)
     )
 }

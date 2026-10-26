@@ -27,9 +27,7 @@ import UIKit
 #if canImport(UserNotifications)
 import UserNotifications
 #endif
-#if canImport(StoreKit)
 import StoreKit
-#endif
 
 #if canImport(WebKit) && canImport(UIKit)
 
@@ -49,7 +47,6 @@ extension NativeBridge {
         let appAccountToken = await identity.purchaseAttributionToken
         return BridgePageContext(
             messageId: messageId,
-            sessionToken: nil, // signed token attaches in a follow-up; bundle reads as-nil-safe
             bridgeProtocol: SDKConstants.bridgeProtocolVersion,
             sdkVersion: SDKIdentity.version,
             platform: "ios",
@@ -57,7 +54,6 @@ extension NativeBridge {
             appBuild: app.build,
             pushAuthorization: pushAuth,
             locale: Locale.current.identifier,
-            appColorScheme: nil, // SDK doesn't override; bundle falls back to matchMedia
             safeArea: safe,
             storefrontCountryCode: storefrontCode,
             appAccountToken: appAccountToken.uuidString.lowercased()
@@ -71,11 +67,7 @@ extension NativeBridge {
     /// bundle uses this to pick storefront-specific copy without an
     /// extra bridge round-trip.
     private func currentStorefrontCountryCode() async -> String? {
-        #if canImport(StoreKit)
-        return await Storefront.current?.countryCode
-        #else
-        return nil
-        #endif
+        await Storefront.current?.countryCode
     }
 
     private func appBundleInfo() -> (version: String?, build: String?) {

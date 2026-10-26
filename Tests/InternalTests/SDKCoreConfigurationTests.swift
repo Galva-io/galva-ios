@@ -23,9 +23,9 @@ final class SDKCoreConfigurationTests: XCTestCase {
         let harness = SDKHarness.make()
         defer { harness.cleanup() }
 
-        XCTAssertFalse(harness.core.isConfigured, "should be unconfigured at construction")
+        XCTAssertFalse(harness.core.configured, "should be unconfigured at construction")
         await harness.configure()
-        XCTAssertTrue(harness.core.isConfigured, "configure() should set isConfigured=true")
+        XCTAssertTrue(harness.core.configured, "configure() should set configured=true")
     }
 
     func test_configure_isIdempotent_secondCallIsNoOp() async {

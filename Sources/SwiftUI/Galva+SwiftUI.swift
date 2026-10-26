@@ -2,7 +2,9 @@
 //  Galva+SwiftUI.swift
 //  Galva
 //
-//  SwiftUI integration for in-app messaging. Two public modifiers:
+//  SwiftUI presentation for in-app messages in `.manual` mode. With the
+//  default `.automatic` mode the SDK presents messages itself and apps need
+//  none of this.
 //
 //      • `.inAppMessageSheet($message)` — present the WebView sheet driven
 //        by a `Binding<InAppMessages.Message?>`. The SDK resolves + downloads
@@ -10,11 +12,6 @@
 //        the WebView is ready. A failed resolve / download is silent — no
 //        sheet ever appears, no spinner flashes, the caller's binding is
 //        cleared.
-//
-//      • `.autoDisplayInAppMessages()` — convenience that iterates
-//        `InAppMessages.messages` internally and feeds each value into an
-//        `.inAppMessageSheet`. Drop on any root view for zero-config
-//        rendering.
 //
 //  Architecture: the modifier owns a coordinator (`@StateObject`) that
 //  resolves the payload, downloads the bundle, and builds the `WKWebView` +
@@ -50,42 +47,30 @@ public extension View {
     /// download fails, the binding is cleared silently and no sheet is shown
     /// — the user never sees a sheet flash open and close.
     ///
-    /// Use this when you want full control over which messages render —
-    /// e.g. queueing, filtering by workflow, gating on app state.
+    /// Use it with `inAppMessages: .manual` to control which messages render
+    /// and when — filtering by workflow, waiting for a screen to close. Read
+    /// `InAppMessages.messages` into state and bind the sheet to it:
     ///
     /// ```swift
-    /// @State var presenting: InAppMessages.Message?
+    /// @State private var message: InAppMessages.Message?
     ///
     /// var body: some View {
     ///     ContentView()
     ///         .task {
-    ///             for await message in InAppMessages.messages {
-    ///                 presenting = message
+    ///             for await incoming in InAppMessages.messages {
+    ///                 message = incoming
     ///             }
     ///         }
-    ///         .inAppMessageSheet($presenting)
+    ///         .inAppMessageSheet($message)
     /// }
     /// ```
+    ///
+    /// With the default `.automatic` mode the SDK presents messages itself;
+    /// don't present them again here.
     func inAppMessageSheet(
         _ message: Binding<InAppMessages.Message?>
     ) -> some View {
         modifier(InAppMessageSheetModifier(presentingMessage: message))
-    }
-
-    /// Auto-iterate `InAppMessages.messages` and present each new value
-    /// as a sheet. Equivalent to writing the `for await` loop +
-    /// `.inAppMessageSheet($state)` by hand — most apps that just want
-    /// "render in-app messages as the SDK delivers them" can drop this
-    /// on any root view.
-    ///
-    /// ```swift
-    /// var body: some View {
-    ///     ContentView()
-    ///         .autoDisplayInAppMessages()
-    /// }
-    /// ```
-    func autoDisplayInAppMessages() -> some View {
-        modifier(AutoDisplayInAppMessagesModifier())
     }
 }
 
@@ -127,23 +112,6 @@ private struct InAppMessageSheetModifier: ViewModifier {
             // binding too so the next message can flow in.
             .onChange(of: coordinator.readyMessage?.id) { newValue in
                 if newValue == nil { presentingMessage = nil }
-            }
-    }
-}
-
-/// `for await` consumer of `InAppMessages.messages` + automatic
-/// `.inAppMessageSheet` plumbing. Latest message wins — `inAppMessageSheet`
-/// handles the prepare-before-present pipeline for each one.
-private struct AutoDisplayInAppMessagesModifier: ViewModifier {
-    @State private var presenting: InAppMessages.Message?
-
-    func body(content: Content) -> some View {
-        content
-            .inAppMessageSheet($presenting)
-            .task {
-                for await message in InAppMessages.messages {
-                    presenting = message
-                }
             }
     }
 }
@@ -206,8 +174,10 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
     /// Guards the one-shot bundle load from the sheet's `onAppear`.
     private var didLoadBundle = false
 
-    /// Bridge held strongly — `WKUserContentController.add(_:name:)` only
-    /// keeps a weak ref, so the channel dies the moment we drop the bridge.
+    /// Bridge for the prepared WebView. WebKit already retains it strongly as
+    /// the script-message handler; held here to hand to
+    /// `InAppMessageWebViewFactory.tearDown(webView:bridge:)`, which removes
+    /// that handler.
     private var bridge: NativeBridge?
 
     /// In-flight prepare. Cancelled if a newer message arrives so we never
@@ -238,7 +208,12 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
                     // `sheet(item:)` handles the visual transition because
                     // the item identity changes — no manual dismiss/present
                     // dance. The new bundle hasn't called `ready()` yet, so
-                    // reset the reveal flag.
+                    // reset the reveal flag. Sever the replaced page first:
+                    // its late `galva.dismiss()` or load failure would
+                    // otherwise close the new sheet.
+                    if let replaced = self.webView {
+                        InAppMessageWebViewFactory.tearDown(webView: replaced, bridge: self.bridge)
+                    }
                     self.webView = prepared.webView
                     self.bridge = prepared.bridge
                     self.bundleURL = prepared.bundleURL
@@ -282,10 +257,6 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
         tearDown()
     }
 
-    /// Idempotent state reset. Cancels any in-flight prepare, severs
-    /// every native ↔ WebView edge (so WebKit can wind down its
-    /// resources eagerly), drops the WebView + bridge + reveal flag, and
-    /// asks the SDK to forget the active message id on the GalvaActor.
     /// Load the prepared bundle once, from the sheet content's `onAppear` — the
     /// point where the WebView is in the sheet's window and its safe-area insets
     /// are valid. Booting the page here (rather than at prepare time, off-screen)
@@ -297,6 +268,10 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
         webView.loadFileURL(bundleURL, allowingReadAccessTo: bundleURL.deletingLastPathComponent())
     }
 
+    /// Idempotent state reset. Cancels any in-flight prepare, severs
+    /// every native ↔ WebView edge (so WebKit can wind down its
+    /// resources eagerly), drops the WebView + bridge + reveal flag, and
+    /// asks the SDK to forget the active message id on the GalvaActor.
     private func tearDown() {
         prepareTask?.cancel()
         prepareTask = nil
@@ -309,9 +284,7 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
         didLoadBundle = false
         bridge = nil
         isRevealed = false
-        Task { @GalvaActor in
-            await SDKCore.shared.clearActiveMessage()
-        }
+        SDKCore.shared.submit { await $0.clearActiveMessage() }
     }
 }
 
@@ -324,6 +297,8 @@ extension InAppMessagePresentationCoordinator: InAppMessageHost {
         isRevealed = true
     }
 
+    /// The bundle called `galva.dismiss()`, or its page couldn't load or
+    /// its web content process died (`InAppMessageNavigationPolicy`).
     func dismiss(reason: String?) {
         _ = reason
         // Clearing readyMessage tells SwiftUI to dismiss the sheet, which

@@ -10,9 +10,7 @@
 import Foundation
 @_spi(GalvaIntegration) @_spi(Testing) import Galva
 import XCTest
-#if canImport(StoreKit)
 import StoreKit
-#endif
 
 private struct NoLogger: GalvaLogger {
     func log(_ entry: Galva.LogEntry) {}
@@ -35,12 +33,11 @@ final class IntegrationSPITests: XCTestCase {
         XCTAssertTrue(context.logger is NoLogger)
     }
 
-    #if canImport(StoreKit)
     @MainActor
     func test_controllerTestsCanBuildARequest() async throws {
         let request = Galva.PurchaseRequest(
             productId: "com.app.pro.year",
-            promotionalOffer: nil,
+            promotionalOffer: Galva.PromotionalOffer(offerId: "winback_50", compactJWS: "h.p.s"),
             appAccountToken: UUID(),
             messageId: "msg-1",
             storeKitPurchase: { .userCancelled }
@@ -50,5 +47,4 @@ final class IntegrationSPITests: XCTestCase {
             return XCTFail("expected the stubbed StoreKit result")
         }
     }
-    #endif
 }

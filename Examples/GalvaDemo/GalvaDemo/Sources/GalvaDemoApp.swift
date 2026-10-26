@@ -11,6 +11,7 @@
 //
 
 import SwiftUI
+import Galva
 
 @main
 struct GalvaDemoApp: App {
@@ -21,10 +22,18 @@ struct GalvaDemoApp: App {
         // Touch the launch clock first so `launchMs` measures init → first
         // frame as accurately as possible.
         _ = LaunchClock.startUptime
-        // MUST run before any view calls `.galvaConfigure` — the mock
-        // URLProtocol has to be registered before the SDK's first
-        // `URLSession.shared` request fires at configure time.
+        // MUST run before `Galva.configure` — the mock URLProtocol has to be
+        // registered before the SDK's first `URLSession.shared` request
+        // fires at configure time.
         config = E2EBootstrap.runIfNeeded()
+        if config.sdkEnabled {
+            Galva.configure(
+                apiKey: config.apiKey,
+                environment: config.environment,
+                inAppMessages: DemoPresentation.mode(for: config.scenario),
+                logLevel: .debug
+            )
+        }
     }
 
     var body: some Scene {

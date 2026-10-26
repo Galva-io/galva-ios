@@ -166,8 +166,8 @@ enum StorageMigrator {
         ])
     }
 
-    /// How many rows currently sit in quarantine. Surfaced via the
-    /// storage protocol for tests and ad-hoc diagnostics.
+    /// How many rows currently sit in quarantine. Test seam, read through
+    /// `SQLiteMessageStorage.quarantineCount()`.
     static func quarantineCount(_ db: OpaquePointer?) throws -> Int {
         let sql = "SELECT COUNT(*) FROM messages_quarantine;"
         var stmt: OpaquePointer?

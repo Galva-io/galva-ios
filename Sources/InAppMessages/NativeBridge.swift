@@ -31,6 +31,10 @@
 //  Security
 //      • The script-message handler name is `galva` — that one inbound
 //        channel is the entire native attack surface.
+//      • Only the bundle's own page may use it: messages are taken from
+//        the main frame of a file:// page only — never an iframe or a
+//        remote page. The navigation policy keeps the main frame on the
+//        bundle file.
 //      • Unknown method names are never dispatched — they resolve to
 //        `BridgeRequest.method == nil` and are answered with a structured
 //        `unknownMethod` error (carrying the `requestId`) so the bundle's
@@ -47,9 +51,7 @@ import WebKit
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(StoreKit)
 import StoreKit
-#endif
 
 #if canImport(WebKit) && canImport(UIKit)
 
@@ -61,7 +63,7 @@ let kGalvaBridgeHandlerName = "galva"
 final class NativeBridge: NSObject, WKScriptMessageHandler {
 
     /// Whoever owns the WebView presentation — `InAppMessagePresenter`
-    /// for the UIKit path, `InAppMessageSheetCoordinator` for SwiftUI.
+    /// for the UIKit path, `InAppMessagePresentationCoordinator` for SwiftUI.
     /// The bridge stays platform-agnostic by talking through the
     /// `InAppMessageHost` protocol.
     weak var host: (any InAppMessageHost)?
@@ -76,26 +78,29 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     /// debug logging.
     var consoleLogHandler: WebViewConsoleLogHandler?
 
+    /// The WebView's navigation + UI delegate. WebKit holds delegates
+    /// weakly, so the bridge keeps it alive for the presentation, the same
+    /// way it keeps `consoleLogHandler`; dropped by
+    /// `InAppMessageWebViewFactory.tearDown(webView:bridge:)`.
+    var navigationPolicy: InAppMessageNavigationPolicy?
+
     /// The message this bridge belongs to. `getMessageData` / `getPageContext` /
     /// `requestPurchase` resolve against THIS id — not a shared global active id
     /// — so a bridge always serves its own message's data even if a second
     /// presentation is momentarily live (e.g. a deep-link message + a
-    /// concurrently-polled auto-display message).
+    /// concurrently-polled message presented by `.automatic`).
     let messageId: String
 
     let messageManager: InAppMessageManager
     let identity: IdentityStore
     let logger: any GalvaLogger
 
-    #if canImport(StoreKit)
     /// Warm cache used by `requestPurchase` to skip a `Product.products(for:)`
     /// round-trip when the SDK already pre-fetched the SKU during
     /// `/sdk/initialize`. Optional — purchase still works without it
     /// (cold-path live fetch inside `StoreKitPurchaser`).
     let storeKitPrefetcher: StoreKitProductPrefetcher?
-    #endif
 
-    #if canImport(StoreKit)
     init(
         messageId: String,
         messageManager: InAppMessageManager,
@@ -109,19 +114,6 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         self.storeKitPrefetcher = storeKitPrefetcher
         self.logger = logger
     }
-    #else
-    init(
-        messageId: String,
-        messageManager: InAppMessageManager,
-        identity: IdentityStore,
-        logger: any GalvaLogger
-    ) {
-        self.messageId = messageId
-        self.messageManager = messageManager
-        self.identity = identity
-        self.logger = logger
-    }
-    #endif
 
     // MARK: - WKScriptMessageHandler
 
@@ -130,14 +122,25 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         didReceive message: WKScriptMessage
     ) {
         guard message.name == kGalvaBridgeHandlerName else { return }
+        let frame = message.frameInfo
+        guard Self.acceptsMessage(
+            fromMainFrame: frame.isMainFrame,
+            originProtocol: frame.securityOrigin.protocol
+        ) else {
+            logger.warning(.inAppMessages, "bridge: message from outside the bundle page dropped", metadata: [
+                "mainFrame": String(frame.isMainFrame),
+                "origin": frame.securityOrigin.protocol,
+            ])
+            return
+        }
         let envelope: BridgeRequest
         do {
             envelope = try Self.decodeEnvelope(message.body)
         } catch {
-            logger.warning(.identity, "bridge: failed to decode envelope", error: error)
+            logger.warning(.inAppMessages, "bridge: failed to decode envelope", error: error)
             return
         }
-        logger.debug(.identity, "bridge in", metadata: [
+        logger.debug(.inAppMessages, "bridge in", metadata: [
             "name": envelope.name,
             "requestId": envelope.requestId,
         ])
@@ -146,6 +149,14 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             let outcome = await self.handle(envelope: envelope)
             await self.respond(requestId: envelope.requestId, outcome: outcome)
         }
+    }
+
+    /// Whether a script message comes from the bundle's own page: the main
+    /// frame, with a `file` origin — the navigation policy keeps the main
+    /// frame on the bundle file. Iframes (a `srcdoc` one inherits the
+    /// `file` origin) and remote pages don't get the bridge.
+    static func acceptsMessage(fromMainFrame isMainFrame: Bool, originProtocol: String) -> Bool {
+        isMainFrame && originProtocol == "file"
     }
 
     // MARK: - Dispatch
@@ -159,7 +170,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         // Unknown method → structured error (with the requestId, via respond)
         // so the bundle's pending Promise rejects instead of hanging.
         guard let method = envelope.method else {
-            logger.warning(.identity, "bridge: unknown method", metadata: ["name": envelope.name])
+            logger.warning(.inAppMessages, "bridge: unknown method", metadata: ["name": envelope.name])
             return .failure(BridgeError(
                 code: .unknownMethod,
                 message: "Unknown bridge method: \(envelope.name)"
@@ -198,10 +209,10 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             )
 
         case .openManageSubscription:
-            return openURL(from: envelope.payload, key: "url", logTag: "openManageSubscription")
+            return openURL(from: envelope.payload, logTag: "openManageSubscription")
 
         case .openDeepLink:
-            return openURL(from: envelope.payload, key: "url", logTag: "openDeepLink")
+            return openURL(from: envelope.payload, logTag: "openDeepLink")
 
         case .apiFetch:
             return await handleAPIFetch(payload: envelope.payload)
@@ -230,7 +241,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             let data = try? encoder.encode(response),
             let jsonString = String(data: data, encoding: .utf8)
         else {
-            logger.warning(.identity, "bridge: failed to encode response", metadata: [
+            logger.warning(.inAppMessages, "bridge: failed to encode response", metadata: [
                 "requestId": requestId,
             ])
             return
@@ -239,9 +250,9 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         let js = "window.handleNativeMessage('\(escaped)')"
         do {
             _ = try await webView.evaluateJavaScript(js)
-            logger.debug(.identity, "bridge out", metadata: ["requestId": requestId])
+            logger.debug(.inAppMessages, "bridge out", metadata: ["requestId": requestId])
         } catch {
-            logger.warning(.identity, "bridge: evaluateJavaScript failed",
+            logger.warning(.inAppMessages, "bridge: evaluateJavaScript failed",
                            metadata: ["requestId": requestId],
                            error: error)
         }

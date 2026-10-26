@@ -6,7 +6,7 @@
 #
 # Run:
 #     swiftlint                 # warnings + errors
-#     swiftlint --strict        # treat warnings as errors (CI)
+#     swiftlint --strict        # treat warnings as errors
 #     swiftlint --fix           # autocorrect what it can
 #
 # Rationale per rule below — the goal is "SDK never affects host app"
@@ -32,8 +32,8 @@ disabled_rules:
   - line_length              # we wrap manually; long URLs are OK
   - identifier_name          # we have short, deliberate names (db, ms, etc.)
   - todo                     # we use TODO/FIXME as breadcrumbs; not noise
-  - file_length              # SDKCore.swift is ~250 lines and intentional
-  - type_body_length         # ditto
+  - file_length              # SDKCore.swift is large by design
+  - type_body_length         # so is the SDKCore type
   - trailing_whitespace      # editor handles this
 
 # ────────────────────────────────────────────────────────────────────

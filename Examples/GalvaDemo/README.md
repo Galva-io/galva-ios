@@ -1,7 +1,8 @@
 # GalvaDemo — example app & end-to-end tests
 
 A real SwiftUI app that integrates the Galva SDK exactly as a host app would
-(`.galvaConfigure(...)` + `.autoDisplayInAppMessages()`), plus an XCUITest
+(`Galva.configure(...)` at launch, `.onOpenURL` for Galva links, and the SDK
+presenting in-app messages on its own), plus an XCUITest
 suite that drives the **full stack** — configure → poll → resolve → bundle
 download → `WKWebView` → native bridge → deep link — and asserts behavior.
 
@@ -34,20 +35,29 @@ cache → WebView → bridge path still runs. The SDK is pointed at the mock via
 
 UI tests select a scenario through launch environment:
 
-| `GALVA_E2E_SCENARIO` | Poll returns | Used by |
-|---|---|---|
-| `showInAppMessage` | one in-app message | in-app message + bridge tests |
-| `deepLinkTarget` | nothing (deep link only) | deep-link + deferral tests |
-| `noMessages` | nothing | identity/track upload tests |
+| `GALVA_E2E_SCENARIO` | Poll returns | Presentation | Used by |
+|---|---|---|---|
+| `showInAppMessage` | one in-app message | `.automatic` | in-app message + bridge tests |
+| `showInAppMessageUIKit` | the same message | `.manual`, presented with `show(in:)` | UIKit presenter safe-area test |
+| `showInAppMessageSwiftUISheet` | the same message | `.manual`, presented with `.inAppMessageSheet` | SwiftUI sheet safe-area test |
+| `showInAppMessageTwice` | one message; after "Next message", a second, different message on the same, already-cached bundle `1.0.0` | `.automatic` | cached second-presentation safe-area test |
+| `deepLinkTarget` | nothing until "Next message", then a message | `.automatic` | deep-link + deferral tests |
+| `deepLinkRace` | nothing until "Next message", then a message; the deep link's resolve is delayed ~2s | `.automatic` | deep-link/poll race and display-budget tests (`test_deepLinkRace_…`, `test_deepLink_alreadyPresented_…`) |
+| `noMessages` | nothing | `.automatic` | identity/track upload tests |
 
-`E2EBootstrap` wipes identity + caches on each launch so tests are independent.
+[`DemoPresentation`](GalvaDemo/Sources/DemoPresentation.swift) maps each scenario to the mode `GalvaDemoApp` configures.
+
+`E2EBootstrap` wipes identity, opt-out and session state (UserDefaults) and the
+web-view bundle cache on each launch so tests are independent. The queue
+databases and init cache in Application Support are kept.
 
 ## What's covered
 
 - **In-app message display + bridge** — `getMessageData`, `getPageContext`,
   `apiFetch`, `showAlert`, `dismiss` ([InAppMessageUITests](GalvaDemoUITests/InAppMessageUITests.swift)).
 - **Deep links** — `gvdemo://openCommunication?communicationId=…` rendering,
-  and **deferral-until-identify** ([DeepLinkUITests](GalvaDemoUITests/DeepLinkUITests.swift)).
+  and **deferral-until-identify** ([DeepLinkUITests](GalvaDemoUITests/DeepLinkUITests.swift)),
+  plus the deep-link/poll race and the display budget ([InAppMessageUITests](GalvaDemoUITests/InAppMessageUITests.swift)).
 - **Identity + events** — `identify` / `track` actually upload, asserted
   against the recorded request bodies ([IdentityEventUITests](GalvaDemoUITests/IdentityEventUITests.swift)).
 

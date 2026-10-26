@@ -49,7 +49,7 @@ struct InitializationCache: Sendable {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
         do {
             let data = try Data(contentsOf: fileURL)
-            return try Self.makeDecoder().decode(InitializationData.self, from: data)
+            return try JSONDecoder().decode(InitializationData.self, from: data)
         } catch {
             return nil
         }
@@ -58,18 +58,10 @@ struct InitializationCache: Sendable {
     /// Persist the latest response. Errors are returned so the caller can
     /// log them — failure to cache isn't fatal (next launch re-fetches).
     func save(_ data: InitializationData) throws {
-        let encoded = try Self.makeEncoder().encode(data)
+        let encoded = try JSONEncoder().encode(data)
         // Write atomically so a process kill mid-write can't leave a
         // truncated cache that load() would silently accept.
         try encoded.write(to: fileURL, options: [.atomic])
-    }
-
-    /// Remove the cache file. Used by tests; production never deletes the
-    /// cache (we always prefer a stale read over no read).
-    func clear() throws {
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            try FileManager.default.removeItem(at: fileURL)
-        }
     }
 
     // MARK: Path
@@ -91,37 +83,5 @@ struct InitializationCache: Sendable {
         values.isExcludedFromBackup = true
         try? dirCopy.setResourceValues(values)
         return dir.appendingPathComponent("init.json")
-    }
-
-    // MARK: Codecs
-    //
-    // Encoder/decoder built per call rather than stored as static lets:
-    // (1) Swift 6 strict concurrency flags non-Sendable closures captured
-    //     by global state, and (2) this path is hit at most twice per
-    //     SDK launch (load + save), so the per-call cost is invisible.
-
-    private static func makeEncoder() -> JSONEncoder {
-        let e = JSONEncoder()
-        e.dateEncodingStrategy = .custom { date, encoder in
-            var c = encoder.singleValueContainer()
-            try c.encode(ISO8601DateFormatter.galva.string(from: date))
-        }
-        return e
-    }
-
-    private static func makeDecoder() -> JSONDecoder {
-        let d = JSONDecoder()
-        d.dateDecodingStrategy = .custom { decoder in
-            let c = try decoder.singleValueContainer()
-            let s = try c.decode(String.self)
-            if let date = ISO8601DateFormatter.galva.date(from: s) { return date }
-            let fallback = ISO8601DateFormatter()
-            fallback.formatOptions = [.withInternetDateTime]
-            if let date = fallback.date(from: s) { return date }
-            throw DecodingError.dataCorruptedError(
-                in: c, debugDescription: "Invalid ISO 8601 date: \(s)"
-            )
-        }
-        return d
     }
 }

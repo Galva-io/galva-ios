@@ -37,7 +37,6 @@
 
 import Foundation
 
-#if canImport(StoreKit)
 import StoreKit
 
 // MARK: - GalvaPurchaseController
@@ -56,8 +55,9 @@ public protocol GalvaPurchaseController: Sendable {
     /// - Returns: `.completed` with the verified transaction, `.pending` for
     ///   Ask to Buy / SCA, or `.cancelled` when the user dismissed the sheet.
     /// - Throws: A ``Galva/PurchaseError`` for failures the message should
-    ///   handle specifically (unavailable product, ineligible offer, …). Any
-    ///   other error reaches the message as a generic purchase failure.
+    ///   handle specifically (unavailable product, ineligible offer, …).
+    ///   `StoreKitError.userCancelled` counts as `.cancelled`; any other
+    ///   error reaches the message as a generic purchase failure.
     @MainActor
     func purchase(_ request: Galva.PurchaseRequest) async throws -> Galva.PurchaseResult
 }
@@ -77,6 +77,9 @@ public extension Galva {
         /// offer's signed claims.
         public let compactJWS: String
 
+        /// Build an offer by hand — for unit-testing a controller. Galva
+        /// builds real offers itself.
+        @_spi(Testing)
         public init(offerId: String, compactJWS: String) {
             self.offerId = offerId
             self.compactJWS = compactJWS
@@ -125,7 +128,8 @@ public extension Galva {
         /// Returns StoreKit's raw result with the transaction **unfinished**,
         /// so you can hand it to your billing layer (e.g. a "record purchase"
         /// API) and finish it there. Use this when your billing SDK can't
-        /// apply a Galva-signed promotional offer itself.
+        /// apply a Galva-signed promotional offer itself. A cancelled Apple ID
+        /// sign-in comes back as `.userCancelled` too, not as an error.
         ///
         /// - Throws: ``Galva/PurchaseError``.
         @MainActor
@@ -180,8 +184,8 @@ public extension Galva {
     static func setPurchaseController(_ controller: (any GalvaPurchaseController)?) {
         PurchaseControllerRegistry.current = controller
         let type = controller.map { String(describing: Swift.type(of: $0)) }
-        Task { @GalvaActor in
-            SDKCore.shared.logger.info(.configuration, "purchase controller set", metadata: [
+        SDKCore.shared.submit {
+            $0.logger.info(.purchases, "purchase controller set", metadata: [
                 "controller": type ?? "<built-in StoreKit>",
             ])
         }
@@ -210,5 +214,3 @@ enum PurchaseControllerRegistry {
         }
     }
 }
-
-#endif // canImport(StoreKit)

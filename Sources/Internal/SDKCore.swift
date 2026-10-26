@@ -11,10 +11,13 @@
 //  │  • `cachedEndUserId` mirrors the identified user id in a lock so the    │
 //  │    public synchronous getter `AppUser.identifiedUserId` can read it     │
 //  │    from any thread without awaiting.                                    │
+//  │  • The startup gate (`submit`) is lock-protected too, so public calls   │
+//  │    can be held synchronously while configure() runs.                    │
 //  │                                                                         │
 //  │  Lifecycle                                                              │
 //  │  • configure() — captures the UI snapshot on MainActor, wires up        │
-//  │                  IdentityStore + Uploader + MessageQueue.               │
+//  │                  IdentityStore + Uploader + MessageQueue. Public calls  │
+//  │                  made meanwhile wait, then run in call order.           │
 //  │  • identify/track/logOut — enqueue a Message; queue does the rest.      │
 //  │                                                                         │
 //  │  All emits go through MessageQueue → UploadConsumer → Uploader → HTTP.  │
@@ -28,14 +31,15 @@ import UIKit
 #if canImport(WebKit)
 import WebKit
 #endif
-#if canImport(StoreKit)
 import StoreKit
-#endif
 
 @GalvaActor
 final class SDKCore {
 
-    nonisolated static let shared = SDKCore()
+    /// The SDK every public entry point talks to. A test can put its own core
+    /// in its place with `SDKCoreTestBinding` — never bound in production.
+    nonisolated static var shared: SDKCore { SDKCoreTestBinding.core ?? instance }
+    nonisolated private static let instance = SDKCore()
 
     /// `nonisolated` + internal so tests can construct fresh instances
     /// (the production singleton would otherwise accumulate state across
@@ -45,29 +49,18 @@ final class SDKCore {
     // MARK: State
     //
     // A few members below are deliberately `internal` rather than `private`
-    // so that `SDKCore+Testing.swift` (a same-module extension) can wire
-    // pre-built dependencies in without going through the production
-    // `configure(apiKey:...)` path. Keep the *production* surface that
-    // touches these members in this file; testing helpers live in the
-    // extension.
+    // so that the test target's `configureForTesting` (reached through
+    // `@testable import`) can wire pre-built dependencies in without going
+    // through the production `configure(apiKey:...)` path.
 
     var configured = false
-    private var apiKey: String?
-    /// Selected backend (production / development / custom). Drives every
-    /// URL the SDK touches — base API, webview bundle CDN.
-    private(set) var environment: Galva.Environment = .production
-    private var autoTrack: Galva.AutoTrackCategory = []
     private var logLevel: Galva.LogLevel = .warning
+    /// How in-app messages reach the screen — `configure(…, inAppMessages:)`.
+    private var inAppMessagePresentation: InAppMessages.Presentation = .automatic
 
     var identity: IdentityStore?
     var queue: MessageQueue?
-    private var uploader: Uploader?
     var contextProvider: ContextProvider?
-
-    /// API client used for non-batch RPC calls (initialize, list/resolve
-    /// communications, bundle download). Independent of the batch
-    /// `Uploader` so the two surfaces evolve separately.
-    var apiClient: APIClient?
 
     /// SDK initialization: caches the /sdk/initialize response and exposes
     /// the resolved data (webview versions, batch config, products) to the
@@ -83,6 +76,11 @@ final class SDKCore {
     /// configure (flush survivors) and every foreground.
     var durableRequestQueue: DurableRequestQueue?
 
+    /// In-app messages shown without the server learning so — while opted
+    /// out — kept across launches so polls don't deliver them again. `nil`
+    /// before configure() lands.
+    var presentedMessageLog: PresentedMessageLog?
+
     /// Broadcast hub for the `InAppMessages.messages` AsyncStream. Held
     /// here because `InAppMessages.messages` (a `static var`) needs a
     /// stable per-SDK reference across calls.
@@ -95,9 +93,7 @@ final class SDKCore {
     /// message offers. Populated after each successful /sdk/initialize
     /// refresh; the WebView presenter injects its current snapshot as
     /// `window.galvaProducts` on every present.
-    #if canImport(StoreKit)
     var storeKitPrefetcher: StoreKitProductPrefetcher?
-    #endif
 
     /// `Transaction.all` sweeper that posts
     /// `(originalTransactionId, userId)` mappings to Galva so organic
@@ -105,9 +101,7 @@ final class SDKCore {
     /// to the right user even when no `appAccountToken` made it onto the
     /// App Store receipt. See
     /// https://docs.galva.io/integrations/app-store#match-purchases-to-subscribers
-    #if canImport(StoreKit)
     var transactionObserver: StoreKitTransactionObserver?
-    #endif
 
     /// Foreground lifecycle observer driving the in-app message poller.
     /// Held to keep the registration alive across the SDK's lifetime.
@@ -115,6 +109,11 @@ final class SDKCore {
     /// and we only ever assign / read it through GalvaActor code paths —
     /// the box is never mutated concurrently.
     nonisolated(unsafe) var lifecycleObserver: AppLifecycleObserver?
+
+    /// Presents published in-app messages in `.automatic` mode; `nil` in
+    /// `.manual` mode. `@MainActor`; held the same way as
+    /// `lifecycleObserver` for the SDK's lifetime.
+    nonisolated(unsafe) var messageDelivery: InAppMessageDelivery?
 
     /// Session tracker (auto-emits `session_start`). Created only when
     /// `autoTrackCategories` includes `.lifecycle` — `nil` otherwise so
@@ -133,12 +132,15 @@ final class SDKCore {
     /// `LevelFilterLogger` whenever the level OR the sink changes.
     private var sinkLogger: any GalvaLogger = OSLogLogger()
 
-    /// Logger used by every SDK call site. Always a `LevelFilterLogger`
-    /// wrapping `sinkLogger`. Recomputed when either dependency changes.
-    var logger: any GalvaLogger = LevelFilterLogger(
+    /// Logger used by every SDK call site and handed to every subsystem and
+    /// integration. Forwards to a `LevelFilterLogger` wrapping `sinkLogger`,
+    /// swapped in by `rebuildLogger()`, so loggers handed out at configure
+    /// follow later level and sink changes. `nonisolated` so synchronous
+    /// entry points can log.
+    nonisolated let logger = LiveLogger(LevelFilterLogger(
         minLevel: .warning,
         wrapped: OSLogLogger()
-    )
+    ))
 
     /// Thread-safe mirror of the identified endUserId. Mutated whenever
     /// identify/logOut runs on GalvaActor; read by `AppUser.identifiedUserId`
@@ -158,46 +160,38 @@ final class SDKCore {
     nonisolated private static let _appAccountTokenLock = NSLock()
     nonisolated(unsafe) private static var _appAccountToken: UUID?
 
-    /// Thread-safe mirror of `logger`, refreshed by `rebuildLogger()`. Read
-    /// by `CurrentSDKLogger`, which integrations log through, so their output
-    /// follows the configured level and any logger installed later with
-    /// `Galva.setLogger(_:)` — unlike a snapshot taken at install time.
-    nonisolated private static let _currentLoggerLock = NSLock()
-    nonisolated(unsafe) private static var _currentLogger: any GalvaLogger = LevelFilterLogger(
-        minLevel: .warning,
-        wrapped: OSLogLogger()
-    )
-
-    nonisolated static var currentLogger: any GalvaLogger {
-        _currentLoggerLock.lock()
-        defer { _currentLoggerLock.unlock() }
-        return _currentLogger
-    }
-
-    nonisolated private static func setCurrentLogger(_ value: any GalvaLogger) {
-        _currentLoggerLock.lock()
-        _currentLogger = value
-        _currentLoggerLock.unlock()
-    }
-
     // MARK: Opt-out
     //
     // Persisted "do not track" flag with a lock-protected mirror so the
     // public `Galva.isOptedOut` accessor can read sync from any thread.
-    // Same shape as `cachedEndUserId` above — load at configure(), mutate
-    // through a GalvaActor-isolated setter, read via the lock.
+    // Loaded at configure(); `Galva.setOptOut` sets it on the caller's
+    // thread, so it holds for every call made after it — configure's own
+    // work included.
     //
     // When opted out the SDK:
-    //   • drops every `track` / `identify` / `createEndpoint` /
-    //     `deleteEndpoint` / `setPreference` call silently
+    //   • drops every `track` / `identify` / `createEndpoint` call silently
     //   • skips the auto-tracked `session_start` emission
     //   • skips `Transaction.all` sweeps
-    //   • purges the persisted event queue on the false → true transition
+    //   • purges the persisted event queue on the false → true transition,
+    //     and at configure (for an opt-out made before the queue existed)
+    //   • doesn't send or queue the in-app page's analytics (every
+    //     `POST /communications/track` but `offer_completed`) — the bridge
+    //     answers them itself — and purges the ones still in the durable
+    //     apiFetch queue on the transition and before every drain
+    //   • remembers on the device the messages it shows, which the withheld
+    //     `offer_viewed` / `survey_viewed` would have marked presented on the
+    //     server, so later launches' polls don't deliver them again
     // In-app message polling + rendering keep working; opt-out blocks
-    // server-bound telemetry, not user-visible feature delivery.
+    // telemetry, not user-visible feature delivery. So these still go to
+    // Galva: the foreground poll and resolve (anonymousId, endUserId,
+    // storefront), bundle downloads, the page's requests for what the user
+    // does (survey answers, follow-up text, offer acceptance, the completed
+    // offer purchase's `offer_completed`) and the `appAccountToken` on
+    // purchases Galva starts.
 
     nonisolated private static let _optedOutLock = NSLock()
-    nonisolated(unsafe) private static var _optedOut: Bool = false
+    /// `nil` until loaded at configure() or set.
+    nonisolated(unsafe) private static var _optedOut: Bool?
     /// `nonisolated` so the static load / set helpers (called from non-
     /// GalvaActor contexts during configure() bootstrap) can reach it.
     nonisolated static let optedOutDefaultsKey = "co.galva.optedOut"
@@ -206,7 +200,7 @@ final class SDKCore {
     nonisolated var isOptedOut: Bool {
         Self._optedOutLock.lock()
         defer { Self._optedOutLock.unlock() }
-        return Self._optedOut
+        return Self._optedOut ?? false
     }
 
     /// Set the cached + persisted opt-out flag. Returns `true` if the
@@ -218,7 +212,7 @@ final class SDKCore {
         defaults: UserDefaults = .standard
     ) -> Bool {
         _optedOutLock.lock()
-        let changed = _optedOut != value
+        let changed = (_optedOut ?? false) != value
         _optedOut = value
         _optedOutLock.unlock()
         defaults.set(value, forKey: optedOutDefaultsKey)
@@ -226,26 +220,32 @@ final class SDKCore {
     }
 
     /// Load the persisted opt-out flag into the in-memory mirror. Called
-    /// once at `configure()`.
+    /// once at `configure()`. A flag `Galva.setOptOut` set before then wins
+    /// — it may not have reached `defaults` yet.
     nonisolated static func loadOptedOutFlag(defaults: UserDefaults = .standard) {
-        let value = defaults.bool(forKey: optedOutDefaultsKey)
         _optedOutLock.lock()
-        _optedOut = value
-        _optedOutLock.unlock()
+        defer { _optedOutLock.unlock() }
+        guard _optedOut == nil else { return }
+        _optedOut = defaults.bool(forKey: optedOutDefaultsKey)
     }
 
-    /// GalvaActor-isolated entry point used by `Galva.setOptOut(_:)`.
-    /// Persists the flag and purges the queue on the false → true
-    /// transition so pre-existing events don't leak after the user opts
-    /// out.
-    func setOptedOut(_ value: Bool) async {
-        let changed = Self.setOptedOutFlag(value)
-        guard changed else { return }
+    /// `Galva.setOptOut(_:)`: set the flag now, then purge the queue once the
+    /// SDK takes calls.
+    nonisolated func requestOptOut(_ value: Bool, defaults: UserDefaults = .standard) {
+        guard Self.setOptedOutFlag(value, defaults: defaults) else { return }
+        submit { await $0.optOutDidChange(to: value) }
+    }
+
+    /// Purge the queues on the false → true transition so pre-existing
+    /// events don't leak after the user opts out. Internal so the tests'
+    /// `setOptedOut` can await it.
+    func optOutDidChange(to value: Bool) async {
         if value {
             // Drop everything still on disk so opting back in doesn't
             // resurrect events the user wanted ignored.
             try? await queue?.clearQueue()
-            logger.info(.configuration, "opted out — event queue purged")
+            await purgeQueuedPageAnalytics()
+            logger.info(.configuration, "opted out — queued events purged")
         } else {
             logger.info(.configuration, "opted back in")
         }
@@ -278,27 +278,98 @@ final class SDKCore {
         Self._appAccountTokenLock.unlock()
     }
 
-    var currentEndUserId: String? { identity?.endUserId }
-    var currentAnonymousId: String? { identity?.anonymousId }
+    // MARK: Startup gate
+    //
+    // `Galva.configure` returns before `configure()` runs, and `configure()`
+    // suspends (MainActor snapshot, seed identify) before the SDK can take
+    // calls. Public entry points go through `submit(_:)`, which holds their
+    // work while a configure is pending and starts it, in call order, once
+    // configure can take it — before the queue uploads what a previous
+    // launch left. Calls made before any configure run straight away and
+    // drop with a warning, as before.
+
+    private enum ConfigurePhase {
+        /// No configure requested yet.
+        case idle
+        /// `Galva.configure` claimed configuration; `configure()` hasn't started.
+        case claimed
+        /// `configure()` is running.
+        case running
+        /// `configure()` takes calls (its queue may still be starting).
+        case finished
+    }
+
+    nonisolated private let phaseLock = NSLock()
+    nonisolated(unsafe) private var phase: ConfigurePhase = .idle
+    /// Work submitted while configure is pending, in call order.
+    nonisolated(unsafe) private var heldWork: [@Sendable @GalvaActor (SDKCore) async -> Void] = []
+
+    /// Claim configuration for `Galva.configure`, synchronously, so a repeat
+    /// call is refused before either reaches GalvaActor. Logs and returns
+    /// `false` when configuration was already claimed.
+    nonisolated func claimConfiguration() -> Bool {
+        phaseLock.lock()
+        let claimed = phase == .idle
+        if claimed { phase = .claimed }
+        phaseLock.unlock()
+        if !claimed {
+            logger.warning(.configuration, "configure called more than once — ignoring")
+        }
+        return claimed
+    }
+
+    /// Mark `configure()` as running. Called before its first await, so a
+    /// second configure that lands while it's suspended is refused.
+    func beginConfiguring() -> Bool {
+        phaseLock.lock()
+        defer { phaseLock.unlock() }
+        guard phase == .idle || phase == .claimed else { return false }
+        phase = .running
+        return true
+    }
+
+    /// Start the work held while configuring, in call order, and stop holding.
+    private func openStartupGate() {
+        phaseLock.lock()
+        defer { phaseLock.unlock() }
+        phase = .finished
+        for work in heldWork {
+            Task { @GalvaActor in await work(self) }
+        }
+        heldWork.removeAll()
+    }
+
+    /// Run `work` on GalvaActor — the path every public entry point takes.
+    /// Held while a configure is pending; otherwise started now. Tasks are
+    /// created under the lock, so a new call can't overtake held ones.
+    nonisolated func submit(_ work: @escaping @Sendable @GalvaActor (SDKCore) async -> Void) {
+        phaseLock.lock()
+        defer { phaseLock.unlock() }
+        switch phase {
+        case .claimed, .running:
+            heldWork.append(work)
+        case .idle, .finished:
+            Task { @GalvaActor in await work(self) }
+        }
+    }
 
     // MARK: Configure
 
     func configure(
         apiKey: String,
-        environment: Galva.Environment = .production,
+        environment: Galva.Environment,
         autoTrack: Galva.AutoTrackCategory,
         logLevel: Galva.LogLevel,
-        userLogger: (any GalvaLogger)? = nil,
-        integrations: [Galva.Integration] = []
+        userLogger: (any GalvaLogger)?,
+        inAppMessages: InAppMessages.Presentation,
+        integrations: [Galva.Integration]
     ) async {
-        guard !configured else {
+        guard beginConfiguring() else {
             logger.warning(.configuration, "configure called more than once — ignoring")
             return
         }
 
-        self.apiKey = apiKey
-        self.environment = environment
-        self.autoTrack = autoTrack
+        self.inAppMessagePresentation = inAppMessages
         self.logLevel = logLevel
         if let userLogger {
             self.sinkLogger = userLogger
@@ -317,7 +388,8 @@ final class SDKCore {
         let snapshot = await MainActor.run { DeviceSnapshot.capture() }
         // Seed the context with any device push token persisted from a previous
         // launch so `context.device.token` is populated from the first message.
-        self.contextProvider = ContextProvider(deviceToken: identity.deviceToken, snapshot: snapshot)
+        let contextProvider = ContextProvider(deviceToken: identity.deviceToken, snapshot: snapshot)
+        self.contextProvider = contextProvider
         setCachedEndUserId(identity.endUserId)
         // Seed the resolved purchase token so `AppUser.appAccountToken` returns
         // the generated token (anonymousId-as-UUID) even before any identify().
@@ -329,7 +401,6 @@ final class SDKCore {
             session: .shared,
             logger: logger
         )
-        self.uploader = uploader
 
         let consumer = UploadConsumer(uploader: uploader, logger: logger)
         let queue = MessageQueue(
@@ -355,7 +426,7 @@ final class SDKCore {
         if autoTrack.contains(.lifecycle) {
             self.sessionTracker = SessionTracker(
                 logger: logger,
-                contextProvider: self.contextProvider ?? ContextProvider(),
+                contextProvider: contextProvider,
                 isOptedOut: { [weak self] in self?.isOptedOut ?? false },
                 trackHandler: { [weak self] event in
                     await self?.track(event)
@@ -370,19 +441,6 @@ final class SDKCore {
             logger: logger
         )
 
-        await queue.startRunloop()
-        configured = true
-        logger.info(.configuration, "SDK configured", metadata: [
-            "environment": String(describing: environment),
-            "logLevel": String(describing: logLevel),
-            "anonymousId": identity.anonymousId,
-        ])
-
-        // Seed built-in traits ($gv_timezone, $gv_languageCode) for the
-        // current anonymous user so the server has them before any explicit
-        // identify() call.
-        await identify(userId: nil, appAccountToken: nil, traits: nil)
-
         // Resolve Apple Search Ads attribution (once per install) off the
         // configure path — it makes a network round-trip + may sleep between
         // 404 retries, so it must not block startup. The resolver persists the
@@ -394,7 +452,7 @@ final class SDKCore {
         }
 
         // If we restored cached init data, apply its server-tuned batch
-        // window to the freshly-built queue immediately — that way the
+        // window to the freshly-built queue before it starts — that way the
         // first session honors yesterday's tuning instead of running on
         // bare defaults until the refresh lands.
         if let cached = initializationManager?.current {
@@ -420,13 +478,45 @@ final class SDKCore {
                         maxCount: live.batchCollection.flushAtCount
                     )
                 }
-                #if canImport(StoreKit)
                 self.storeKitPrefetcher?.prefetch(productIds: live.storekitProductIds)
-                #endif
             }
         }
 
+        logger.info(.configuration, "SDK configured", metadata: [
+            "environment": String(describing: environment),
+            "logLevel": String(describing: logLevel),
+            "anonymousId": identity.anonymousId,
+        ])
+        await finishConfiguring(queue: queue, integrations: integrations)
+    }
+
+    /// The end of `configure()`, shared with the tests' `configureForTesting`:
+    /// seed the anonymous identify, replay a deep link that arrived early, run
+    /// the calls the app made meanwhile, then start the queue. Those calls
+    /// don't wait for the queue to upload what a previous launch left, which
+    /// can take a while. Until the queue starts, emits are only stored, so the
+    /// seed identify still goes out first.
+    func finishConfiguring(queue: MessageQueue, integrations: [Galva.Integration]) async {
+        configured = true
+        // The user opted out before this launch's queue existed, so nothing
+        // purged what's on disk.
+        if isOptedOut {
+            try? await queue.clearQueue()
+        }
+
+        // Seed built-in traits ($gv_timezone, $gv_languageCode) for the
+        // current anonymous user so the server has them before any explicit
+        // identify() call.
+        await identify(userId: nil, appAccountToken: nil, traits: nil)
+        // Replay a deep link that arrived before configure. The seed identify
+        // above does this too, but returns early when opted out — and in-app
+        // messages keep working under opt-out.
+        resolveDeferredDeepLinkIfReady()
+
         installIntegrations(integrations)
+        // Run the calls the app made while configure ran.
+        openStartupGate()
+        await queue.startRunloop()
     }
 
     /// Install integrations once the SDK is configured. Each runs in its own
@@ -434,7 +524,7 @@ final class SDKCore {
     /// integration can't hold up the SDK.
     func installIntegrations(_ integrations: [Galva.Integration]) {
         guard !integrations.isEmpty else { return }
-        let context = Galva.IntegrationContext(logger: CurrentSDKLogger())
+        let context = Galva.IntegrationContext(logger: logger)
         for integration in integrations {
             logger.info(.integration, "installing integration", metadata: [
                 "name": integration.name,
@@ -462,7 +552,6 @@ final class SDKCore {
             session: .shared,
             logger: logger
         )
-        self.apiClient = apiClient
 
         // Initialization cache — non-fatal if the disk path can't be made.
         let initCache: InitializationCache?
@@ -491,14 +580,12 @@ final class SDKCore {
                 logger: logger
             )
         } catch {
-            logger.warning(.configuration, "bundle cache disabled (no disk)", error: error)
+            logger.warning(.inAppMessages, "bundle cache disabled (no disk)", error: error)
             bundleCache = nil
         }
         self.bundleCache = bundleCache
 
-        // StoreKit warm-cache. Always available on Apple platforms; the
-        // canImport guard is defensive for non-Apple builds (linux).
-        #if canImport(StoreKit)
+        // StoreKit warm-cache.
         self.storeKitPrefetcher = StoreKitProductPrefetcher(logger: logger)
         // Warm immediately if we have cached init data — yesterday's
         // catalog is a fine starting point on cold start. The refresh
@@ -517,7 +604,6 @@ final class SDKCore {
             identity: identity,
             logger: logger
         )
-        #endif
 
         // Durable retry queue for `shouldRetry` apiFetch requests. Owns its
         // own SQLite store (separate failure domain from the event queue) and
@@ -527,9 +613,10 @@ final class SDKCore {
             logger: logger
         )
         self.durableRequestQueue = durableRequestQueue
-        // Flush any requests that survived the previous launch. Forced — a
-        // fresh launch is a good moment to attempt immediately.
-        Task { @GalvaActor in await durableRequestQueue.drain(force: true) }
+        let presentedMessageLog = PresentedMessageLog()
+        self.presentedMessageLog = presentedMessageLog
+        // Flush any requests that survived the previous launch.
+        Task { @GalvaActor [weak self] in await self?.drainDurableRequests() }
 
         // Manager — only constructible if both bundleCache and initManager
         // came up. Without them in-app messaging cannot function.
@@ -541,7 +628,9 @@ final class SDKCore {
             bundleCache: bundleCache,
             initialization: initManager,
             logger: logger,
-            durableRequestQueue: durableRequestQueue
+            isOptedOut: { [weak self] in self?.isOptedOut ?? false },
+            durableRequestQueue: durableRequestQueue,
+            presentedMessageLog: presentedMessageLog
         )
         self.inAppMessageManager = manager
 
@@ -550,7 +639,20 @@ final class SDKCore {
         // StoreKit transaction sweep, and the session tracker. All
         // three run on every foreground (cold start + return from
         // background); each gates internally on the relevant config.
+        let presentation = inAppMessagePresentation
+        let stream = inAppMessageStream
         Task { @MainActor [weak self] in
+            // `.automatic`: subscribe the delivery BEFORE the observer starts,
+            // so its first foreground poll's message goes straight to the
+            // presenter. `.manual`: the app reads the stream itself.
+            if presentation == .automatic {
+                let delivery = InAppMessageDelivery()
+                delivery.start(messages: stream.makeStream()) { [weak self] message in
+                    await self?.presentAutomatically(message)
+                }
+                self?.messageDelivery = delivery
+            }
+
             let observer = AppLifecycleObserver { [weak self] in
                 Task { @GalvaActor in
                     guard let self else { return }
@@ -564,23 +666,43 @@ final class SDKCore {
                     await self.inAppMessageManager?.poll()
                     // Transaction observer is server-bound telemetry —
                     // skip when opted out so we don't leak originalIds.
-                    #if canImport(StoreKit)
                     if !self.isOptedOut {
                         await self.transactionObserver?.sweep()
                     }
-                    #endif
                     // Retry any durable apiFetch requests that failed earlier
-                    // (network was down, app was killed mid-flight). Forced —
-                    // foreground is a good moment to retry sooner than the
-                    // backoff window, and it's naturally rate-limited. Not
-                    // opt-out gated — these are bundle-initiated user actions,
-                    // consistent with in-app messaging continuing under opt-out.
-                    await self.durableRequestQueue?.drain(force: true)
+                    // (network was down, app was killed mid-flight).
+                    await self.drainDurableRequests()
                 }
             }
             self?.lifecycleObserver = observer
             observer.start()
         }
+    }
+
+    /// Deliver what the durable apiFetch queue holds — at launch and on every
+    /// foreground. Forced: both are good moments to try sooner than the
+    /// backoff window, and they're naturally rate-limited.
+    func drainDurableRequests() async {
+        guard let durableRequestQueue else { return }
+        // An opt-out made before this launch's queue existed (in an earlier
+        // launch, or `setOptOut` before `configure`) hasn't purged it.
+        if isOptedOut { await purgeQueuedPageAnalytics() }
+        await durableRequestQueue.drain(force: true)
+    }
+
+    /// Drop the in-app page's analytics still waiting in the durable
+    /// apiFetch queue, so they go out neither now nor after the user opts
+    /// back in. The page's other queued requests stay, `offer_completed`
+    /// among them. A dropped `offer_viewed` / `survey_viewed` would have
+    /// marked its message presented on the server, so the device remembers
+    /// it instead.
+    private func purgeQueuedPageAnalytics() async {
+        guard let durableRequestQueue else { return }
+        let removed = await durableRequestQueue.removeAll {
+            SDKConstants.isPageAnalytics(path: $0.path, body: $0.body)
+        }
+        let presented = removed.compactMap { CommunicationTrackBody($0.body)?.presentedCommunicationId }
+        presentedMessageLog?.record(presented)
     }
 
     /// Install a custom logger after configure. The level filter set at
@@ -595,8 +717,7 @@ final class SDKCore {
     /// Rebuild `logger` to wrap the current `sinkLogger` at the current
     /// `logLevel`. Called whenever either changes.
     private func rebuildLogger() {
-        self.logger = LevelFilterLogger(minLevel: logLevel, wrapped: sinkLogger)
-        Self.setCurrentLogger(logger)
+        logger.target = LevelFilterLogger(minLevel: logLevel, wrapped: sinkLogger)
     }
 
     /// Handle a fresh APNs device token (hex). Persists it device-scoped,
@@ -638,8 +759,8 @@ final class SDKCore {
     private(set) var deferredDeepLink: DeepLink?
 
     /// Router for incoming Galva deep links, forwarded from
-    /// `Galva.handleOpenURL(_:)` (auto-attached by the SwiftUI
-    /// `.galvaConfigure(...)` modifier, or called manually from UIKit). The
+    /// `Galva.handleOpenURL(_:)` (called from a SwiftUI `onOpenURL`, or by the
+    /// UIKit delegate mirrors in `Galva+OpenURL.swift`). The
     /// caller has already confirmed the `gv` scheme; here we parse the URL
     /// into a typed `DeepLink` and route it — dispatching now, or deferring
     /// until the SDK can resolve it (see `route(_:)`).
@@ -703,8 +824,8 @@ final class SDKCore {
     }
 
     /// Replay a deferred deep link once the SDK can resolve it — called after
-    /// `identify()` (which `configure()` also invokes for the anonymous seed,
-    /// covering a returning identified user whose id was restored from disk).
+    /// `identify()` and at the end of `configure()` (covering a returning
+    /// identified user whose id was restored from disk, opted out or not).
     /// No-op when nothing is pending or resolution still isn't possible.
     /// Clears the slot synchronously, then dispatches on a detached actor task
     /// so a long present flow never blocks the `identify()` / `configure()`
@@ -746,6 +867,9 @@ final class SDKCore {
         // binding actually changes) so we can re-associate the device push
         // token with the new user afterwards.
         var userDidChange = false
+        // One identified user replaced by another (not a first login): the
+        // previous user's token override and in-app state don't carry over.
+        var userDidSwitch = false
         if let userId {
             // Emit a higher-level state-transition log when the end-user
             // binding actually changes (was nil → now set, or switched users)
@@ -754,6 +878,7 @@ final class SDKCore {
             let previous = identity.endUserId
             if previous != userId {
                 userDidChange = true
+                userDidSwitch = previous != nil
                 logger.info(.identity, "endUserId changed", metadata: [
                     "from": previous ?? "<anonymous>",
                     "to": userId,
@@ -761,6 +886,15 @@ final class SDKCore {
             }
             identity.setEndUserId(userId)
             setCachedEndUserId(userId)
+            if userDidSwitch {
+                // Now, not after the emit below, which can suspend for an upload.
+                resetUserScopedState()
+                // A token passed with this identify replaces the override below.
+                if appAccountToken == nil {
+                    identity.setAppAccountToken(nil)
+                    setCachedAppAccountToken(identity.purchaseAttributionToken)
+                }
+            }
         }
 
         var mergedTraits = traits ?? [:]
@@ -847,16 +981,8 @@ final class SDKCore {
         // rotateAnonymousId() also cleared the override, so the resolved token
         // is now the fresh anonymousId-as-UUID — refresh the public mirror.
         setCachedAppAccountToken(identity.purchaseAttributionToken)
-        // Clear in-memory caches scoped to the previous identity so the
-        // post-logout anonymous user starts clean. In-app message dedupe
-        // + resolved-payload cache wouldn't apply to the new user; the
-        // transaction-observer dedupe must clear so the new anonymousId
-        // gets the device's full historical mapping re-posted (the
-        // server then aliases them onto whoever calls `identify` next).
-        inAppMessageManager?.reset()
-        #if canImport(StoreKit)
-        transactionObserver?.reset()
-        #endif
+        // The post-logout anonymous user starts clean.
+        resetUserScopedState()
         // Seed built-in traits for the freshly-rotated anonymous user.
         await identify(userId: nil, appAccountToken: nil, traits: nil)
         // Re-associate the device's push token with the new anonymous identity
@@ -864,6 +990,24 @@ final class SDKCore {
         // without the developer re-sending it. (The seed identify above is a
         // nil-userId call, so it doesn't trigger the login-transition path.)
         await registerCurrentDeviceTokenEndpoint()
+    }
+
+    /// Clear in-memory caches scoped to the previous identity, on `logOut()`
+    /// and when `identify` switches users. In-app message dedupe + resolved-
+    /// payload cache wouldn't apply to the new user, and a message held for
+    /// the app's (not yet started) `.manual` loop was addressed to the old
+    /// one. The transaction-observer dedupe must clear so the device's full
+    /// historical mapping is re-posted for the new identity.
+    ///
+    /// Synchronous, so it lands in the same step as the identity change: a
+    /// poll for the previous identity that returns later is dropped, and one
+    /// started later is the new identity's. The held-message discard is
+    /// queued on the main actor now, ahead of anything such a poll publishes.
+    private func resetUserScopedState() {
+        inAppMessageManager?.reset()
+        let stream = inAppMessageStream
+        Task { @MainActor in stream.discardHeldMessage() }
+        transactionObserver?.reset()
     }
 
     // MARK: Transaction reconciliation
@@ -880,12 +1024,10 @@ final class SDKCore {
     /// Idempotent: safe to call repeatedly.
     func reconcileTransactions() async {
         guard !isOptedOut else {
-            logger.debug(.identity, "reconcileTransactions skipped (opted out)")
+            logger.debug(.purchases, "reconcileTransactions skipped (opted out)")
             return
         }
-        #if canImport(StoreKit)
         await transactionObserver?.sweep()
-        #endif
     }
 
     // MARK: Track
@@ -915,7 +1057,7 @@ final class SDKCore {
             anonymousId: identity.anonymousId,
             endUserId: identity.endUserId,
             context: contextProvider.currentContext(),
-            body: .track(event: event, properties: properties, sourceType: nil, sourceId: nil)
+            body: .track(event: event, properties: properties)
         )
         await queue.emit(msg)
     }
@@ -933,12 +1075,6 @@ final class SDKCore {
             logger.warning(.identity, "createEndpoint called before configure() — dropping")
             return
         }
-        // Reject an invalid email at ingestion so it never reaches the server
-        // (mirrors the backend's validation). Don't log the address itself — PII.
-        if case .email(let address) = endpoint, !EmailValidator.isValid(address) {
-            logger.warning(.identity, "createEndpoint dropped — invalid email address")
-            return
-        }
         logger.debug(.identity, "createEndpoint", metadata: [
             "channel": endpoint.channelType.rawValue,
         ])
@@ -951,39 +1087,32 @@ final class SDKCore {
         await queue.emit(msg)
     }
 
-    func deleteEndpoint(_ endpoint: CommunicationEndpoint) async {
-        guard !isOptedOut else {
-            logger.debug(.identity, "deleteEndpoint dropped (opted out)", metadata: [
-                "channel": endpoint.channelType.rawValue,
-            ])
-            return
-        }
-        guard let queue, let identity, let contextProvider else {
-            logger.warning(.identity, "deleteEndpoint called before configure() — dropping")
-            return
-        }
-        // Same validation as create — never send a malformed address upstream.
-        if case .email(let address) = endpoint, !EmailValidator.isValid(address) {
-            logger.warning(.identity, "deleteEndpoint dropped — invalid email address")
-            return
-        }
-        logger.debug(.identity, "deleteEndpoint", metadata: [
-            "channel": endpoint.channelType.rawValue,
-        ])
-        let msg = Message(
-            anonymousId: identity.anonymousId,
-            endUserId: identity.endUserId,
-            context: contextProvider.currentContext(),
-            body: .deleteCommunicationEndpoint(endpoint)
-        )
-        await queue.emit(msg)
-    }
-
     // MARK: In-app messages
 
+    /// `.automatic` presentation: show `message` on the app's active window
+    /// scene. A failure — no window yet, the message is no longer valid, its
+    /// page can't download — is logged and nothing appears, the same as a
+    /// deep link that can't present; a later poll may deliver it again.
+    func presentAutomatically(_ message: InAppMessages.Message) async {
+        #if canImport(UIKit) && canImport(WebKit)
+        do {
+            try await showInAppMessage(message)
+        } catch {
+            logger.warning(.inAppMessages, "in-app message not shown", metadata: [
+                "messageId": message.id,
+            ], error: error)
+        }
+        #else
+        logger.debug(.inAppMessages, "in-app message not shown — automatic presentation needs UIKit", metadata: [
+            "messageId": message.id,
+        ])
+        #endif
+    }
+
     #if canImport(UIKit) && canImport(WebKit)
-    /// Drive the WebView overlay for a single message. Throws if the
-    /// SDK is not configured or the bundle / payload can't be resolved.
+    /// Drive the WebView overlay for a single message. Throws an
+    /// `InAppMessages.Error` if the SDK is not configured, or the message
+    /// can't be resolved, downloaded or presented.
     func showInAppMessage(
         _ message: InAppMessages.Message,
         in scene: UIWindowScene? = nil,
@@ -1008,18 +1137,12 @@ final class SDKCore {
         // It crosses as `[String: AnyJSONValue]` (a Sendable, structured JSON
         // value), NOT a pre-serialized string: the presenter / factory owns
         // serialization at the `window.galvaProducts` injection boundary.
-        #if canImport(StoreKit)
         let products = storeKitPrefetcher?.currentSummaryObject() ?? [:]
-        #else
-        let products: [String: AnyJSONValue] = [:]
-        #endif
 
         // Snapshot the prefetcher reference too — it crosses the hop as
         // a sendable reference (GalvaActor-isolated class, but reference
         // passing is safe; we only call its methods through await).
-        #if canImport(StoreKit)
         let prefetcher = self.storeKitPrefetcher
-        #endif
 
         // Hop to MainActor to construct / reuse the presenter. The
         // presenter then runs its async show() on the main actor.
@@ -1029,7 +1152,6 @@ final class SDKCore {
                 if let existing = self.presenter {
                     presenter = existing
                 } else {
-                    #if canImport(StoreKit)
                     presenter = InAppMessagePresenter(
                         messageManager: manager,
                         identity: identity,
@@ -1037,14 +1159,6 @@ final class SDKCore {
                         storeKitPrefetcher: prefetcher,
                         logger: snapshotLogger
                     )
-                    #else
-                    presenter = InAppMessagePresenter(
-                        messageManager: manager,
-                        identity: identity,
-                        bundleCache: bundleCache,
-                        logger: snapshotLogger
-                    )
-                    #endif
                     self.presenter = presenter
                 }
                 return presenter
@@ -1056,9 +1170,10 @@ final class SDKCore {
             )
         } catch {
             // Nothing was shown — restore the stint's budget so polling can
-            // resume on the next return event / explicit check.
-            manager.releaseDisplaySlot(messageId: message.id)
-            throw error
+            // resume on the next return event / explicit check, and let that
+            // poll deliver this message again if it might show then.
+            manager.presentationFailed(messageId: message.id, error: error)
+            throw InAppMessages.Error(error)
         }
     }
 
@@ -1075,9 +1190,9 @@ final class SDKCore {
     /// coordinator's `@Published` state and dismissal binding.
     ///
     /// Throws `InAppMessages.Error` on failure: `notConfigured`,
-    /// `messageNotFound`, or `bundleUnavailable`. The caller surfaces
-    /// these by clearing the presenting binding (which dismisses the
-    /// sheet).
+    /// `messageNotFound`, `requestFailed`, or `bundleUnavailable`. The
+    /// caller surfaces these by clearing the presenting binding (which
+    /// dismisses the sheet).
     func prepareInAppMessage(
         _ message: InAppMessages.Message,
         host: any InAppMessageHost
@@ -1092,42 +1207,47 @@ final class SDKCore {
 
         // 1. Resolve payload — also caches it for the bridge's
         //    `getMessageData()` to serve immediately.
-        let resolved = try await manager.resolve(messageId: message.id)
-        guard let resolved else {
-            throw InAppMessages.Error.messageNotFound
-        }
-
         // 2. Resolve / download the bundle file URL.
+        //    On failure no sheet appears: roll back as `showInAppMessage`
+        //    does, so a later poll can deliver the message again if it might
+        //    show then.
+        let webviewVersion: String
         let bundleURL: URL
         do {
-            bundleURL = try await bundleCache.bundleURL(for: resolved.webviewVersion)
+            guard let version = try await manager.resolve(messageId: message.id) else {
+                throw InAppMessageError.messageNotFound
+            }
+            webviewVersion = version
+            do {
+                bundleURL = try await bundleCache.bundleURL(for: version)
+            } catch {
+                throw InAppMessageError.bundleUnavailable
+            }
         } catch {
-            throw InAppMessages.Error.bundleUnavailable
+            manager.presentationFailed(messageId: message.id, error: error)
+            throw InAppMessages.Error(error)
         }
 
         // 3. Snapshot StoreKit products + prefetcher reference on the
         //    GalvaActor before crossing to MainActor. Products cross as a
         //    Sendable `[String: AnyJSONValue]`; the factory serializes them
         //    at the `window.galvaProducts` injection boundary.
-        #if canImport(StoreKit)
         let products = storeKitPrefetcher?.currentSummaryObject() ?? [:]
         let prefetcher = self.storeKitPrefetcher
-        #else
-        let products: [String: AnyJSONValue] = [:]
-        #endif
 
-        // 4. Mark active so the bridge's getPageContext / getMessageData
-        //    / requestPurchase calls all see this id. Synchronous —
-        //    we're already on the GalvaActor with the manager.
+        // 4. Mark active: spends the stint's display slot and records the
+        //    message as presented, so later polls and deep links don't
+        //    surface it again. Synchronous — we're already on the
+        //    GalvaActor with the manager.
         manager.setActiveMessageId(message.id)
 
-        // 5. Build the WebView + bridge on the main actor, load the
-        //    file URL, and hand the pair back. The coordinator retains
-        //    both for the lifetime of the sheet.
+        // 5. Build the WebView + bridge on the main actor — with the same
+        //    navigation policy as the UIKit sheet — and hand the pair back.
+        //    The coordinator retains both for the lifetime of the sheet.
         return await MainActor.run {
-            #if canImport(StoreKit)
             let (webView, bridge) = InAppMessageWebViewFactory.make(
                 messageId: message.id,
+                bundleURL: bundleURL,
                 messageManager: manager,
                 identity: identity,
                 storeKitPrefetcher: prefetcher,
@@ -1135,66 +1255,23 @@ final class SDKCore {
                 prefetchedProducts: products,
                 logger: snapshotLogger
             )
-            #else
-            let (webView, bridge) = InAppMessageWebViewFactory.make(
-                messageId: message.id,
-                messageManager: manager,
-                identity: identity,
-                host: host,
-                prefetchedProducts: products,
-                logger: snapshotLogger
-            )
-            #endif
             // NOTE: the bundle is NOT loaded here. The coordinator loads it from
             // the sheet's `onAppear`, so the page boots (and reads safe-area
             // insets) only once the WebView is in the sheet's window — otherwise
             // getPageContext() could read `.zero` insets off-screen.
-            snapshotLogger.info(.identity, "SwiftUI sheet preparing", metadata: [
+            snapshotLogger.info(.inAppMessages, "SwiftUI sheet preparing", metadata: [
                 "messageId": message.id,
-                "version": resolved.webviewVersion,
+                "version": webviewVersion,
             ])
             return PreparedInAppMessage(webView: webView, bridge: bridge, bundleURL: bundleURL)
         }
     }
 
     /// Clear the active message id. Called by the SwiftUI coordinator on
-    /// dismiss so the bridge doesn't serve stale `getMessageData()` /
-    /// `requestPurchase` calls to a sheet that's already off screen.
+    /// dismiss so, with nothing on screen, the next return event's poll can
+    /// reset the stint's display slot.
     func clearActiveMessage() async {
         inAppMessageManager?.setActiveMessageId(nil)
     }
     #endif
-
-    func setPreference(
-        channel: CommunicationEndpoint.ChannelType,
-        disabled: Bool?,
-        categories: [String: Bool]?
-    ) async {
-        guard !isOptedOut else {
-            logger.debug(.identity, "setPreference dropped (opted out)", metadata: [
-                "channel": channel.rawValue,
-            ])
-            return
-        }
-        guard let queue, let identity, let contextProvider else {
-            logger.warning(.identity, "setPreference called before configure() — dropping")
-            return
-        }
-        logger.debug(.identity, "setPreference", metadata: [
-            "channel": channel.rawValue,
-            "disabled": disabled.map(String.init(describing:)) ?? "<unset>",
-            "categoryCount": String(categories?.count ?? 0),
-        ])
-        let msg = Message(
-            anonymousId: identity.anonymousId,
-            endUserId: identity.endUserId,
-            context: contextProvider.currentContext(),
-            body: .setCommunicationPreference(
-                channelType: channel,
-                disabled: disabled,
-                categories: categories
-            )
-        )
-        await queue.emit(msg)
-    }
 }

@@ -37,10 +37,6 @@ final class InitializationManager {
     /// launch and the network is unreachable).
     private(set) var current: InitializationData?
 
-    /// Continuations to fan-out the first non-nil `current` to callers
-    /// awaiting `awaitInitialized()`. Resolved exactly once each.
-    private var pendingWaiters: [CheckedContinuation<InitializationData?, Never>] = []
-
     init(
         client: APIClient,
         cache: InitializationCache?,
@@ -61,7 +57,6 @@ final class InitializationManager {
             return
         }
         self.current = cached
-        resolveWaiters(with: cached)
         logger.info(.configuration, "init data loaded from cache", metadata: [
             "webviewVersions": String(cached.webviewVersions.count),
             "storekitProductIds": String(cached.storekitProductIds.count),
@@ -78,7 +73,6 @@ final class InitializationManager {
                 body: body
             )
             self.current = response.data
-            resolveWaiters(with: response.data)
             if let cache {
                 do {
                     try cache.save(response.data)
@@ -96,31 +90,8 @@ final class InitializationManager {
             logger.warning(.configuration, "init refresh failed — keeping cached data",
                            metadata: ["retryable": String(error.isRetryable)],
                            error: error)
-            // Fan-out cached value (or nil) so we don't strand awaiters when
-            // network is permanently unavailable on first launch.
-            resolveWaiters(with: current)
         } catch {
             logger.warning(.configuration, "init refresh failed (unexpected)", error: error)
-            resolveWaiters(with: current)
         }
-    }
-
-    /// Suspend until initialization data is available (cached OR freshly
-    /// fetched). Resolves with `nil` only when both fail (first-launch +
-    /// offline). Callers should treat `nil` as "fall back to bare defaults".
-    func awaitInitialized() async -> InitializationData? {
-        if let current { return current }
-        return await withCheckedContinuation { (c: CheckedContinuation<InitializationData?, Never>) in
-            pendingWaiters.append(c)
-        }
-    }
-
-    // MARK: - Internal helpers
-
-    private func resolveWaiters(with value: InitializationData?) {
-        guard !pendingWaiters.isEmpty else { return }
-        let waiters = pendingWaiters
-        pendingWaiters.removeAll(keepingCapacity: false)
-        for c in waiters { c.resume(returning: value) }
     }
 }

@@ -2,13 +2,16 @@
 //  AppLifecycleObserver.swift
 //  Galva
 //
-//  Single source of truth for "the app just became foreground" events.
+//  Single source of truth for "the app just became active" events.
 //
-//  Per the in-app messaging docs, we poll only on these two triggers:
+//  Per the in-app messaging docs, we poll only on these triggers:
 //      • App open (cold start)
-//      • Return from background to foreground
-//  …and *never* on a recurring timer. This observer collapses both signals
-//  into one `onForeground` callback for the message manager.
+//      • Every time the app becomes active again — a return from the
+//        background, and also Control Center, a Face ID / permission prompt
+//        or a call banner closing
+//  …and *never* on a recurring timer. Each activation is a chance to refresh
+//  in-app messages instead of polling for them. This observer collapses the
+//  triggers into one `onForeground` callback for the message manager.
 //
 //  Why NotificationCenter instead of an @MainActor SwiftUI hook: SDK code
 //  has no scene/window guarantees on cold start, and SwiftUI scenePhase
@@ -21,20 +24,37 @@ import Foundation
 import UIKit
 #endif
 
-/// Listens for app-foreground events and invokes `onForeground` on the
+/// Listens for app-activation events and invokes `onForeground` on the
 /// main actor each time one fires.
 @MainActor
 final class AppLifecycleObserver {
 
     private var observers: [NSObjectProtocol] = []
+    private let center: NotificationCenter
+    private let didBecomeActive: Notification.Name?
     private let onForeground: @Sendable () -> Void
 
     /// `onForeground` is called once on `start()` (cold start) and again on
-    /// every UIApplication.willEnterForeground / didBecomeActive event.
-    /// The two notifications are coalesced inside the observer — a single
-    /// background → foreground transition produces exactly one callback.
-    init(onForeground: @escaping @Sendable () -> Void) {
+    /// every `didBecomeActive`. `center` and `didBecomeActive` are injectable
+    /// so tests can drive the observer on a private center; without a
+    /// `didBecomeActive` name (macOS) only the cold-start event fires.
+    init(
+        center: NotificationCenter = .default,
+        didBecomeActive: Notification.Name? = AppLifecycleObserver.applicationDidBecomeActive,
+        onForeground: @escaping @Sendable () -> Void
+    ) {
+        self.center = center
+        self.didBecomeActive = didBecomeActive
         self.onForeground = onForeground
+    }
+
+    /// UIApplication's didBecomeActive; `nil` where there is none (macOS).
+    nonisolated static var applicationDidBecomeActive: Notification.Name? {
+        #if canImport(UIKit)
+        UIApplication.didBecomeActiveNotification
+        #else
+        nil
+        #endif
     }
 
     /// Wire up notifications and emit an initial foreground event for
@@ -42,25 +62,23 @@ final class AppLifecycleObserver {
     /// second time.
     func start() {
         guard observers.isEmpty else { return }
-        #if canImport(UIKit) && !os(watchOS)
-        let center = NotificationCenter.default
-
-        // didBecomeActive is the cleanest "fully foreground" signal; we
-        // use it as the only wakeup. willEnterForeground would fire even
-        // for partial entries that get yanked back to background by the
-        // OS (multitasking previews on iPad). didBecomeActive doesn't.
-        let token = center.addObserver(
-            forName: UIApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            // `queue: .main` guarantees we're on the main thread, so it's
-            // safe to assert MainActor isolation. Swift 6 can't infer this
-            // from the NotificationCenter Sendable closure signature.
-            MainActor.assumeIsolated { self?.fire() }
+        if let didBecomeActive {
+            // didBecomeActive is the cleanest "fully foreground" signal; we
+            // use it as the only wakeup. willEnterForeground would fire even
+            // for partial entries that get yanked back to background by the
+            // OS (multitasking previews on iPad). didBecomeActive doesn't.
+            let token = center.addObserver(
+                forName: didBecomeActive,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                // `queue: .main` guarantees we're on the main thread, so it's
+                // safe to assert MainActor isolation. Swift 6 can't infer this
+                // from the NotificationCenter Sendable closure signature.
+                MainActor.assumeIsolated { self?.fire() }
+            }
+            observers.append(token)
         }
-        observers.append(token)
-        #endif
         // Emit an immediate foreground event so cold-start polling lines up
         // with the rest of the configure() path. Defer one runloop tick so
         // the message manager has a chance to attach its stream consumers.
@@ -69,8 +87,9 @@ final class AppLifecycleObserver {
         }
     }
 
+    /// Remove the notification observers. Used by tests — SDKCore keeps its
+    /// observer for the SDK's lifetime.
     func stop() {
-        let center = NotificationCenter.default
         for token in observers { center.removeObserver(token) }
         observers.removeAll()
     }

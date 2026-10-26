@@ -5,12 +5,13 @@
 //  Builds the `WKWebView` + `NativeBridge` pair the in-app message
 //  presentation needs. Shared by every host:
 //      • UIKit `InAppMessagePresenter` (modal sheet via present(animated:))
-//      • SwiftUI `InAppMessageSheetCoordinator` (sheet content view)
+//      • SwiftUI `InAppMessagePresentationCoordinator` (drives `.sheet(item:)`)
 //
 //  Encapsulating the build logic in one place keeps the two hosts in
 //  lockstep — same `WKUserContentController` script handler, same
 //  `window.galvaProducts` pre-injection, same security posture (no DOM
-//  persistence, file:// allowlist).
+//  persistence, the `InAppMessageNavigationPolicy` bundle-file allowlist
+//  and load-failure handling, a bridge that answers only the main frame).
 //
 
 import Foundation
@@ -20,9 +21,7 @@ import WebKit
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(StoreKit)
 import StoreKit
-#endif
 
 #if canImport(WebKit) && canImport(UIKit)
 
@@ -38,14 +37,18 @@ enum InAppMessageWebViewFactory {
     /// dismiss so the channel is severed promptly instead of waiting on
     /// the WebView dealloc cascade.
     ///
-    /// On Apple platforms the optional `storeKitPrefetcher` lets the
-    /// bridge's `requestPurchase` handler skip a live
-    /// `Product.products(for:)` round-trip when the SKU is warm. The
-    /// `#if canImport(StoreKit)` overload mirrors the same conditional
-    /// on `NativeBridge.init` — non-Apple builds use the slimmer init.
-    #if canImport(StoreKit)
+    /// Wires the bridge into the WebView, installs the
+    /// `window.galvaProducts` user script and the navigation policy, and
+    /// applies our standard WebView config (no DOM persistence, inline
+    /// media, transparent background). The optional `storeKitPrefetcher`
+    /// lets the bridge's `requestPurchase` handler skip a live
+    /// `Product.products(for:)` round-trip when the SKU is warm.
+    ///
+    /// `bundleURL` is the bundle file the host will load — the one page the
+    /// WebView may navigate to.
     static func make(
         messageId: String,
+        bundleURL: URL,
         messageManager: InAppMessageManager,
         identity: IdentityStore,
         storeKitPrefetcher: StoreKitProductPrefetcher?,
@@ -61,49 +64,6 @@ enum InAppMessageWebViewFactory {
             storeKitPrefetcher: storeKitPrefetcher,
             logger: logger
         )
-        return assemble(
-            bridge: bridge,
-            host: host,
-            prefetchedProducts: prefetchedProducts,
-            deepLinkParameters: deepLinkParameters
-        )
-    }
-    #else
-    static func make(
-        messageId: String,
-        messageManager: InAppMessageManager,
-        identity: IdentityStore,
-        host: any InAppMessageHost,
-        prefetchedProducts: [String: AnyJSONValue],
-        deepLinkParameters: [String: String] = [:],
-        logger: any GalvaLogger
-    ) -> (WKWebView, NativeBridge) {
-        let bridge = NativeBridge(
-            messageId: messageId,
-            messageManager: messageManager,
-            identity: identity,
-            logger: logger
-        )
-        return assemble(
-            bridge: bridge,
-            host: host,
-            prefetchedProducts: prefetchedProducts,
-            deepLinkParameters: deepLinkParameters
-        )
-    }
-    #endif
-
-    /// Wire the bridge into a fresh `WKWebView`, install the
-    /// `window.galvaProducts` user script, and apply our standard
-    /// WebView config (no DOM persistence, inline media, transparent
-    /// background). The bridge-init branching above feeds into this
-    /// shared assembly.
-    private static func assemble(
-        bridge: NativeBridge,
-        host: any InAppMessageHost,
-        prefetchedProducts: [String: AnyJSONValue],
-        deepLinkParameters: [String: String] = [:]
-    ) -> (WKWebView, NativeBridge) {
         let config = WKWebViewConfiguration()
         bridge.host = host
         config.userContentController.add(bridge, name: kGalvaBridgeHandlerName)
@@ -163,14 +123,23 @@ enum InAppMessageWebViewFactory {
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+
+        // Same navigation + UI delegate for both hosts. WebKit holds
+        // delegates weakly; the bridge keeps the policy alive for the
+        // presentation (released in `tearDown`).
+        let policy = InAppMessageNavigationPolicy(bundleURL: bundleURL, logger: bridge.logger)
+        policy.host = host
+        webView.navigationDelegate = policy
+        webView.uiDelegate = policy
+        bridge.navigationPolicy = policy
         return (webView, bridge)
     }
 
     /// Sever every native ↔ WebView edge so the WebView (and through it
     /// the bridge + console handler + bundled HTML) can release as soon
-    /// as the host drops its strong refs. Mirror of `make(...)` / the
-    /// `assemble` path above — every script handler / delegate it
-    /// installs is undone here. Safe to call multiple times.
+    /// as the host drops its strong refs. Mirror of `make(...)` above —
+    /// every script handler / delegate it installs is undone here. Safe to
+    /// call multiple times.
     ///
     /// Why this matters: `WKUserContentController.add(_:name:)` retains
     /// its handlers strongly, and a `WKWebView` waiting on an in-flight
@@ -199,6 +168,10 @@ enum InAppMessageWebViewFactory {
         // but it prevents an in-flight bridge call from re-entering a
         // half-destructed host.
         bridge?.host = nil
+        // Same for the navigation policy: a late load failure can't close
+        // whatever the host presents next.
+        bridge?.navigationPolicy?.host = nil
+        bridge?.navigationPolicy = nil
     }
 
     /// Build a `.atDocumentStart` user script that assigns `object` (encoded

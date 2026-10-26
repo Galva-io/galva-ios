@@ -19,7 +19,6 @@ final class BridgePageContextTests: XCTestCase {
     func test_pageContext_encodesStorefrontCountryCode() throws {
         let context = BridgePageContext(
             messageId: "msg-1",
-            sessionToken: "tok",
             bridgeProtocol: "1.0",
             sdkVersion: "1.0.0",
             platform: "ios",
@@ -27,7 +26,6 @@ final class BridgePageContextTests: XCTestCase {
             appBuild: "1234",
             pushAuthorization: .authorized,
             locale: "en_US",
-            appColorScheme: .dark,
             safeArea: .init(top: 47, bottom: 34, left: 0, right: 0),
             storefrontCountryCode: "USA",
             appAccountToken: nil
@@ -44,7 +42,6 @@ final class BridgePageContextTests: XCTestCase {
         // the bundle so its own purchase calls reconcile to the same account.
         let context = BridgePageContext(
             messageId: "msg-1",
-            sessionToken: nil,
             bridgeProtocol: "1.0",
             sdkVersion: "1.0.0",
             platform: "ios",
@@ -52,7 +49,6 @@ final class BridgePageContextTests: XCTestCase {
             appBuild: nil,
             pushAuthorization: nil,
             locale: "en_US",
-            appColorScheme: nil,
             safeArea: .init(top: 0, bottom: 0, left: 0, right: 0),
             storefrontCountryCode: nil,
             appAccountToken: "b1fe821d-5597-4abc-87b6-1f9647cffd6e"
@@ -71,7 +67,6 @@ final class BridgePageContextTests: XCTestCase {
         // before reading, which is the standard JS-safe pattern.
         let context = BridgePageContext(
             messageId: "msg-1",
-            sessionToken: nil,
             bridgeProtocol: "1.0",
             sdkVersion: "1.0.0",
             platform: "ios",
@@ -79,7 +74,6 @@ final class BridgePageContextTests: XCTestCase {
             appBuild: nil,
             pushAuthorization: nil,
             locale: "en_US",
-            appColorScheme: nil,
             safeArea: .init(top: 0, bottom: 0, left: 0, right: 0),
             storefrontCountryCode: nil,
             appAccountToken: nil
@@ -94,7 +88,6 @@ final class BridgePageContextTests: XCTestCase {
     func test_pageContext_roundTrips() throws {
         let original = BridgePageContext(
             messageId: "msg-1",
-            sessionToken: "tok",
             bridgeProtocol: "1.0",
             sdkVersion: "1.0.0",
             platform: "ios",
@@ -102,7 +95,6 @@ final class BridgePageContextTests: XCTestCase {
             appBuild: "1234",
             pushAuthorization: .denied,
             locale: "ja_JP",
-            appColorScheme: .light,
             safeArea: .init(top: 47, bottom: 34, left: 0, right: 0),
             storefrontCountryCode: "JPN",
             appAccountToken: "b1fe821d-5597-4abc-87b6-1f9647cffd6e"

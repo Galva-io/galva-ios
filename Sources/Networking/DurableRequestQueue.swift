@@ -65,6 +65,10 @@ final class DurableRequestQueue {
     /// bypasses the window, since those are naturally rate-limited and a good
     /// moment to try sooner.
     private var nextAttemptAt: Date?
+    /// Bumped by `removeAll(where:)`. A drain that sees it change refetches
+    /// instead of replaying the rest of a batch it fetched before — that
+    /// batch may hold requests that are no longer in the store.
+    private var removals = 0
 
     init(
         store: any DurableProxyRequestStore,
@@ -111,7 +115,7 @@ final class DurableRequestQueue {
             logger.debug(.uploader, "durable proxy enqueued", metadata: [
                 "id": request.id,
                 "method": method,
-                "path": path,
+                "path": path.loggablePath,
             ])
             await drain()
         } catch {
@@ -119,7 +123,7 @@ final class DurableRequestQueue {
             // risking an unbounded in-memory backlog.
             logger.error(.uploader, "durable proxy enqueue failed to persist", metadata: [
                 "method": method,
-                "path": path,
+                "path": path.loggablePath,
             ], error: error)
         }
     }
@@ -150,6 +154,7 @@ final class DurableRequestQueue {
         retryTask = nil
 
         while true {
+            let removalsAtFetch = removals
             let batch: [DurableProxyRequest]
             do {
                 batch = try await store.fetchOldest(limit: drainBatch)
@@ -164,6 +169,9 @@ final class DurableRequestQueue {
             }
 
             for request in batch {
+                // A removal since the fetch may have taken requests still in
+                // `batch` — refetch rather than send them.
+                guard removals == removalsAtFetch else { break }
                 switch await replay(request) {
                 case .delivered:
                     try? await store.delete([request.id])
@@ -175,7 +183,7 @@ final class DurableRequestQueue {
                     logger.warning(.uploader, "durable proxy dropped (permanent failure)", metadata: [
                         "id": request.id,
                         "method": request.method,
-                        "path": request.path,
+                        "path": request.path.loggablePath,
                     ])
                 case .retryable:
                     // Stop on the first transient failure — preserves FIFO
@@ -185,12 +193,32 @@ final class DurableRequestQueue {
                     return
                 }
             }
-            // Whole batch handled (delivered / dropped) — loop to see if more
-            // requests are waiting beyond `drainBatch`.
+            // Whole batch handled (delivered / dropped), or cut short by a
+            // removal — loop to see what's waiting now.
         }
     }
 
-    /// Number of requests currently awaiting delivery (diagnostics / tests).
+    /// Drop every stored request `shouldRemove` matches, whether or not a
+    /// drain has tried it yet. A drain in progress won't send them either.
+    /// Opting out uses it to discard the in-app page's queued analytics.
+    /// Returns the requests it dropped.
+    @discardableResult
+    func removeAll(where shouldRemove: (DurableProxyRequest) -> Bool) async -> [DurableProxyRequest] {
+        do {
+            let stored = try await store.count()
+            guard stored > 0 else { return [] }
+            let removed = try await store.fetchOldest(limit: stored).filter(shouldRemove)
+            guard !removed.isEmpty else { return [] }
+            try await store.delete(removed.map(\.id))
+            removals += 1
+            return removed
+        } catch {
+            logger.error(.uploader, "durable proxy removal failed", error: error)
+            return []
+        }
+    }
+
+    /// Number of requests currently awaiting delivery. Used by tests.
     var pendingCount: Int {
         get async { (try? await store.count()) ?? 0 }
     }
@@ -216,7 +244,7 @@ final class DurableRequestQueue {
                 // Network down / DNS / TLS — the "network lost" case the
                 // queue exists for. Keep + retry.
                 return .retryable
-            case .http(let status, _):
+            case .http(let status):
                 return Self.isRetryable(status: status) ? .retryable : .permanent
             }
         } catch {
