@@ -276,8 +276,57 @@ You can also buy through your own purchase API instead of `purchaseWithStoreKit(
 - **It never blocks your app.** Every call returns immediately and does its work on a background actor.
 - **Calls aren't lost.** Calls you make right after `configure`, while it's still starting, wait for it and run in order. Everything is saved to disk before upload and retried with backoff, so it survives crashes, app kills and offline periods.
 - **It stays out of your way.** No method swizzling, no IDFA or tracking prompt, and no network call before `configure`.
-- **It declares its data use.** The package ships a privacy manifest (`PrivacyInfo.xcprivacy`) listing the data it collects and its one required-reason API, `UserDefaults`, so Xcode's privacy report for your app includes it.
-- **Subscribers can opt out.** `Galva.setOptOut(true)` stops tracking; in-app messages keep working. See [Privacy and App Review](https://docs.galva.io/sdks/ios/privacy).
+- **It declares its data use.** The package ships a privacy manifest. See [Privacy](#privacy).
+
+## Privacy
+
+The package ships a privacy manifest (`PrivacyInfo.xcprivacy`) in its resource bundle. Xcode's privacy report for your app includes it, so you don't copy Galva's entries into your app's own manifest.
+
+**Required-reason APIs.** The manifest declares the two the SDK uses:
+
+- `UserDefaults` (CA92.1), for the SDK's own `co.galva.*` settings.
+- System boot time (35F9.1): `ProcessInfo.systemUptime`, only to time out showing or dismissing an in-app message. It never leaves the device.
+
+**Collected data.** Galva doesn't track: nothing it collects goes to ad networks or data brokers, so it needs no tracking prompt. The manifest declares every type the SDK can collect:
+
+| Data type | Collected | Linked to the user | Purposes |
+|---|---|---|---|
+| Email address | If you set `.email` | Yes | Developer's advertising, app functionality |
+| Name | If you set `.fullName`, `.firstName` or `.lastName` | Yes | Developer's advertising, app functionality |
+| User ID | When you identify a subscriber | Yes | Developer's advertising, analytics, app functionality |
+| Device ID | Always: the IDFV and Galva's anonymous ID, plus the push token if you forward it | Yes | Developer's advertising, analytics, app functionality |
+| Purchase history | Always | Yes | Developer's advertising, analytics, app functionality |
+| Product interaction | Always, including the reason a subscriber picks in an exit survey | Yes | Developer's advertising, analytics, app functionality |
+| Advertising data | If the install came from Apple Search Ads and `.appleSearchAds` is on (the default). Once found, it's sent with the subscriber's attributes even if you turn `.appleSearchAds` off later. | Yes | Developer's advertising, analytics |
+| Coarse location | Always: the country, from the IP address and the App Store storefront | Yes | Developer's advertising, analytics, app functionality |
+| Other user content | If a survey in a message asks a free-text follow-up question | Yes | Analytics |
+| Other diagnostic data | When a message shows: its page's error logs, which carry no user or device ID | No | App functionality |
+
+[GalvaRevenueCat](#using-revenuecat) ships its own manifest, which declares only `UserDefaults`. The RevenueCat app user IDs and entitlements it passes to Galva are the user ID and purchase history above.
+
+**What's still yours to do:**
+
+- Fill in your App Privacy answers in App Store Connect. Xcode's privacy report is only a reference: it lists every type above, so use the "Collected" column to leave out what your app never sends, such as email if you never set it.
+- Classify what you send in custom attributes, event properties and the user ID, such as a phone number or health data. Galva's manifest doesn't cover it.
+- Declare your own app's required-reason APIs in your app's manifest.
+- Never list Galva's domains in `NSPrivacyTrackingDomains`: iOS would block Galva's requests for users who don't allow tracking. Whether your app needs the tracking prompt for other reasons is your call.
+
+**Opting out.** `Galva.setOptOut(true)` stops the SDK's analytics and attribution but keeps in-app messages working. While a subscriber is opted out:
+
+- `AppEvents.track`, `AppUser.identify`, `AppUser.set` and push token registration are dropped, and `session_start`, Apple Search Ads attribution and purchase matching (the transaction sweep and `Galva.reconcileTransactions()`) don't run.
+- The in-app message page's analytics (views, dismissals and failed offer purchases) aren't sent. Galva then can't tell a message was shown, so the SDK remembers it on the device and doesn't show it again.
+- Events and page analytics still waiting on the device when the subscriber opts out are deleted, so opting back in doesn't send them.
+
+These still go to Galva, so messages can be shown and used:
+
+- The check for messages each time the app becomes active, and on `InAppMessages.checkForMessages()`, with Galva's anonymous ID and the last identified user ID.
+- When a message shows, the same IDs, the platform and the App Store storefront country. The page download and the SDK's setup request carry no IDs.
+- What the subscriber does in a message: survey answers, including free-text follow-ups, accepting an offer, and completing its purchase. The completed purchase carries its transaction ID, which Galva needs to apply the offer and end the flow.
+- The app account token on offer purchases Galva makes, which links the purchase to the subscriber in App Store Server Notifications.
+- The message page's diagnostic logs, which carry no user or device ID.
+- The IP address of every request, which Galva uses only to find the country.
+
+Opting out doesn't change your App Privacy answers. See [Privacy and App Review](https://docs.galva.io/sdks/ios/privacy).
 
 ## Documentation
 

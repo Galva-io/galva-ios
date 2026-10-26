@@ -1,7 +1,8 @@
 # CI — runs on every PR and every push to main.
 #
 # Jobs:
-#   • lint      — scripts/lint.sh (host-app perf hazards, crash patterns)
+#   • lint      — scripts/lint.sh (host-app perf hazards, crash patterns,
+#                 the privacy manifest against Sources/)
 #   • test      — swift test (~20s, 200+ tests)
 #   • test-ios  — the same tests on an iOS Simulator, including the UIKit /
 #                 WebKit ones `swift test` on macOS doesn't build

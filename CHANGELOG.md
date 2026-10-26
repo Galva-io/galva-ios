@@ -19,6 +19,6 @@ First public release.
 - **Purchases:** `Galva.reconcileTransactions()` and an automatic StoreKit transaction sweep match purchases to subscribers.
 - **Purchase controllers:** `GalvaPurchaseController` and `Galva.setPurchaseController(_:)` run offer purchases through your own billing code.
 - **Integrations:** `Galva.configure(…, integrations:)` connects packages such as [GalvaRevenueCat](https://github.com/Galva-io/galva-ios-revenuecat).
-- **Privacy:** `Galva.setOptOut(_:)`, and a privacy manifest (`PrivacyInfo.xcprivacy`) that declares the SDK's collected data and its `UserDefaults` use.
+- **Privacy:** a privacy manifest (`PrivacyInfo.xcprivacy`) that declares the data the SDK collects and its two required-reason APIs, `UserDefaults` and system boot time. `Galva.setOptOut(_:)` stops the SDK's analytics and attribution, including the in-app message page's, while messages keep working. The SDK doesn't send the device's name, and its logs leave out the query strings of the URLs it requests.
 
 [1.0.0]: https://github.com/Galva-io/galva-ios/releases/tag/v1.0.0

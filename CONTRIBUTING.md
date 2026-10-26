@@ -30,7 +30,8 @@ Examples/GalvaDemo/             ← SwiftUI demo app + XCUITest E2E and perf sui
                                   (Tuist project; regenerate with `tuist generate`)
 
 scripts/
-├── lint.sh                     ← canonical perf-hazard + crash-pattern checks
+├── lint.sh                     ← canonical perf-hazard + crash-pattern checks,
+│                                 and the privacy manifest against Sources/
 ├── e2e.sh                      ← generates the demo project, runs the UI tests
 └── perf.sh                     ← measures SDK overhead against a no-SDK baseline
 
@@ -51,7 +52,7 @@ Galva builds with **Xcode 26 or later**: the StoreKit offer path uses an iOS 26 
 ```bash
 swift build
 swift test                      # 440+ tests, ~15s once built
-./scripts/lint.sh               # host-app perf hazards, crash patterns
+./scripts/lint.sh               # host-app perf hazards, crash patterns, privacy manifest
 ./scripts/e2e.sh                # UI tests against an in-process mock (needs Tuist)
 ./scripts/perf.sh               # SDK overhead report (needs Tuist)
 ```
@@ -71,6 +72,7 @@ Enforced by `scripts/lint.sh`:
 - **Use the logger, not `print`/`debugPrint`/`NSLog`.** Those bypass the configured `GalvaLogger` pipeline.
 - **No `try!` / `as!` / `fatalError` in production code.** The SDK must never crash the host.
 - **No force-unwraps on String-input initializers** (`URL(string:)!`, `UUID(uuidString:)!`, etc.) without a `// galva-lint:disable reason="…"` comment justifying it.
+- **The privacy manifest matches the code.** [`Sources/Resources/PrivacyInfo.xcprivacy`](Sources/Resources/PrivacyInfo.xcprivacy) must use only Apple's keys and values, and declare exactly the required-reason API categories `Sources/` calls: file timestamps, disk space, system boot time, active keyboards, `UserDefaults`. Add a category, with the reason that fits, in the same change as the first call to its APIs. When the SDK starts or stops collecting a kind of data, update the manifest's data types and the README's Privacy section too; lint can't check those.
 
 When a rule needs an exception, add a same-line comment with a reason:
 
@@ -130,7 +132,7 @@ Integration packages plug in through `Galva.configure(…, integrations:)`. They
 
 ### React Native vendors this source
 
-[`galva-react-native`](https://github.com/Galva-io/galva-react-native) compiles a pinned snapshot of `Sources/` into its own CocoaPods pod, using the build settings in [`cocoapods/galva-build.rb`](cocoapods/galva-build.rb). When you change `Package.swift`'s platforms, Swift version or linker settings, update that file in the same commit. Wrappers report their own identity through the internal `Galva.configure(…, wrapper:)` seam.
+[`galva-react-native`](https://github.com/Galva-io/galva-react-native) compiles a pinned snapshot of `Sources/` into its own CocoaPods pod, using the build settings in [`cocoapods/galva-build.rb`](cocoapods/galva-build.rb), which also ships the privacy manifest. When you change `Package.swift`'s platforms, Swift version, linker settings or resources, update that file in the same commit. Wrappers report their own identity through the internal `Galva.configure(…, wrapper:)` seam.
 
 ### SQLite schema migrations
 
@@ -160,14 +162,15 @@ A release is a Git tag on `main`. SwiftPM resolves it directly; there are no bin
 1. Bump `version` in [`Sources/Internal/SDKConstants.swift`](Sources/Internal/SDKConstants.swift). It's reported in the `x-sdk-version` header and by `Galva.sdkVersion`, so it must match the tag.
 2. In [`CHANGELOG.md`](CHANGELOG.md), give the release its version and date, and list its changes. Merge PRs with a CHANGELOG line for anything an app developer would notice.
 3. Merge to `main` with CI green.
-4. Tag and push:
+4. Confirm what the privacy manifest says about Galva's servers is true in production. Lint checks the file, not the servers. It declares the in-app message page's diagnostic logs as not linked to the user, which holds only once Galva's log gateway drops user and message IDs, every environment serves a message page that no longer sends them, and logs stored before that have aged out (7 days). The privacy step of the internal SDK release checklist has the checks. Don't tag until they pass. If they can't pass in time, ship that entry as linked and change it in a later release.
+5. Tag and push:
 
    ```bash
    git tag v1.2.3
    git push origin v1.2.3
    ```
 
-5. Create the GitHub Release with notes:
+6. Create the GitHub Release with notes:
 
    ```bash
    gh release create v1.2.3 --generate-notes

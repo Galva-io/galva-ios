@@ -398,24 +398,46 @@ public enum Galva {
     
     // MARK: Opt-out
     
-    /// Globally disable / re-enable Galva's server-bound tracking.
-    /// When opted out (`true`):
-    ///   • `AppEvents.track`, `AppUser.identify`, and device-token /
-    ///     endpoint registration calls become silent no-ops.
-    ///   • Auto-tracked `session_start` events are suppressed.
-    ///   • `Transaction.all` sweeps are skipped, so Galva doesn't
-    ///     reconcile organic purchases for this device.
-    ///   • The persisted on-disk event queue is purged on the
-    ///     opted-in → opted-out transition so pre-existing events
-    ///     don't leak after the user opts out.
+    /// Opt the subscriber out of (or back into) Galva's analytics and
+    /// attribution. In-app messages keep working.
     ///
-    /// In-app message polling + rendering **continue** to work using
-    /// the anonymous id. Opt-out blocks server-bound telemetry, not
-    /// user-visible feature delivery.
+    /// While opted out (`true`):
+    ///   • `AppEvents.track`, `AppUser.identify`, `AppUser.set` and
+    ///     device-token registration calls become silent no-ops.
+    ///   • Auto-tracked `session_start` events and Apple Search Ads
+    ///     attribution are suppressed.
+    ///   • `Transaction.all` sweeps and `reconcileTransactions()` are
+    ///     skipped, so Galva doesn't match purchases to this device.
+    ///   • The in-app message page's analytics (views, dismissals, failed
+    ///     offer purchases) are neither sent nor queued. Galva's server
+    ///     then can't tell a message was shown, so the SDK remembers it on
+    ///     the device and later polls don't show it again.
+    ///   • Events and page analytics still queued on disk are purged on
+    ///     the opted-in → opted-out transition, so opting back in doesn't
+    ///     send them. A request already in flight can still complete.
+    ///
+    /// These still go to Galva, so messages can be shown and used:
+    ///   • The message poll on every foreground and `checkForMessages()`,
+    ///     with the anonymous id and the last identified user id.
+    ///   • When a message shows, those ids, the platform and the App Store
+    ///     storefront. Bundle downloads and the SDK's setup request carry
+    ///     no ids.
+    ///   • What the subscriber does in a message: survey answers, including
+    ///     free-text follow-ups, accepting an offer, and completing its
+    ///     purchase (with the transaction id), which Galva needs to apply
+    ///     the offer and stop the message flow.
+    ///   • The `appAccountToken` on purchases Galva starts, which links them
+    ///     to the subscriber in App Store Server Notifications.
+    ///   • The message page's diagnostic logs, which carry no user or
+    ///     device id. The page sends them itself, not through the SDK.
+    ///
+    /// Opting out doesn't change the app's App Privacy answers: the
+    /// privacy manifest still declares what's collected from subscribers
+    /// who haven't opted out.
     ///
     /// The flag is persisted in `UserDefaults` (`co.galva.optedOut`) so
-    /// it survives app restarts. Defaults to `false` (tracking enabled)
-    /// on first launch.
+    /// it survives app restarts. Defaults to `false` (opted in) on first
+    /// launch.
     ///
     /// Takes effect at once, even while `configure` is still starting:
     /// `Galva.isOptedOut` and every call made after this one see it. The
@@ -852,9 +874,9 @@ public enum AppUser {
     /// — the lenient mirror of `AppEvents.track(_:attributes:)`.
     ///
     /// Use this when the values come from an untyped source (a JSON parse,
-    /// `UserDefaults.dictionaryRepresentation()`, a host-side `[String: Any]`
-    /// payload). Foundation-bridged values (`NSString`, `NSNumber`, `NSNull`,
-    /// nested `NSDictionary` / `NSArray`) flow through cleanly so a host
+    /// a host-side `[String: Any]` payload, values read back from
+    /// `UserDefaults`). Foundation-bridged values (`NSString`, `NSNumber`,
+    /// `NSNull`, nested `NSDictionary` / `NSArray`) flow through cleanly so a host
     /// doesn't have to bridge each value to its Swift equivalent first — a
     /// failed bridge there is exactly the path that silently drops traits
     /// at the call site (e.g. an email read as `NSString` cast through a
@@ -869,13 +891,19 @@ public enum AppUser {
     ///
     /// Example:
     ///
-    ///     // Reading what the host already has lying around as `[String: Any]`:
-    ///     let stored = UserDefaults.standard.dictionaryRepresentation()
+    ///     // Values the app stored itself, read back key by key:
+    ///     let defaults = UserDefaults.standard
     ///     AppUser.set([
-    ///         "$gv_email":    stored["email"]    ?? NSNull(),  // NSString → ok
-    ///         "$gv_country":  stored["country"]  ?? NSNull(),
-    ///         "plan_tier":    stored["plan"]     ?? NSNull(),
+    ///         "$gv_email":    defaults.object(forKey: "email")    ?? NSNull(),  // NSString → ok
+    ///         "$gv_country":  defaults.object(forKey: "country")  ?? NSNull(),
+    ///         "plan_tier":    defaults.object(forKey: "plan")     ?? NSNull(),
     ///     ])
+    ///
+    /// Read only keys your app wrote. Don't pass
+    /// `UserDefaults.dictionaryRepresentation()`: it also holds values the
+    /// system writes, such as languages, locale and keyboards, which the
+    /// `UserDefaults` reason apps declare (CA92.1) doesn't let them read,
+    /// and they'd go to Galva.
     public static func set(_ attributes: [String: Any]) {
         let coerced = AnyJSONValue.coercing(dictionary: attributes)
         guard !coerced.isEmpty else { return }
