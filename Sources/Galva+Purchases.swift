@@ -183,7 +183,7 @@ public extension Galva {
         PurchaseControllerRegistry.current = controller
         let type = controller.map { String(describing: Swift.type(of: $0)) }
         SDKCore.shared.submit {
-            $0.logger.info(.configuration, "purchase controller set", metadata: [
+            $0.logger.info(.purchases, "purchase controller set", metadata: [
                 "controller": type ?? "<built-in StoreKit>",
             ])
         }

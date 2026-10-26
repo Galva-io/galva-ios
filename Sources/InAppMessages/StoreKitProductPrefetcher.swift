@@ -72,11 +72,11 @@ final class StoreKitProductPrefetcher {
     func prefetch(productIds: [String]) {
         let requested = Set(productIds)
         if requested.isEmpty {
-            logger.debug(.configuration, "storekit prefetch skipped (empty)")
+            logger.debug(.purchases, "storekit prefetch skipped (empty)")
             return
         }
         if requested == lastRequested {
-            logger.debug(.configuration, "storekit prefetch skipped (same ids)")
+            logger.debug(.purchases, "storekit prefetch skipped (same ids)")
             return
         }
         lastRequested = requested
@@ -95,7 +95,7 @@ final class StoreKitProductPrefetcher {
             var byId: [String: Product] = [:]
             for product in fetched { byId[product.id] = product }
             self.byId = byId
-            logger.info(.configuration, "storekit prefetch OK", metadata: [
+            logger.info(.purchases, "storekit prefetch OK", metadata: [
                 "requested": String(productIds.count),
                 "received": String(fetched.count),
             ])
@@ -106,7 +106,7 @@ final class StoreKitProductPrefetcher {
             // offline launch would otherwise leave the cache empty for the
             // process) — unless a newer request already replaced them.
             if lastRequested == Set(productIds) { lastRequested = [] }
-            logger.warning(.configuration, "storekit prefetch failed", error: error)
+            logger.warning(.purchases, "storekit prefetch failed", error: error)
         }
     }
 

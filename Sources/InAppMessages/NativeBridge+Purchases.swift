@@ -79,7 +79,7 @@ extension NativeBridge {
         let appAccountToken = await identity.purchaseAttributionToken
         let controller = PurchaseControllerRegistry.current
 
-        logger.info(.identity, "bridge requestPurchase", metadata: [
+        logger.info(.purchases, "bridge requestPurchase", metadata: [
             "productId": parsed.productId,
             "messageId": activeMessageId,
             "promo": parsed.promotionalOffer == nil ? "false" : "true",

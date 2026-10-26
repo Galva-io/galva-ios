@@ -145,7 +145,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             fromMainFrame: frame.isMainFrame,
             originProtocol: frame.securityOrigin.protocol
         ) else {
-            logger.warning(.identity, "bridge: message from outside the bundle page dropped", metadata: [
+            logger.warning(.inAppMessages, "bridge: message from outside the bundle page dropped", metadata: [
                 "mainFrame": String(frame.isMainFrame),
                 "origin": frame.securityOrigin.protocol,
             ])
@@ -155,10 +155,10 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         do {
             envelope = try Self.decodeEnvelope(message.body)
         } catch {
-            logger.warning(.identity, "bridge: failed to decode envelope", error: error)
+            logger.warning(.inAppMessages, "bridge: failed to decode envelope", error: error)
             return
         }
-        logger.debug(.identity, "bridge in", metadata: [
+        logger.debug(.inAppMessages, "bridge in", metadata: [
             "name": envelope.name,
             "requestId": envelope.requestId,
         ])
@@ -188,7 +188,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         // Unknown method → structured error (with the requestId, via respond)
         // so the bundle's pending Promise rejects instead of hanging.
         guard let method = envelope.method else {
-            logger.warning(.identity, "bridge: unknown method", metadata: ["name": envelope.name])
+            logger.warning(.inAppMessages, "bridge: unknown method", metadata: ["name": envelope.name])
             return .failure(BridgeError(
                 code: .unknownMethod,
                 message: "Unknown bridge method: \(envelope.name)"
@@ -259,7 +259,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             let data = try? encoder.encode(response),
             let jsonString = String(data: data, encoding: .utf8)
         else {
-            logger.warning(.identity, "bridge: failed to encode response", metadata: [
+            logger.warning(.inAppMessages, "bridge: failed to encode response", metadata: [
                 "requestId": requestId,
             ])
             return
@@ -268,9 +268,9 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         let js = "window.handleNativeMessage('\(escaped)')"
         do {
             _ = try await webView.evaluateJavaScript(js)
-            logger.debug(.identity, "bridge out", metadata: ["requestId": requestId])
+            logger.debug(.inAppMessages, "bridge out", metadata: ["requestId": requestId])
         } catch {
-            logger.warning(.identity, "bridge: evaluateJavaScript failed",
+            logger.warning(.inAppMessages, "bridge: evaluateJavaScript failed",
                            metadata: ["requestId": requestId],
                            error: error)
         }

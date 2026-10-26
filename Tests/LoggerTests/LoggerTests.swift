@@ -288,7 +288,10 @@ final class LogCategoryTests: XCTestCase {
     func test_rawValues_areTheConsoleCategoryNames() {
         XCTAssertEqual(
             Galva.LogCategory.allCases.map(\.rawValue),
-            ["config", "identity", "queue", "storage", "uploader", "lifecycle", "integration"]
+            [
+                "config", "identity", "queue", "storage", "uploader", "lifecycle", "integration",
+                "inAppMessages", "purchases",
+            ]
         )
     }
 

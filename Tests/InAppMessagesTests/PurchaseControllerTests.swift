@@ -116,6 +116,16 @@ final class PurchaseControllerTests: XCTestCase {
         }
     }
 
+    func test_run_controllerFailure_logsUnderPurchases() async {
+        let logger = RecordingLogger()
+        _ = await PurchaseBridgeCodec.run(
+            makeRequest(), with: StubController { _ in throw ForeignError() }, logger: logger
+        )
+
+        XCTAssertFalse(logger.entries.isEmpty)
+        XCTAssertEqual(Set(logger.entries.map(\.category)), [.purchases])
+    }
+
     func test_run_nonGalvaError_mapsToPurchaseFailed() async {
         let result = await PurchaseBridgeCodec.run(
             makeRequest(), with: StubController { _ in throw ForeignError() }, logger: SilentLogger()

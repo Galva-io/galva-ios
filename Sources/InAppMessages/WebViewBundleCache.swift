@@ -60,7 +60,7 @@ actor WebViewBundleCache {
     func bundleURL(for version: String) async throws -> URL {
         let candidate = cachedURL(for: version)
         if FileManager.default.fileExists(atPath: candidate.path) {
-            logger.debug(.configuration, "bundle cache hit", metadata: ["version": version])
+            logger.debug(.inAppMessages, "bundle cache hit", metadata: ["version": version])
             return candidate
         }
         return try await download(version: version)
@@ -114,7 +114,7 @@ actor WebViewBundleCache {
 
     private func performDownload(version: String) async throws -> URL {
         let remote = SDKConstants.webviewBundleURL(version: version, cdn: cdnBaseURL)
-        logger.info(.configuration, "downloading bundle", metadata: [
+        logger.info(.inAppMessages, "downloading bundle", metadata: [
             "version": version,
             "url": remote.absoluteString,
         ])
@@ -123,7 +123,7 @@ actor WebViewBundleCache {
         // Atomic write so a kill mid-download can't leave a half-written
         // file that the next launch would happily load and crash on.
         try data.write(to: destination, options: [.atomic])
-        logger.info(.configuration, "bundle persisted", metadata: [
+        logger.info(.inAppMessages, "bundle persisted", metadata: [
             "version": version,
             "bytes": String(data.count),
         ])

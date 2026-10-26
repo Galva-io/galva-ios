@@ -45,7 +45,7 @@ extension NativeBridge {
         }
         let app = UIApplication.shared
         guard app.canOpenURL(url) else {
-            logger.warning(.identity, "bridge \(logTag): URL not openable", metadata: ["url": raw])
+            logger.warning(.inAppMessages, "bridge \(logTag): URL not openable", metadata: ["url": raw])
             return .failure(BridgeError(code: .urlOpenFailed, message: "URL cannot be opened"))
         }
         app.open(url, options: [:]) { [weak self] success in
@@ -53,9 +53,9 @@ extension NativeBridge {
             // on the main thread per UIKit contract — safe to touch self.
             MainActor.assumeIsolated {
                 if success {
-                    self?.logger.debug(.identity, "bridge \(logTag) opened", metadata: ["url": raw])
+                    self?.logger.debug(.inAppMessages, "bridge \(logTag) opened", metadata: ["url": raw])
                 } else {
-                    self?.logger.warning(.identity, "bridge \(logTag) failed", metadata: ["url": raw])
+                    self?.logger.warning(.inAppMessages, "bridge \(logTag) failed", metadata: ["url": raw])
                 }
             }
         }

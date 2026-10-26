@@ -38,7 +38,7 @@ enum PurchaseBridgeCodec {
             let result = try await controller.purchase(request)
             return .success(.object(encode(StoreKitPurchaser.Outcome(result))))
         } catch let error as Galva.PurchaseError {
-            logger.info(.identity, "purchase controller failed", metadata: [
+            logger.info(.purchases, "purchase controller failed", metadata: [
                 "productId": request.productId,
             ], error: error)
             return .failure(bridgeError(for: error))
@@ -47,7 +47,7 @@ enum PurchaseBridgeCodec {
             // cancel (Apple ID sign-in dismissed) escape.
             return .success(.object(encode(.cancelled)))
         } catch {
-            logger.warning(.identity, "purchase controller threw a non-Galva error", metadata: [
+            logger.warning(.purchases, "purchase controller threw a non-Galva error", metadata: [
                 "productId": request.productId,
             ], error: error)
             return .failure(BridgeError(code: .purchaseFailed, message: String(describing: error)))

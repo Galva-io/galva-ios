@@ -618,7 +618,7 @@ final class SDKCore {
                 logger: logger
             )
         } catch {
-            logger.warning(.configuration, "bundle cache disabled (no disk)", error: error)
+            logger.warning(.inAppMessages, "bundle cache disabled (no disk)", error: error)
             bundleCache = nil
         }
         self.bundleCache = bundleCache
@@ -1046,7 +1046,7 @@ final class SDKCore {
     /// Idempotent: safe to call repeatedly.
     func reconcileTransactions() async {
         guard !isOptedOut else {
-            logger.debug(.identity, "reconcileTransactions skipped (opted out)")
+            logger.debug(.purchases, "reconcileTransactions skipped (opted out)")
             return
         }
         #if canImport(StoreKit)
@@ -1156,12 +1156,12 @@ final class SDKCore {
         do {
             try await showInAppMessage(message)
         } catch {
-            logger.warning(.identity, "in-app message not shown", metadata: [
+            logger.warning(.inAppMessages, "in-app message not shown", metadata: [
                 "messageId": message.id,
             ], error: error)
         }
         #else
-        logger.debug(.identity, "in-app message not shown — automatic presentation needs UIKit", metadata: [
+        logger.debug(.inAppMessages, "in-app message not shown — automatic presentation needs UIKit", metadata: [
             "messageId": message.id,
         ])
         #endif
@@ -1347,7 +1347,7 @@ final class SDKCore {
             // the sheet's `onAppear`, so the page boots (and reads safe-area
             // insets) only once the WebView is in the sheet's window — otherwise
             // getPageContext() could read `.zero` insets off-screen.
-            snapshotLogger.info(.identity, "SwiftUI sheet preparing", metadata: [
+            snapshotLogger.info(.inAppMessages, "SwiftUI sheet preparing", metadata: [
                 "messageId": message.id,
                 "version": resolved.webviewVersion,
             ])

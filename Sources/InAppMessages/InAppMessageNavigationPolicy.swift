@@ -79,7 +79,7 @@ extension InAppMessageNavigationPolicy: WKNavigationDelegate {
             decisionHandler(.allow)
             return
         }
-        logger.warning(.identity, "webview navigation blocked", metadata: [
+        logger.warning(.inAppMessages, "webview navigation blocked", metadata: [
             "url": target?.absoluteString ?? "<nil>",
         ])
         decisionHandler(.cancel)
@@ -91,7 +91,7 @@ extension InAppMessageNavigationPolicy: WKNavigationDelegate {
         withError error: any Error
     ) {
         guard Self.isFatal(error) else { return }
-        logger.warning(.identity, "webview navigation failed", error: error)
+        logger.warning(.inAppMessages, "webview navigation failed", error: error)
         close(reason: "load_failed")
     }
 
@@ -101,12 +101,12 @@ extension InAppMessageNavigationPolicy: WKNavigationDelegate {
         withError error: any Error
     ) {
         guard Self.isFatal(error) else { return }
-        logger.warning(.identity, "webview provisional navigation failed", error: error)
+        logger.warning(.inAppMessages, "webview provisional navigation failed", error: error)
         close(reason: "load_failed")
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        logger.warning(.identity, "webview content process terminated")
+        logger.warning(.inAppMessages, "webview content process terminated")
         close(reason: "web_process_terminated")
     }
 }
@@ -123,7 +123,7 @@ extension InAppMessageNavigationPolicy: WKUIDelegate {
         // delegate's decisionHandler above).
         completionHandler: @escaping @MainActor () -> Void
     ) {
-        logger.warning(.identity, "bundle attempted JS alert (suppressed)",
+        logger.warning(.inAppMessages, "bundle attempted JS alert (suppressed)",
                        metadata: ["message": message])
         completionHandler()
     }

@@ -10,7 +10,7 @@ First public release.
 
 ### Added
 
-- **Setup:** `Galva.configure(apiKey:)`, with production, development and custom environments, log levels, custom loggers (`GalvaLogger`), and automatic `session_start` and Apple Search Ads attribution.
+- **Setup:** `Galva.configure(apiKey:)`, with production, development and custom environments, log levels, log categories (including `.inAppMessages` and `.purchases`) for Console.app filtering, custom loggers (`GalvaLogger`), and automatic `session_start` and Apple Search Ads attribution.
 - **Subscribers:** `AppUser.identify(userId:appAccountToken:)`, `AppUser.logOut()`, built-in and custom attributes with `AppUser.set`, and synchronous `AppUser.identifiedUserId` and `AppUser.appAccountToken`.
 - **Events:** `AppEvents.track`, including typed events. Calls are saved to disk and uploaded in batches, with retry and backoff.
 - **In-app messages:** Galva presents each message automatically, as a sheet on the app's active window. With `inAppMessages: .manual`, your app reads `InAppMessages.messages` and presents them itself, with `.inAppMessageSheet(_:)` in SwiftUI or `message.show()` in UIKit, which throws an `InAppMessages.Error` when a message can't be shown. A message that arrives before the app starts reading is held for it, and one that can't be shown for a reason that may clear up, such as no network, can be delivered again the next time the app becomes active. `InAppMessages.checkForMessages()` checks on demand. Offers in messages are bought with StoreKit, with Galva-signed promotional offers and the subscriber's app account token. `InAppMessages.WorkflowType` carries any workflow type, including ones Galva adds after this release.

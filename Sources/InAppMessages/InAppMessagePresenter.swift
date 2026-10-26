@@ -149,7 +149,7 @@ final class InAppMessagePresenter: NSObject {
         deepLinkParameters: [String: String] = [:]
     ) async throws {
         if currentMessageId == message.id || showQueue.contains(message.id) {
-            logger.debug(.identity, "show(in:) ignored — message already presenting",
+            logger.debug(.inAppMessages, "show(in:) ignored — message already presenting",
                          metadata: ["messageId": message.id])
             return
         }
@@ -172,13 +172,13 @@ final class InAppMessagePresenter: NSObject {
         deepLinkParameters: [String: String]
     ) async throws {
         guard let scene = scene ?? Self.activeWindowScene() else {
-            logger.warning(.identity, "show(in:) — no foreground UIWindowScene to present on",
+            logger.warning(.inAppMessages, "show(in:) — no foreground UIWindowScene to present on",
                            metadata: ["messageId": message.id])
             throw InAppMessageError.noPresentingViewController
         }
 
         if currentMessageId != nil {
-            logger.info(.identity, "show(in:) dismissing previous overlay",
+            logger.info(.inAppMessages, "show(in:) dismissing previous overlay",
                         metadata: ["replacedBy": message.id])
             await dismissAnimated(reason: "replaced")
         }
@@ -194,7 +194,7 @@ final class InAppMessagePresenter: NSObject {
         //    the bundle via `getMessageData()`.
         let resolved = try await messageManager.resolve(messageId: message.id)
         guard let resolved else {
-            logger.warning(.identity, "show(in:) — server returned invalid",
+            logger.warning(.inAppMessages, "show(in:) — server returned invalid",
                            metadata: ["messageId": message.id])
             throw InAppMessageError.messageNotFound
         }
@@ -205,7 +205,7 @@ final class InAppMessagePresenter: NSObject {
         do {
             bundleURL = try await bundleCache.bundleURL(for: version)
         } catch {
-            logger.warning(.identity, "show(in:) bundle download failed",
+            logger.warning(.inAppMessages, "show(in:) bundle download failed",
                            metadata: ["version": version],
                            error: error)
             throw InAppMessageError.bundleUnavailable
@@ -214,7 +214,7 @@ final class InAppMessagePresenter: NSObject {
         // 3. Wait for a host VC UIKit will present on.
         let deadline = ProcessInfo.processInfo.systemUptime + presentTimeout
         guard await readyHost(in: scene, until: deadline) != nil else {
-            logger.warning(.identity, "show(in:) — no host VC ready to present on",
+            logger.warning(.inAppMessages, "show(in:) — no host VC ready to present on",
                            metadata: ["messageId": message.id])
             throw InAppMessageError.noPresentingViewController
         }
@@ -242,12 +242,12 @@ final class InAppMessagePresenter: NSObject {
         // 5. Present on the topmost VC as it is now — the app may have
         //    presented something during the hop above.
         guard let host = await readyHost(in: scene, until: deadline) else {
-            logger.warning(.identity, "show(in:) — no host VC ready to present on",
+            logger.warning(.inAppMessages, "show(in:) — no host VC ready to present on",
                            metadata: ["messageId": message.id])
             await discard(vc)
             throw InAppMessageError.noPresentingViewController
         }
-        logger.info(.identity, "show(in:) presenting sheet", metadata: [
+        logger.info(.inAppMessages, "show(in:) presenting sheet", metadata: [
             "messageId": message.id,
             "version": version,
             "host": String(describing: type(of: host)),
@@ -256,7 +256,7 @@ final class InAppMessagePresenter: NSObject {
             host.present(vc, animated: true) { done() }
         }
         guard presented else {
-            logger.warning(.identity, "show(in:) — sheet not presented in time",
+            logger.warning(.inAppMessages, "show(in:) — sheet not presented in time",
                            metadata: ["messageId": message.id])
             await discard(vc)
             throw InAppMessageError.noPresentingViewController
@@ -370,7 +370,7 @@ final class InAppMessagePresenter: NSObject {
 
     private func dismissAnimated(reason: String?) async {
         guard let vc = viewController else { return }
-        logger.info(.identity, "overlay dismissed", metadata: [
+        logger.info(.inAppMessages, "overlay dismissed", metadata: [
             "messageId": currentMessageId ?? "<none>",
             "reason": reason ?? "<unspecified>",
         ])

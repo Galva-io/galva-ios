@@ -218,10 +218,18 @@ public enum Galva {
         /// Integrations with other SDKs installed via
         /// `configure(…, integrations:)`, e.g. RevenueCat.
         public static let integration = LogCategory(rawValue: "integration")
+        /// In-app messages: fetching, presenting, the page download and
+        /// cache, and the page's calls into the app.
+        public static let inAppMessages = LogCategory(rawValue: "inAppMessages")
+        /// Purchases: offers bought from in-app messages, a custom purchase
+        /// controller, StoreKit product prices, and transaction
+        /// reconciliation.
+        public static let purchases = LogCategory(rawValue: "purchases")
 
         /// Every category this SDK version logs under.
         public static let allCases: [LogCategory] = [
             .configuration, .identity, .queue, .storage, .uploader, .lifecycle, .integration,
+            .inAppMessages, .purchases,
         ]
 
         public var description: String { rawValue }

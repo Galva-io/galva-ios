@@ -147,7 +147,7 @@ final class StoreKitTransactionObserver {
         }
 
         guard !fresh.isEmpty else {
-            logger.debug(.identity, "transaction sweep: nothing new")
+            logger.debug(.purchases, "transaction sweep: nothing new")
             return
         }
 
@@ -162,7 +162,7 @@ final class StoreKitTransactionObserver {
                 path: SDKConstants.transactionsObservePath,
                 body: request
             )
-            logger.info(.identity, "transactions observed", metadata: [
+            logger.info(.purchases, "transactions observed", metadata: [
                 "count": String(fresh.count),
                 "endUserId": endUserId ?? "<anonymous>",
             ])
@@ -177,15 +177,15 @@ final class StoreKitTransactionObserver {
             let severity: Galva.LogLevel = error.isRetryable ? .info : .warning
             switch severity {
             case .warning:
-                logger.warning(.identity, "transactions observe failed", error: error)
+                logger.warning(.purchases, "transactions observe failed", error: error)
             default:
-                logger.info(.identity, "transactions observe skipped (offline?)", error: error)
+                logger.info(.purchases, "transactions observe skipped (offline?)", error: error)
             }
         } catch {
             for raw in fresh {
                 if let id = UInt64(raw) { reportedIds.remove(id) }
             }
-            logger.warning(.identity, "transactions observe failed (unexpected)", error: error)
+            logger.warning(.purchases, "transactions observe failed (unexpected)", error: error)
         }
     }
 }

@@ -199,26 +199,26 @@ struct StoreKitPurchaser {
         case .success(let verification):
             switch verification {
             case .verified(let transaction):
-                logger.info(.identity, "purchase completed", metadata: [
+                logger.info(.purchases, "purchase completed", metadata: [
                     "productId": transaction.productID,
                     "transactionId": String(transaction.id),
                 ])
                 return .verified(transaction)
             case .unverified(_, let error):
-                logger.warning(.identity, "purchase unverified", error: error)
+                logger.warning(.purchases, "purchase unverified", error: error)
                 throw Failure.verificationFailed(detail: String(describing: error))
             }
         case .userCancelled:
-            logger.info(.identity, "purchase cancelled by user")
+            logger.info(.purchases, "purchase cancelled by user")
             return .cancelled
         case .pending:
             // Ask to Buy / SCA / payment pending. The transaction will
             // arrive later via `Transaction.updates` to the host app's
             // observer; no further action from the bridge.
-            logger.info(.identity, "purchase pending (Ask to Buy / SCA)")
+            logger.info(.purchases, "purchase pending (Ask to Buy / SCA)")
             return .pending
         @unknown default:
-            logger.warning(.identity, "purchase result unknown — treating as failure")
+            logger.warning(.purchases, "purchase result unknown — treating as failure")
             throw Failure.underlying(StoreKitError.unknown)
         }
     }

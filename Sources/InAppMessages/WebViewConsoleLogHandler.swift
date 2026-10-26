@@ -56,11 +56,11 @@ final class WebViewConsoleLogHandler: NSObject, WKScriptMessageHandler {
         // error, etc.). All paths are >= .debug, which is enabled whenever
         // this handler is installed.
         switch Self.mapLevel(entry.level) {
-        case .error, .fault: logger.error(.identity, line)
-        case .warning:       logger.warning(.identity, line)
-        case .notice:        logger.notice(.identity, line)
-        case .info:          logger.info(.identity, line)
-        case .debug, .off:   logger.debug(.identity, line)
+        case .error, .fault: logger.error(.inAppMessages, line)
+        case .warning:       logger.warning(.inAppMessages, line)
+        case .notice:        logger.notice(.inAppMessages, line)
+        case .info:          logger.info(.inAppMessages, line)
+        case .debug, .off:   logger.debug(.inAppMessages, line)
         }
     }
 

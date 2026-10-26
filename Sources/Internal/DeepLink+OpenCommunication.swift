@@ -37,7 +37,7 @@ extension SDKCore {
         // them and burn the stint's budget, suppressing polls that could
         // surface OTHER pending messages.
         if inAppMessageManager?.hasPresented(messageId: communicationId) == true {
-            logger.info(.lifecycle, "openCommunication ignored — already presented this run", metadata: [
+            logger.info(.inAppMessages, "openCommunication ignored — already presented this run", metadata: [
                 "communicationId": communicationId,
             ])
             return
@@ -49,7 +49,7 @@ extension SDKCore {
             workflowType: nil,
             createdAt: Date()
         )
-        logger.info(.lifecycle, "openCommunication — presenting", metadata: [
+        logger.info(.inAppMessages, "openCommunication — presenting", metadata: [
             "communicationId": communicationId,
         ])
         do {
@@ -59,12 +59,12 @@ extension SDKCore {
             // factory serializes them into `window.galvaDeepLinkParams`.
             try await showInAppMessage(message, deepLinkParameters: parameters)
         } catch {
-            logger.warning(.lifecycle, "openCommunication — presentation failed", metadata: [
+            logger.warning(.inAppMessages, "openCommunication — presentation failed", metadata: [
                 "communicationId": communicationId,
             ], error: error)
         }
         #else
-        logger.warning(.lifecycle, "openCommunication — unsupported on this platform")
+        logger.warning(.inAppMessages, "openCommunication — unsupported on this platform")
         #endif
     }
 }

@@ -61,7 +61,7 @@ extension NativeBridge {
         case .success(let value): parsed = value
         case .failure(let error): return .failure(error)
         }
-        logger.debug(.identity, "bridge apiFetch", metadata: [
+        logger.debug(.inAppMessages, "bridge apiFetch", metadata: [
             "method": parsed.method,
             "path": parsed.path,
             "shouldRetry": parsed.shouldRetry ? "true" : "false",

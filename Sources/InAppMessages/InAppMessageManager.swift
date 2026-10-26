@@ -215,7 +215,7 @@ final class InAppMessageManager {
         // or still on screen).
         resetDisplaySlotIfStale()
         guard case .available = displaySlot else {
-            logger.debug(.identity, "in-app poll skipped — display slot busy", metadata: [
+            logger.debug(.inAppMessages, "in-app poll skipped — display slot busy", metadata: [
                 "slot": String(describing: displaySlot),
             ])
             return []
@@ -236,14 +236,14 @@ final class InAppMessageManager {
                 path: SDKConstants.communicationListPath,
                 query: query
             )
-            logger.debug(.identity, "in-app poll OK", metadata: [
+            logger.debug(.inAppMessages, "in-app poll OK", metadata: [
                 "count": String(response.data.count),
             ])
             // logOut or a user switch reset the identity while the fetch was
             // in flight: these messages are for the previous identity. Drop
             // them UNMARKED.
             guard generation == identityGeneration else {
-                logger.info(.identity, "in-app poll dropped — identity changed mid-flight", metadata: [
+                logger.info(.inAppMessages, "in-app poll dropped — identity changed mid-flight", metadata: [
                     "count": String(response.data.count),
                 ])
                 return []
@@ -253,7 +253,7 @@ final class InAppMessageManager {
             // serializes the claim and this check). Drop the results UNMARKED
             // so they surface again on the next return event's poll.
             guard case .available = displaySlot else {
-                logger.info(.identity, "in-app poll dropped — display slot claimed mid-flight", metadata: [
+                logger.info(.inAppMessages, "in-app poll dropped — display slot claimed mid-flight", metadata: [
                     "count": String(response.data.count),
                 ])
                 return []
@@ -267,13 +267,13 @@ final class InAppMessageManager {
             let severity: Galva.LogLevel = error.isRetryable ? .info : .warning
             switch severity {
             case .warning:
-                logger.warning(.identity, "in-app poll failed", error: error)
+                logger.warning(.inAppMessages, "in-app poll failed", error: error)
             default:
-                logger.info(.identity, "in-app poll skipped (offline?)", error: error)
+                logger.info(.inAppMessages, "in-app poll skipped (offline?)", error: error)
             }
             return []
         } catch {
-            logger.warning(.identity, "in-app poll failed (unexpected)", error: error)
+            logger.warning(.inAppMessages, "in-app poll failed (unexpected)", error: error)
             return []
         }
     }
@@ -379,7 +379,7 @@ final class InAppMessageManager {
             let chosenVersion = valid.webviewVersion
                 ?? fallbackVersion
                 ?? SDKConstants.fallbackWebviewVersion
-            logger.debug(.identity, "in-app resolve OK", metadata: [
+            logger.debug(.inAppMessages, "in-app resolve OK", metadata: [
                 "messageId": messageId,
                 "version": chosenVersion,
             ])
@@ -387,7 +387,7 @@ final class InAppMessageManager {
         case .invalid:
             // Drop any stale cached payload — server has revoked.
             resolvedPayloads[messageId] = nil
-            logger.info(.identity, "in-app resolve invalidated by server", metadata: [
+            logger.info(.inAppMessages, "in-app resolve invalidated by server", metadata: [
                 "messageId": messageId,
             ])
             return nil

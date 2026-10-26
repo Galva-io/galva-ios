@@ -140,7 +140,7 @@ final class InAppMessageViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         guard !isDiscarded else {
-            logger.info(.identity, "iam VC appeared after it was discarded — dismissing",
+            logger.info(.inAppMessages, "iam VC appeared after it was discarded — dismissing",
                         metadata: ["messageId": messageId])
             (presentingViewController ?? self).dismiss(animated: true)
             return
@@ -155,7 +155,7 @@ final class InAppMessageViewController: UIViewController {
             bundleURL,
             allowingReadAccessTo: bundleURL.deletingLastPathComponent()
         )
-        logger.debug(.identity, "iam VC viewDidAppear — bundle loadFileURL",
+        logger.debug(.inAppMessages, "iam VC viewDidAppear — bundle loadFileURL",
                      metadata: ["messageId": messageId])
     }
 
@@ -163,7 +163,7 @@ final class InAppMessageViewController: UIViewController {
         super.viewDidDisappear(animated)
         // Gone for good — not just covered by something presented over it.
         guard isLeavingPresentation else { return }
-        logger.info(.identity, "iam VC removed from screen", metadata: ["messageId": messageId])
+        logger.info(.inAppMessages, "iam VC removed from screen", metadata: ["messageId": messageId])
         delegate?.inAppMessageViewControllerDidDisappear(self)
     }
 
@@ -197,7 +197,7 @@ final class InAppMessageViewController: UIViewController {
         guard !hasRevealed else { return }
         hasRevealed = true
         webView.isHidden = false
-        logger.debug(.identity, "iam VC revealed", metadata: ["messageId": messageId])
+        logger.debug(.inAppMessages, "iam VC revealed", metadata: ["messageId": messageId])
     }
 
     // MARK: - Layout

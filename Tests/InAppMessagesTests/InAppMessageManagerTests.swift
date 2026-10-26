@@ -93,6 +93,20 @@ final class InAppMessageManagerTests: XCTestCase {
         let emitted = await harness.manager.poll()
         XCTAssertEqual(emitted, [])
     }
+
+    func test_poll_logsUnderInAppMessages() async throws {
+        // Console's `category:inAppMessages` filter shows the whole in-app
+        // message flow, starting with the poll.
+        URLProtocolStub.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+        let logger = RecordingLogger()
+        let harness = await Harness.make(logger: logger)
+        _ = await harness.manager.poll()
+
+        XCTAssertFalse(logger.entries.isEmpty)
+        XCTAssertEqual(Set(logger.entries.map(\.category)), [.inAppMessages])
+    }
 }
 
 // MARK: - Nonisolated fixture builders
@@ -140,7 +154,7 @@ private enum TestFixtures {
 private struct Harness {
     let manager: InAppMessageManager
 
-    static func make() async -> Harness {
+    static func make(logger: any GalvaLogger = SilentLogger()) async -> Harness {
         let session = URLProtocolStub.makeSession()
         let client = APIClient(
             baseURL: URL(string: "https://api.galva.test")!,
@@ -171,7 +185,7 @@ private struct Harness {
             stream: stream,
             bundleCache: bundleCache,
             initialization: initManager,
-            logger: SilentLogger()
+            logger: logger
         )
         return Harness(manager: manager)
     }

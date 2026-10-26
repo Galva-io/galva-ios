@@ -168,6 +168,8 @@ subsystem:co.galva.sdk
 
 You should see `SDK configured`, `endUserId changed from=<anonymous> to=user_42` and `uploaded batch`. In Galva, your client under **Client SDKs** now shows a **Last seen** time.
 
+To follow one area, add a category to the filter: `category:inAppMessages` for in-app messages (fetching, presenting, the page's calls into your app) or `category:purchases` for offers bought from messages, StoreKit prices and transaction reconciliation.
+
 ---
 
 ## Push notifications
