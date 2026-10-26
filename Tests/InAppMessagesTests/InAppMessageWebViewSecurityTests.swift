@@ -13,7 +13,10 @@
 //      closes the presentation instead of leaving a blank sheet; a
 //      cancelled navigation doesn't
 //
-//  Runs on the iOS Simulator.
+//  Runs on the iOS Simulator. The page-level tests have the page report to a
+//  `probe` handler outside the bridge, so they know it ran; a test runner in
+//  which WebKit never runs the page skips them rather than passing them
+//  without checking anything.
 //
 
 import Foundation
@@ -26,7 +29,11 @@ import WebKit
 @MainActor
 final class InAppMessageWebViewSecurityTests: XCTestCase {
 
+    private var windows: [UIWindow] = []
+
     override func tearDown() async throws {
+        for window in windows { window.isHidden = true }
+        windows.removeAll()
         URLProtocolStub.reset()
         try await super.tearDown()
     }
@@ -38,6 +45,7 @@ final class InAppMessageWebViewSecurityTests: XCTestCase {
         // the bridge.
         let (prepared, host, harness) = try await prepare(html: """
         <html><body><script>
+        webkit.messageHandlers.probe.postMessage('bundle');
         setTimeout(function () { location.href = 'other.html'; }, 0);
         </script></body></html>
         """)
@@ -46,9 +54,11 @@ final class InAppMessageWebViewSecurityTests: XCTestCase {
         try Self.page(posting: "dismiss").write(
             to: directory.appendingPathComponent("other.html"), atomically: true, encoding: .utf8
         )
+        let probe = installProbe(on: prepared)
 
         load(prepared)
 
+        try await waitForPage(probe, toReport: "bundle")
         let left = await waitUntil(within: 1.5) {
             prepared.webView.url?.lastPathComponent == "other.html" || !host.dismissReasons.isEmpty
         }
@@ -58,26 +68,31 @@ final class InAppMessageWebViewSecurityTests: XCTestCase {
     }
 
     func test_bridge_ignoresMessagesFromAnIframe() async throws {
-        // The iframe calls `dismiss`; the main frame calls `ready` once the
-        // iframe has loaded.
+        // The main frame calls `ready` and the iframe `dismiss`, each right
+        // after telling the probe it ran.
         let (prepared, host, harness) = try await prepare(html: """
         <html><body>
-        <iframe srcdoc="<script>window.webkit.messageHandlers.galva.postMessage({name: 'dismiss', requestId: 'frame', payload: {}})</script>"></iframe>
+        <iframe srcdoc="<script>webkit.messageHandlers.probe.postMessage('frame'); webkit.messageHandlers.galva.postMessage({name: 'dismiss', requestId: 'frame', payload: {}})</script>"></iframe>
         <script>
-        window.onload = function () {
-          window.webkit.messageHandlers.galva.postMessage({name: 'ready', requestId: 'main', payload: {}});
-        };
+        webkit.messageHandlers.probe.postMessage('main');
+        webkit.messageHandlers.galva.postMessage({name: 'ready', requestId: 'main', payload: {}});
         </script>
         </body></html>
         """)
         defer { harness.cleanup() }
         // Let the iframe load, so this checks the bridge itself.
         prepared.webView.navigationDelegate = nil
+        let probe = installProbe(on: prepared)
 
         load(prepared)
 
-        let ready = await waitUntil(within: generousTimeout) { host.revealCount > 0 }
+        try await waitForPage(probe, toReport: "main")
+        let ready = await waitUntil(within: 5) { host.revealCount > 0 }
         XCTAssertTrue(ready, "the bundle's own main frame reaches the bridge")
+        let frameRan = await waitUntil(within: generousTimeout) { probe.reports.contains("frame") }
+        XCTAssertTrue(frameRan, "the iframe ran, so it did call the bridge")
+        // Its bridge call was posted right after; give it the hop the main
+        // frame's took.
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(host.dismissReasons.count, 0, "an iframe must not reach the bridge")
     }
@@ -161,12 +176,40 @@ final class InAppMessageWebViewSecurityTests: XCTestCase {
         return (prepared, host, harness)
     }
 
-    /// Load the bundle, as the SwiftUI sheet does once it appears.
+    /// Load the bundle, as the SwiftUI sheet does once it appears: on screen,
+    /// in a key window. In a test runner that isn't a foreground app, WebKit
+    /// may never run a page whose view isn't in a window.
     private func load(_ prepared: PreparedInAppMessage) {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let root = UIViewController()
+        window.rootViewController = root
+        prepared.webView.frame = root.view.bounds
+        root.view.addSubview(prepared.webView)
+        window.makeKeyAndVisible()
+        windows.append(window)
         prepared.webView.loadFileURL(
             prepared.bundleURL,
             allowingReadAccessTo: prepared.bundleURL.deletingLastPathComponent()
         )
+    }
+
+    /// A `probe` script message handler on the page, outside the bridge, so
+    /// a test knows which frames ran. Removed at the end of the test.
+    private func installProbe(on prepared: PreparedInAppMessage) -> ScriptProbe {
+        let probe = ScriptProbe()
+        let controller = prepared.webView.configuration.userContentController
+        controller.add(probe, name: "probe")
+        addTeardownBlock { @MainActor in controller.removeScriptMessageHandler(forName: "probe") }
+        return probe
+    }
+
+    /// Wait for the page to tell `probe` it ran. Skips the test when WebKit
+    /// never runs it: what the test checks never happened, and the bridge's
+    /// decisions are covered by the pure tests below and the E2E suite.
+    private func waitForPage(_ probe: ScriptProbe, toReport name: String) async throws {
+        guard await waitUntil(within: generousTimeout, { probe.reports.contains(name) }) else {
+            throw XCTSkip("WebKit never ran the test page in this test runner")
+        }
     }
 
     /// A page that calls bridge method `name` as soon as it runs.
@@ -176,6 +219,19 @@ final class InAppMessageWebViewSecurityTests: XCTestCase {
         window.webkit.messageHandlers.galva.postMessage({name: '\(name)', requestId: 'r', payload: {}});
         </script></body></html>
         """
+    }
+}
+
+/// Records what a page posts to the `probe` script message handler.
+@MainActor
+private final class ScriptProbe: NSObject, WKScriptMessageHandler {
+    private(set) var reports: [String] = []
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        if let report = message.body as? String { reports.append(report) }
     }
 }
 
