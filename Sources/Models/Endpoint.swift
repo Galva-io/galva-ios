@@ -79,7 +79,7 @@ extension CommunicationEndpoint: Codable {
 
 // Note: the public `Communication` namespace (and its `PushPlatform` /
 // `Channel` enums) was removed — push tokens are registered automatically by
-// the SDK from `Galva.applicationDidRegisterForRemoteNotificationsWithDeviceToken(_:)`,
+// the SDK from `Galva.application(_:didRegisterForRemoteNotificationsWithDeviceToken:)`,
 // and email is set via `AppUser.set(.email, …)`. The internal
 // `CommunicationEndpoint.PushPlatform` / `ChannelType` enums (defined above)
 // remain the wire representation.

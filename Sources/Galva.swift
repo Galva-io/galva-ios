@@ -43,6 +43,8 @@
 import Foundation
 #if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
 #endif
 
 // MARK: - Galva namespace
@@ -432,11 +434,11 @@ public enum Galva {
         SDKCore.shared.isOptedOut
     }
     
+    #if canImport(UIKit)
     /// Forward the APNs device token to Galva. Call this from your app
-    /// delegate's
-    /// `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)` —
-    /// pass the raw `Data` exactly as the OS hands it to you; the SDK
-    /// hex-encodes it.
+    /// delegate's method of the same name, passing its arguments through —
+    /// the raw `Data` exactly as the OS hands it to you; the SDK hex-encodes
+    /// it.
     ///
     /// The token is **device-scoped**: the SDK stores it and automatically
     /// keeps it associated with whoever is identified. You only call this once
@@ -448,10 +450,45 @@ public enum Galva {
     ///
     ///     func application(_ application: UIApplication,
     ///         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-    ///         Galva.applicationDidRegisterForRemoteNotificationsWithDeviceToken(deviceToken)
+    ///         Galva.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
     ///     }
-    public static func applicationDidRegisterForRemoteNotificationsWithDeviceToken(_ tokenData: Data) {
-        let hex = tokenData.map { String(format: "%02x", $0) }.joined()
+    public static func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        registerDeviceToken(deviceToken)
+    }
+    #elseif canImport(AppKit)
+    /// Forward the APNs device token to Galva. Call this from your app
+    /// delegate's method of the same name, passing its arguments through —
+    /// the raw `Data` exactly as the OS hands it to you; the SDK hex-encodes
+    /// it.
+    ///
+    /// The token is **device-scoped**: the SDK stores it and automatically
+    /// keeps it associated with whoever is identified. You only call this once
+    /// per launch — after `AppUser.identify(...)` or `AppUser.logOut()` the SDK
+    /// re-registers the same token for the new user on its own. You never have
+    /// to re-send it per user.
+    ///
+    /// Example:
+    ///
+    ///     func application(_ application: NSApplication,
+    ///         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    ///         Galva.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+    ///     }
+    public static func application(
+        _ application: NSApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        registerDeviceToken(deviceToken)
+    }
+    #endif
+
+    /// What the device-token forwarders do: hex-encode the APNs token and
+    /// register it. Internal so the React Native bridge, which receives the
+    /// token from JavaScript with no `UIApplication` in hand, can call it too.
+    static func registerDeviceToken(_ deviceToken: Data) {
+        let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
         SDKCore.shared.submit { await $0.registerDeviceToken(hex) }
     }
 

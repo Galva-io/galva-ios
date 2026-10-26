@@ -88,10 +88,12 @@ final class MainThreadBudgetTests: XCTestCase {
     }
 
     func test_registerDeviceToken_returnsImmediately() {
+        // The body of `Galva.application(_:didRegisterForRemoteNotificationsWithDeviceToken:)`,
+        // called directly: a test bundle has no `UIApplication` to pass in.
         let token = Data(repeating: 0xAB, count: 32)  // typical APNs token size
         assertUnderBudget(
-            nsPerCall { Galva.applicationDidRegisterForRemoteNotificationsWithDeviceToken(token) },
-            "applicationDidRegisterForRemoteNotificationsWithDeviceToken"
+            nsPerCall { Galva.registerDeviceToken(token) },
+            "Galva.application(_:didRegisterForRemoteNotificationsWithDeviceToken:)"
         )
     }
 }

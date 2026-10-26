@@ -12,6 +12,11 @@
 import Foundation
 @testable import Galva
 import XCTest
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 final class SDKCoreDeviceTokenTests: XCTestCase {
 
@@ -25,6 +30,32 @@ final class SDKCoreDeviceTokenTests: XCTestCase {
                 platform == .apns && token == "deadbeef"
             }
         }
+    }
+
+    func test_forwarder_hexEncodesTheTokenAndRegistersIt() async {
+        let harness = await SDKHarness.makeConfigured()
+        defer { harness.cleanup() }
+
+        // The public forwarder's body; its signature is pinned below.
+        SDKCoreTestBinding.$core.withValue(harness.core) {
+            Galva.registerDeviceToken(Data([0xDE, 0xAD, 0xBE, 0xEF]))
+        }
+        await eventually {
+            await Self.pushTokens(harness) == ["deadbeef"]
+        }
+    }
+
+    func test_forwarder_mirrorsTheAppDelegateMethod() {
+        // Same name and labels as the delegate method it's called from, like
+        // the other forwarders.
+        #if canImport(UIKit)
+        let forwarder: (UIApplication, Data) -> Void =
+            Galva.application(_:didRegisterForRemoteNotificationsWithDeviceToken:)
+        #elseif canImport(AppKit)
+        let forwarder: (NSApplication, Data) -> Void =
+            Galva.application(_:didRegisterForRemoteNotificationsWithDeviceToken:)
+        #endif
+        _ = forwarder
     }
 
     func test_login_reRegistersTokenForNewUser() async {

@@ -183,7 +183,7 @@ func application(
     _ application: UIApplication,
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
 ) {
-    Galva.applicationDidRegisterForRemoteNotificationsWithDeviceToken(deviceToken)
+    Galva.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
 }
 ```
 
