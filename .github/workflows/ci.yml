@@ -92,6 +92,10 @@ jobs:
             echo "error: no available iPhone simulator found" >&2
             exit 2
           fi
+          # Boot and wait first: on a never-booted simulator, StoreKit and
+          # WebKit take tens of seconds to answer, which the tests would
+          # otherwise spend waiting.
+          xcrun simctl bootstatus "$UDID" -b
           xcodebuild test -scheme Galva -destination "platform=iOS Simulator,id=$UDID"
 
   e2e:

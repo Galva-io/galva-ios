@@ -63,24 +63,27 @@ final class InAppMessagePresenterTests: XCTestCase {
     func test_show_anotherMessage_waitsForTheOneInFlight() async {
         let (presenter, harness) = await makePresenter(presentTimeout: 1)
         defer { harness.cleanup() }
-        let (scene, _) = makeWindow()
+        let (scene, root) = makeWindow()
         let messageA = makeInAppMessage()
         let messageB = makeInAppMessage()
 
         let showA = ShowCall(presenter, messageA, scene)
         let showB = ShowCall(presenter, messageB, scene)
 
-        let presentingA = await waitUntil(within: 3) { presenter.viewController?.messageId == messageA.id }
-        XCTAssertTrue(presentingA, "A should reach present")
-        XCTAssertTrue(
-            presenter.webView?.navigationDelegate is InAppMessageNavigationPolicy,
+        // The presenter drops A's sheet once it gives up on UIKit, within
+        // `presentTimeout` — at once on a slow runner, where building the
+        // WebView uses that time up — so check the sheet as it was presented.
+        let presented = await waitUntil(within: generousTimeout) { !root.presentedSheets.isEmpty }
+        XCTAssertTrue(presented, "A should reach present")
+        XCTAssertEqual(root.presentedSheets.first?.messageId, messageA.id, "A should reach present")
+        XCTAssertEqual(
+            root.presentedSheets.first?.usesNavigationPolicy, true,
             "the UIKit sheet uses the shared navigation policy"
         )
-        try? await Task.sleep(nanoseconds: 300_000_000)
-        XCTAssertEqual(InAppMessageStubServer.resolvedIds, [messageA.id], "B must not start while A is in flight")
 
-        let bothFinished = await waitUntil(within: 6) { showA.isFinished && showB.isFinished }
+        let bothFinished = await waitUntil(within: generousTimeout) { showA.isFinished && showB.isFinished }
         XCTAssertTrue(bothFinished, "B runs once A finishes")
+        XCTAssertEqual(showA.resolvedIdsWhenFinished, [messageA.id], "B must not start while A is in flight")
         XCTAssertEqual(InAppMessageStubServer.resolvedIds, [messageA.id, messageB.id])
     }
 
@@ -219,9 +222,9 @@ final class InAppMessagePresenterTests: XCTestCase {
     }
 
     /// A key window and its root view controller, plus the window's scene.
-    private func makeWindow() -> (UIWindowScene, UIViewController) {
+    private func makeWindow() -> (UIWindowScene, RecordingRootViewController) {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
-        let root = UIViewController()
+        let root = RecordingRootViewController()
         window.rootViewController = root
         window.makeKeyAndVisible()
         windows.append(window)
@@ -249,6 +252,9 @@ final class InAppMessagePresenterTests: XCTestCase {
 private final class ShowCall {
     private(set) var isFinished = false
     private(set) var error: (any Error)?
+    /// The messages resolved by the time `show` returned — before the next
+    /// queued call can start.
+    private(set) var resolvedIdsWhenFinished: [String] = []
 
     init(_ presenter: InAppMessagePresenter, _ message: InAppMessages.Message, _ scene: UIWindowScene) {
         Task { @MainActor in
@@ -257,8 +263,37 @@ private final class ShowCall {
             } catch {
                 self.error = error
             }
+            self.resolvedIdsWhenFinished = InAppMessageStubServer.resolvedIds
             self.isFinished = true
         }
+    }
+}
+
+/// A window's root view controller that records each in-app message sheet
+/// presented on it as it was then. In the test runner UIKit never finishes
+/// the presentation, so the presenter later gives up on the sheet and tears
+/// it down.
+@MainActor
+private final class RecordingRootViewController: UIViewController {
+    struct PresentedSheet {
+        let messageId: String
+        let usesNavigationPolicy: Bool
+    }
+
+    private(set) var presentedSheets: [PresentedSheet] = []
+
+    override func present(
+        _ viewControllerToPresent: UIViewController,
+        animated flag: Bool,
+        completion: (() -> Void)? = nil
+    ) {
+        if let sheet = viewControllerToPresent as? InAppMessageViewController {
+            presentedSheets.append(PresentedSheet(
+                messageId: sheet.messageId,
+                usesNavigationPolicy: sheet.webView.navigationDelegate is InAppMessageNavigationPolicy
+            ))
+        }
+        super.present(viewControllerToPresent, animated: flag, completion: completion)
     }
 }
 

@@ -89,7 +89,8 @@ struct SDKHarness: Sendable {
 
     /// An in-app message manager on this harness's identity and stream, for
     /// tests that assign it to `core.inAppMessageManager`. Network goes to
-    /// `URLProtocolStub`; bundles to a temp directory.
+    /// `URLProtocolStub`; bundles to a temp directory. There's no App Store
+    /// storefront, so a resolve never waits on StoreKit.
     @GalvaActor
     func makeInAppMessageManager() -> InAppMessageManager {
         makeInAppMessaging().manager
@@ -129,7 +130,8 @@ struct SDKHarness: Sendable {
             stream: core.inAppMessageStream,
             bundleCache: bundleCache,
             initialization: InitializationManager(client: client, cache: nil, logger: SilentLogger()),
-            logger: SilentLogger()
+            logger: SilentLogger(),
+            loadStorefrontTerritory: { nil }
         )
         return (manager, bundleCache)
     }

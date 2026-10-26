@@ -76,7 +76,7 @@ final class InAppMessageWebViewSecurityTests: XCTestCase {
 
         load(prepared)
 
-        let ready = await waitUntil(within: 5) { host.revealCount > 0 }
+        let ready = await waitUntil(within: generousTimeout) { host.revealCount > 0 }
         XCTAssertTrue(ready, "the bundle's own main frame reaches the bridge")
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(host.dismissReasons.count, 0, "an iframe must not reach the bridge")
@@ -91,7 +91,7 @@ final class InAppMessageWebViewSecurityTests: XCTestCase {
 
         load(prepared)
 
-        let closed = await waitUntil(within: 5) { !host.dismissReasons.isEmpty }
+        let closed = await waitUntil(within: generousTimeout) { !host.dismissReasons.isEmpty }
         XCTAssertTrue(closed, "a page that can't load must close the sheet, not leave it blank")
     }
 

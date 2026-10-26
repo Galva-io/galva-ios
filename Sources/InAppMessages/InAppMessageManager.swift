@@ -40,6 +40,12 @@ final class InAppMessageManager {
     /// production; nil-safe so tests can omit it).
     private let durableRequestQueue: DurableRequestQueue?
 
+    /// `Storefront.current?.countryCode`; injectable so tests don't wait on
+    /// StoreKit, whose first answer on a freshly booted simulator can take
+    /// over 10 seconds.
+    typealias StorefrontTerritoryLoader = @Sendable () async -> String?
+    private let loadStorefrontTerritory: StorefrontTerritoryLoader
+
     /// Drop duplicate messages observed within the lifetime of the SDK
     /// process. Prevents a rapid background/foreground toggle from
     /// emitting the same message twice. Bounded — see prune below. A
@@ -185,7 +191,8 @@ final class InAppMessageManager {
         bundleCache: WebViewBundleCache,
         initialization: InitializationManager,
         logger: any GalvaLogger,
-        durableRequestQueue: DurableRequestQueue? = nil
+        durableRequestQueue: DurableRequestQueue? = nil,
+        loadStorefrontTerritory: @escaping StorefrontTerritoryLoader = { await Storefront.current?.countryCode }
     ) {
         self.client = client
         self.identity = identity
@@ -194,6 +201,7 @@ final class InAppMessageManager {
         self.initialization = initialization
         self.logger = logger
         self.durableRequestQueue = durableRequestQueue
+        self.loadStorefrontTerritory = loadStorefrontTerritory
     }
 
     // MARK: - Polling
@@ -443,7 +451,7 @@ final class InAppMessageManager {
     /// Store. The server treats `nil` as "no storefront-specific rendering
     /// needed", so callers don't need to guard against it.
     private func currentStorefrontTerritory() async -> String? {
-        await Storefront.current?.countryCode
+        await loadStorefrontTerritory()
     }
 
     // MARK: - WebView API proxy (`apiFetch` bridge)

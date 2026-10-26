@@ -9,7 +9,8 @@
 //      pending messages, through `URLProtocolStub`
 //    • `RecordingHost` — records what the bridge and the WebView's
 //      navigation policy ask of the presentation
-//    • `waitUntil` — bounded polling on the main actor
+//    • `waitUntil` — bounded polling on the main actor, with
+//      `generousTimeout` for anything that should happen
 //
 //  The test runner is not an app: WebKit loads pages and delivers script
 //  messages, but UIKit never finishes a view controller transition, so a
@@ -92,6 +93,14 @@ final class RecordingHost: InAppMessageHost {
     func reveal() { revealCount += 1 }
     func dismiss(reason: String?) { dismissReasons.append(reason) }
 }
+
+/// How long to wait for something that should happen: WebKit loading a page,
+/// a `show` getting through to UIKit. Generous, because on a freshly booted
+/// simulator (as on a CI runner) WebKit's first page load can take most of a
+/// minute while it launches its processes and waits on system daemons. It
+/// costs nothing when things work: `waitUntil` returns as soon as its
+/// condition holds.
+let generousTimeout: TimeInterval = 120
 
 /// Poll `condition` until it holds or `seconds` pass. Returns whether it held.
 @MainActor
