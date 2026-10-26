@@ -13,7 +13,7 @@
 //
 
 import Foundation
-@testable import Galva
+@_spi(Testing) @testable import Galva
 import XCTest
 
 /// Synchronous main-thread probe. `Thread.isMainThread` is unavailable from

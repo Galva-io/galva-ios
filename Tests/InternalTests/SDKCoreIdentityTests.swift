@@ -18,7 +18,7 @@
 //
 
 import Foundation
-@testable import Galva
+@_spi(Testing) @testable import Galva
 import XCTest
 
 @GalvaActor

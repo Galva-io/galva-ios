@@ -146,9 +146,9 @@ final class DeepLinkTests: XCTestCase {
     // `scene(_:openURLContexts:)` / `scene(_:willConnectTo:options:)` take
     // UIOpenURLContext / UIScene.ConnectionOptions, which have no public
     // initializers — they're a trivial `$0.url` map into `handleOpenURLs`
-    // (tested above), so they're covered transitively. The two `application(…)`
-    // mirrors take a `UIApplication` we can supply (`.shared`) + a plain
-    // dictionary, so they're asserted directly.
+    // (tested above), so they're covered transitively. The
+    // `application(_:open:options:)` mirror takes a `UIApplication` we can
+    // supply (`.shared`) + a plain URL, so it's asserted directly.
 
     #if canImport(UIKit)
     @MainActor
@@ -157,14 +157,6 @@ final class DeepLinkTests: XCTestCase {
             .shared, open: URL(string: "gvabc://openCommunication?communicationId=x")!))
         XCTAssertFalse(Galva.application(
             .shared, open: URL(string: "https://example.com")!))
-    }
-
-    @MainActor
-    func test_application_didFinishLaunching_extractsLaunchURL() {
-        let gv = URL(string: "gvabc://openCommunication?communicationId=x")!
-        XCTAssertTrue(Galva.application(.shared, didFinishLaunchingWithOptions: [.url: gv]))
-        XCTAssertFalse(Galva.application(.shared, didFinishLaunchingWithOptions: [:]))
-        XCTAssertFalse(Galva.application(.shared, didFinishLaunchingWithOptions: nil))
     }
     #endif
 

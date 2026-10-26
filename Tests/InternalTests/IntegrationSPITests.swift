@@ -40,7 +40,7 @@ final class IntegrationSPITests: XCTestCase {
     func test_controllerTestsCanBuildARequest() async throws {
         let request = Galva.PurchaseRequest(
             productId: "com.app.pro.year",
-            promotionalOffer: nil,
+            promotionalOffer: Galva.PromotionalOffer(offerId: "winback_50", compactJWS: "h.p.s"),
             appAccountToken: UUID(),
             messageId: "msg-1",
             storeKitPurchase: { .userCancelled }

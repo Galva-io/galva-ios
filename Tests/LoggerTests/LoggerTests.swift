@@ -19,7 +19,7 @@
 //
 
 import Foundation
-@testable import Galva
+@_spi(GalvaIntegration) @testable import Galva
 import XCTest
 
 // MARK: - RecordingLogger

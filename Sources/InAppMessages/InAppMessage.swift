@@ -6,9 +6,11 @@
 //  consume off the `InAppMessages.messages` AsyncStream.
 //
 //  Deliberately small. The full content (copy, layout, components,
-//  theming) lives inside the WebView bundle keyed by `webviewVersion`; the
-//  host app never inspects it. Developers typically read `id` and
-//  `workflowType`, then call `message.show(in: scene)` to render.
+//  theming) lives inside the WebView bundle; the host app never inspects
+//  it. With the default `.automatic` presentation apps don't present
+//  messages themselves; in `.manual` mode they read
+//  `InAppMessages.messages` and call `message.show()` or use
+//  `.inAppMessageSheet(_:)`.
 //
 
 import Foundation
@@ -38,7 +40,10 @@ public extension InAppMessages {
         /// burst of foreground polls.
         public let createdAt: Date
 
-
+        /// Build a message by hand — for unit tests. Galva builds real
+        /// messages itself; one built here was never issued by Galva, so
+        /// `show(in:)` can't present it.
+        @_spi(Testing)
         public init(
             id: String,
             workflowType: WorkflowType?,

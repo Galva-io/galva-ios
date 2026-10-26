@@ -99,7 +99,7 @@ func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>)
 }
 ```
 
-Apps without scenes forward links with `Galva.application(_:didFinishLaunchingWithOptions:)` and `Galva.application(_:open:options:)`. See [Handle deep links](https://docs.galva.io/sdks/ios/deep-links).
+Apps without scenes forward links from `application(_:open:options:)` with `Galva.application(_:open:options:)`. UIKit calls that method for the launch URL too. See [Handle deep links](https://docs.galva.io/sdks/ios/deep-links).
 
 </details>
 

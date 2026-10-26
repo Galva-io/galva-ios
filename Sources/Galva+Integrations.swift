@@ -38,8 +38,10 @@ public extension Galva {
     /// `Galva.configure(apiKey:…, integrations:)`.
     struct Integration: Sendable {
         /// Short identifier, e.g. `"revenuecat"`.
+        @_spi(GalvaIntegration)
         public let name: String
         /// Version of the package that provides the integration.
+        @_spi(GalvaIntegration)
         public let version: String
 
         let install: @Sendable (IntegrationContext) async -> Void
@@ -70,6 +72,9 @@ public extension Galva {
         /// `Galva.setLogger(_:)`. Log under `.integration`.
         public let logger: any GalvaLogger
 
+        /// Build a context by hand — for unit-testing an integration. Galva
+        /// builds real contexts itself.
+        @_spi(Testing)
         public init(logger: any GalvaLogger) {
             self.logger = logger
         }

@@ -79,13 +79,14 @@ public enum Galva {
         /// this. **Default** if you don't pass an environment.
         case production
         
-        /// `api.galva.dev` + `webview.galva.dev`. Used for in-house dev /
-        /// staging builds and local debugging.
+        /// Galva's development backend: `api.galva.dev` +
+        /// `webview.galva.dev`. Works only with an App ID issued for it;
+        /// your own debug builds still use `.production`.
         case development
         
         /// Custom backend — supply your own API + webview bundle CDN URLs.
-        /// Reserved for on-prem and proxy setups; the standard SaaS path
-        /// is `.production` / `.development`.
+        /// Reserved for on-prem and proxy setups; the standard path is
+        /// `.production`.
         ///
         /// - Parameters:
         ///   - apiBaseURL: Base URL the SDK appends RPC paths to
@@ -96,7 +97,7 @@ public enum Galva {
         case custom(apiBaseURL: URL, webviewBundleCDN: URL)
         
         /// Resolved API base URL for this environment.
-        public var apiBaseURL: URL {
+        var apiBaseURL: URL {
             switch self {
             case .production:   return SDKConstants.productionAPIBaseURL
             case .development:  return SDKConstants.developmentAPIBaseURL
@@ -105,7 +106,7 @@ public enum Galva {
         }
         
         /// Resolved webview bundle CDN URL for this environment.
-        public var webviewBundleCDN: URL {
+        var webviewBundleCDN: URL {
             switch self {
             case .production:   return SDKConstants.productionWebviewBundleCDN
             case .development:  return SDKConstants.developmentWebviewBundleCDN
@@ -121,7 +122,7 @@ public enum Galva {
     ///
     /// Default: `[.lifecycle, .appleSearchAds]`
     public struct AutoTrackCategory: OptionSet, Sendable {
-        public var rawValue: UInt
+        public let rawValue: UInt
         public init(rawValue: UInt) { self.rawValue = rawValue }
         
         /// Emit `session_start` events automatically. Driven by
@@ -168,18 +169,14 @@ public enum Galva {
     ///     .error   — operation failed: permanent upload failure, decode failure
     ///     .fault   — invariant broken, data-loss risk
     ///     .off     — silence the SDK entirely
-    public enum LogLevel: Int, Sendable, Comparable {
-        case debug   = 0
-        case info    = 1
-        case notice  = 2
-        case warning = 3
-        case error   = 4
-        case fault   = 5
-        case off     = 99
-        
-        public static func < (lhs: Self, rhs: Self) -> Bool {
-            lhs.rawValue < rhs.rawValue
-        }
+    public enum LogLevel: Sendable, Comparable {
+        case debug
+        case info
+        case notice
+        case warning
+        case error
+        case fault
+        case off
     }
     
     // MARK: LogCategory
@@ -498,22 +495,20 @@ public enum Galva {
     ///     ContentView()
     ///         .onOpenURL { url in Galva.handleOpenURL(url) }
     ///
-    /// UIKit apps forward from their App / Scene delegates — the
-    /// `Galva.application(...)` / `Galva.scene(...)` mirrors in
-    /// `Galva+OpenURL.swift` cover every entry point (cold + warm) and call
-    /// this under the hood.
+    /// UIKit apps forward from their App / Scene delegates instead, with
+    /// `Galva.application(_:open:options:)` (apps without scenes) or
+    /// `Galva.scene(_:willConnectTo:options:)` and
+    /// `Galva.scene(_:openURLContexts:)`, which call this under the hood.
     ///
     /// - Returns: `true` if this is a Galva deep link (scheme begins with
     ///   `gv`) that the SDK has claimed, `false` otherwise. Galva only
     ///   handles its own `gv…` scheme — `http(s)` and your app's own custom
-    ///   schemes return `false` and are untouched, so a UIKit
-    ///   `application(_:open:)` can use the result to decide whether to route
-    ///   the URL itself:
+    ///   schemes return `false` and are untouched, so you can use the result
+    ///   to decide whether to route the URL yourself:
     ///
-    ///     func application(_ app: UIApplication, open url: URL,
-    ///                      options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-    ///         if Galva.handleOpenURL(url) { return true }   // Galva took it
-    ///         return myRouter.handle(url)                   // your own links
+    ///     .onOpenURL { url in
+    ///         if Galva.handleOpenURL(url) { return }   // Galva took it
+    ///         myRouter.handle(url)                     // your own links
     ///     }
     ///
     /// The Galva-side handling itself is fire-and-forget (resolve + present
@@ -526,11 +521,11 @@ public enum Galva {
         return true
     }
 
-    /// Forward a batch of opened URLs (e.g. the set delivered to a scene, or a
-    /// cold-launch option). Each is run through `handleOpenURL(_:)`; Galva
-    /// claims only its own `gv…` URLs and ignores the rest.
+    /// Forward a batch of opened URLs (e.g. the set delivered to a scene).
+    /// Each is run through `handleOpenURL(_:)`; Galva claims only its own
+    /// `gv…` URLs and ignores the rest.
     ///
-    /// Shared by the UIKit App / Scene delegate forwarders in
+    /// Shared by the UIKit Scene delegate forwarders in
     /// `Galva+OpenURL.swift`. Platform-agnostic (takes plain `URL`s) so the
     /// extraction logic is host-testable without UIKit objects.
     ///

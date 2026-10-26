@@ -126,7 +126,7 @@ Public error enums (`InAppMessages.Error`, `Galva.PurchaseError`) stay enums. Th
 
 SDKs that integrate with another vendor's SDK (e.g. [`galva-ios-revenuecat`](https://github.com/Galva-io/galva-ios-revenuecat)) are separate packages. SwiftPM fetches and pins every dependency a package declares, even ones only used by products an app doesn't link, so a vendor dependency in this `Package.swift` would reach every Galva app.
 
-Integration packages plug in through `Galva.configure(…, integrations:)`. They build a `Galva.Integration` with the `@_spi(GalvaIntegration)` initializer, and unit-test purchase controllers with `@_spi(Testing)` `Galva.PurchaseRequest` values. `IntegrationSPITests` pins that surface, so changing it breaks a test here before it breaks an integration package.
+Integration packages plug in through `Galva.configure(…, integrations:)`. They build a `Galva.Integration` with the `@_spi(GalvaIntegration)` initializer and log through the `GalvaLogger` convenience methods, which are `@_spi(GalvaIntegration)` too. Their unit tests build `@_spi(Testing)` values: `Galva.PurchaseRequest`, `Galva.PromotionalOffer` and `Galva.IntegrationContext`. `IntegrationSPITests` pins that surface, so changing it breaks a test here before it breaks an integration package.
 
 ### React Native vendors this source
 
@@ -143,7 +143,7 @@ Short version:
 
 ### Logger pipeline
 
-Public surface in [`Sources/Logger/Logger.swift`](Sources/Logger/Logger.swift). All internal call sites use the typed convenience methods (`logger.warning(.uploader, "…")`) — `lint.sh` enforces no raw `print`.
+Public surface in [`Sources/Logger/Logger.swift`](Sources/Logger/Logger.swift); apps implement only `log(_:)`. All internal call sites use the typed convenience methods (`logger.warning(.uploader, "…")`), `@_spi(GalvaIntegration)` so integration packages can use them too — `lint.sh` enforces no raw `print`.
 
 Default sink is `OSLogLogger`, writing to subsystem `co.galva.sdk` (visible in Console.app). Custom loggers are wrapped in `LevelFilterLogger` so the `logLevel` set at configure time always applies, even after `Galva.setLogger(_:)`. Integrations log through `CurrentSDKLogger`, which always forwards to the SDK's current logger.
 

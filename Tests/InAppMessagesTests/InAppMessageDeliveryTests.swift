@@ -7,7 +7,7 @@
 //
 
 import Foundation
-@testable import Galva
+@_spi(Testing) @testable import Galva
 import XCTest
 
 /// Records presentations; runs on the main actor.

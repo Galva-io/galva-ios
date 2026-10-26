@@ -78,6 +78,9 @@ public extension Galva {
         /// offer's signed claims.
         public let compactJWS: String
 
+        /// Build an offer by hand — for unit-testing a controller. Galva
+        /// builds real offers itself.
+        @_spi(Testing)
         public init(offerId: String, compactJWS: String) {
             self.offerId = offerId
             self.compactJWS = compactJWS
