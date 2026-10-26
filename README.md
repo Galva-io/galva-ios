@@ -119,6 +119,8 @@ AppUser.logOut()
 
 Using RevenueCat? Skip this step and add the [RevenueCat integration](#using-revenuecat) instead.
 
+If your app has its own type named `AppUser`, `AppEvents` or `InAppMessages`, write `Galva.AppUser`, `Galva.AppEvents` or `Galva.InAppMessages` to reach the SDK's.
+
 ### 5. Register your URL scheme
 
 So **Continue in App** on Galva's offer page opens your app, add your `gv-` scheme under your target's **Info → URL Types**, or in `Info.plist`:
