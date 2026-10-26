@@ -80,7 +80,7 @@ extension InAppMessageNavigationPolicy: WKNavigationDelegate {
             return
         }
         logger.warning(.inAppMessages, "webview navigation blocked", metadata: [
-            "url": target?.absoluteString ?? "<nil>",
+            "url": target?.loggableLocation ?? "<nil>",
         ])
         decisionHandler(.cancel)
     }

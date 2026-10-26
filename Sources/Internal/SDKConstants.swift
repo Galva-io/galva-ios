@@ -76,6 +76,44 @@ enum SDKConstants {
     /// https://docs.galva.io/integrations/app-store
     static let transactionsObservePath = "/v1/transactions/observe"
 
+    /// `POST /communications/track` — the in-app page's track events
+    /// (`survey_viewed`, `offer_viewed`, `offer_completed`, …), which the
+    /// page posts through the `apiFetch` bridge. While the user is opted
+    /// out, only `communicationTrackEventsSentWhileOptedOut` go out.
+    static let communicationTrackPath = "/communications/track"
+
+    /// Track events that complete what the user did rather than record it.
+    /// `offer_completed` carries the purchase's transaction id: from it the
+    /// server records the offer as redeemed, attributes its renewals and
+    /// stops the run as converted, which nothing else does. So it goes out
+    /// while the user is opted out; every other event is analytics.
+    static let communicationTrackEventsSentWhileOptedOut: Set<String> = ["offer_completed"]
+
+    /// Track events that tell the server a message went on screen: it sets
+    /// the communication's `presentedAt`, which takes it out of later polls.
+    /// While they're withheld, `PresentedMessageLog` does that on the device.
+    static let communicationPresentedEvents: Set<String> = ["offer_viewed", "survey_viewed"]
+
+    /// Whether a page `apiFetch` to `path` with `body` is analytics, which
+    /// the SDK neither sends nor keeps while the user is opted out: a post to
+    /// `communicationTrackPath` whose `event` isn't one of
+    /// `communicationTrackEventsSentWhileOptedOut`. A body it can't read
+    /// counts as analytics.
+    static func isPageAnalytics(path: String, body: Data?) -> Bool {
+        guard isCommunicationTrackPath(path) else { return false }
+        guard let event = CommunicationTrackBody(body)?.event else { return true }
+        return !communicationTrackEventsSentWhileOptedOut.contains(event)
+    }
+
+    /// Whether a page-supplied `apiFetch` path targets
+    /// `communicationTrackPath`. Compares the path the request would go to
+    /// (`APIClient.resolveProxyURL`, standardized), so a missing leading
+    /// slash, a query or dot segments can't slip past.
+    static func isCommunicationTrackPath(_ path: String) -> Bool {
+        let resolved = APIClient.resolveProxyURL(path: path, base: productionAPIBaseURL)
+        return resolved?.standardized.path == communicationTrackPath
+    }
+
     /// Build the file URL for a WebView bundle on the supplied CDN. Used
     /// by `WebViewBundleCache` so the path scheme stays in one place.
     static func webviewBundleURL(version: String, cdn: URL) -> URL {

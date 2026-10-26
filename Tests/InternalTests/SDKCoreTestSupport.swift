@@ -131,6 +131,7 @@ struct SDKHarness: Sendable {
             bundleCache: bundleCache,
             initialization: InitializationManager(client: client, cache: nil, logger: SilentLogger()),
             logger: SilentLogger(),
+            isOptedOut: { [core] in core.isOptedOut },
             loadStorefrontTerritory: { nil }
         )
         return (manager, bundleCache)

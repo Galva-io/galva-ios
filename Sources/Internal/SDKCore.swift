@@ -76,6 +76,11 @@ final class SDKCore {
     /// configure (flush survivors) and every foreground.
     var durableRequestQueue: DurableRequestQueue?
 
+    /// In-app messages shown without the server learning so — while opted
+    /// out — kept across launches so polls don't deliver them again. `nil`
+    /// before configure() lands.
+    var presentedMessageLog: PresentedMessageLog?
+
     /// Broadcast hub for the `InAppMessages.messages` AsyncStream. Held
     /// here because `InAppMessages.messages` (a `static var`) needs a
     /// stable per-SDK reference across calls.
@@ -169,8 +174,20 @@ final class SDKCore {
     //   • skips `Transaction.all` sweeps
     //   • purges the persisted event queue on the false → true transition,
     //     and at configure (for an opt-out made before the queue existed)
+    //   • doesn't send or queue the in-app page's analytics (every
+    //     `POST /communications/track` but `offer_completed`) — the bridge
+    //     answers them itself — and purges the ones still in the durable
+    //     apiFetch queue on the transition and before every drain
+    //   • remembers on the device the messages it shows, which the withheld
+    //     `offer_viewed` / `survey_viewed` would have marked presented on the
+    //     server, so later launches' polls don't deliver them again
     // In-app message polling + rendering keep working; opt-out blocks
-    // server-bound telemetry, not user-visible feature delivery.
+    // telemetry, not user-visible feature delivery. So these still go to
+    // Galva: the foreground poll and resolve (anonymousId, endUserId,
+    // storefront), bundle downloads, the page's requests for what the user
+    // does (survey answers, follow-up text, offer acceptance, the completed
+    // offer purchase's `offer_completed`) and the `appAccountToken` on
+    // purchases Galva starts.
 
     nonisolated private static let _optedOutLock = NSLock()
     /// `nil` until loaded at configure() or set.
@@ -219,15 +236,16 @@ final class SDKCore {
         submit { await $0.optOutDidChange(to: value) }
     }
 
-    /// Purge the queue on the false → true transition so pre-existing events
-    /// don't leak after the user opts out. Internal so the tests'
+    /// Purge the queues on the false → true transition so pre-existing
+    /// events don't leak after the user opts out. Internal so the tests'
     /// `setOptedOut` can await it.
     func optOutDidChange(to value: Bool) async {
         if value {
             // Drop everything still on disk so opting back in doesn't
             // resurrect events the user wanted ignored.
             try? await queue?.clearQueue()
-            logger.info(.configuration, "opted out — event queue purged")
+            await purgeQueuedPageAnalytics()
+            logger.info(.configuration, "opted out — queued events purged")
         } else {
             logger.info(.configuration, "opted back in")
         }
@@ -595,9 +613,10 @@ final class SDKCore {
             logger: logger
         )
         self.durableRequestQueue = durableRequestQueue
-        // Flush any requests that survived the previous launch. Forced — a
-        // fresh launch is a good moment to attempt immediately.
-        Task { @GalvaActor in await durableRequestQueue.drain(force: true) }
+        let presentedMessageLog = PresentedMessageLog()
+        self.presentedMessageLog = presentedMessageLog
+        // Flush any requests that survived the previous launch.
+        Task { @GalvaActor [weak self] in await self?.drainDurableRequests() }
 
         // Manager — only constructible if both bundleCache and initManager
         // came up. Without them in-app messaging cannot function.
@@ -609,7 +628,9 @@ final class SDKCore {
             bundleCache: bundleCache,
             initialization: initManager,
             logger: logger,
-            durableRequestQueue: durableRequestQueue
+            isOptedOut: { [weak self] in self?.isOptedOut ?? false },
+            durableRequestQueue: durableRequestQueue,
+            presentedMessageLog: presentedMessageLog
         )
         self.inAppMessageManager = manager
 
@@ -649,17 +670,39 @@ final class SDKCore {
                         await self.transactionObserver?.sweep()
                     }
                     // Retry any durable apiFetch requests that failed earlier
-                    // (network was down, app was killed mid-flight). Forced —
-                    // foreground is a good moment to retry sooner than the
-                    // backoff window, and it's naturally rate-limited. Not
-                    // opt-out gated — these are bundle-initiated user actions,
-                    // consistent with in-app messaging continuing under opt-out.
-                    await self.durableRequestQueue?.drain(force: true)
+                    // (network was down, app was killed mid-flight).
+                    await self.drainDurableRequests()
                 }
             }
             self?.lifecycleObserver = observer
             observer.start()
         }
+    }
+
+    /// Deliver what the durable apiFetch queue holds — at launch and on every
+    /// foreground. Forced: both are good moments to try sooner than the
+    /// backoff window, and they're naturally rate-limited.
+    func drainDurableRequests() async {
+        guard let durableRequestQueue else { return }
+        // An opt-out made before this launch's queue existed (in an earlier
+        // launch, or `setOptOut` before `configure`) hasn't purged it.
+        if isOptedOut { await purgeQueuedPageAnalytics() }
+        await durableRequestQueue.drain(force: true)
+    }
+
+    /// Drop the in-app page's analytics still waiting in the durable
+    /// apiFetch queue, so they go out neither now nor after the user opts
+    /// back in. The page's other queued requests stay, `offer_completed`
+    /// among them. A dropped `offer_viewed` / `survey_viewed` would have
+    /// marked its message presented on the server, so the device remembers
+    /// it instead.
+    private func purgeQueuedPageAnalytics() async {
+        guard let durableRequestQueue else { return }
+        let removed = await durableRequestQueue.removeAll {
+            SDKConstants.isPageAnalytics(path: $0.path, body: $0.body)
+        }
+        let presented = removed.compactMap { CommunicationTrackBody($0.body)?.presentedCommunicationId }
+        presentedMessageLog?.record(presented)
     }
 
     /// Install a custom logger after configure. The level filter set at

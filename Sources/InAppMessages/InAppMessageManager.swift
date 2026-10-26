@@ -40,6 +40,15 @@ final class InAppMessageManager {
     /// production; nil-safe so tests can omit it).
     private let durableRequestQueue: DurableRequestQueue?
 
+    /// Whether the user opted out (`Galva.setOptOut`). The bridge reads it
+    /// before proxying the page's analytics, hence `nonisolated`. Injected
+    /// so tests can flip it without touching the process-wide flag.
+    nonisolated let isOptedOut: @Sendable () -> Bool
+
+    /// Messages shown while the server couldn't learn so (opted out), kept
+    /// across launches; polls skip them. `nil` only in tests that omit it.
+    private let presentedMessageLog: PresentedMessageLog?
+
     /// `Storefront.current?.countryCode`; injectable so tests don't wait on
     /// StoreKit, whose first answer on a freshly booted simulator can take
     /// over 10 seconds.
@@ -191,7 +200,9 @@ final class InAppMessageManager {
         bundleCache: WebViewBundleCache,
         initialization: InitializationManager,
         logger: any GalvaLogger,
+        isOptedOut: @escaping @Sendable () -> Bool,
         durableRequestQueue: DurableRequestQueue? = nil,
+        presentedMessageLog: PresentedMessageLog? = nil,
         loadStorefrontTerritory: @escaping StorefrontTerritoryLoader = { await Storefront.current?.countryCode }
     ) {
         self.client = client
@@ -200,7 +211,9 @@ final class InAppMessageManager {
         self.bundleCache = bundleCache
         self.initialization = initialization
         self.logger = logger
+        self.isOptedOut = isOptedOut
         self.durableRequestQueue = durableRequestQueue
+        self.presentedMessageLog = presentedMessageLog
         self.loadStorefrontTerritory = loadStorefrontTerritory
     }
 
@@ -290,8 +303,12 @@ final class InAppMessageManager {
         // in server order (the backend returns highest-priority first), unless
         // it failed to show before and another is waiting. The remaining items
         // are left UNMARKED so they surface on the next return event's poll
-        // instead of being lost.
-        let unseen = items.filter { !seenIds.contains(Self.key(for: $0)) }
+        // instead of being lost. A message an earlier launch showed while
+        // the user was opted out is still pending on the server: skip it.
+        let unseen = items.filter {
+            let key = Self.key(for: $0)
+            return !seenIds.contains(key) && presentedMessageLog?.contains(key) != true
+        }
         guard let item = unseen.first(where: { failedAttempts[Self.key(for: $0)] == nil }) ?? unseen.first else {
             pruneSeenIfNeeded()
             return []
@@ -411,6 +428,12 @@ final class InAppMessageManager {
             // pending messages instead.
             presentedIds.insert(id)
             seenIds.insert(id)
+            // The page's `offer_viewed` / `survey_viewed` is what tells the
+            // server, and it isn't sent while opted out — remember it here,
+            // or every cold start would deliver it again.
+            if isOptedOut() {
+                presentedMessageLog?.record([id])
+            }
         }
     }
 
@@ -432,6 +455,7 @@ final class InAppMessageManager {
     /// Clear cached state. Called from `logOut()` and on a user switch so
     /// the next user's session doesn't see leftover messages from the
     /// previous identity — including any a poll still in flight returns.
+    /// `presentedMessageLog` stays: it stands in for the server's state.
     func reset() {
         identityGeneration += 1
         seenIds.removeAll(keepingCapacity: false)
@@ -491,7 +515,7 @@ final class InAppMessageManager {
         guard let durableRequestQueue else {
             logger.warning(.uploader, "durable proxy unavailable — request not queued", metadata: [
                 "method": method,
-                "path": path,
+                "path": path.loggablePath,
             ])
             return false
         }

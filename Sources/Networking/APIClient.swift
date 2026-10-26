@@ -111,7 +111,7 @@ actor APIClient {
         } catch let error as APIError {
             throw error
         } catch {
-            throw APIError.transport(error)
+            throw APIError.transport(Self.withoutFailingURL(error))
         }
     }
 
@@ -164,7 +164,7 @@ actor APIClient {
         req.setValue(SDKIdentity.header, forHTTPHeaderField: "x-sdk-version")
         req.httpBody = body
 
-        logger.debug(.uploader, "proxy \(method)", metadata: ["url": url.absoluteString])
+        logger.debug(.uploader, "proxy \(method)", metadata: ["path": url.loggablePath])
         do {
             let (data, response) = try await session.data(for: req)
             guard let http = response as? HTTPURLResponse else {
@@ -182,13 +182,13 @@ actor APIClient {
             // throwing, so the SDK trace is the only place to see the status.
             logger.debug(.uploader, "proxy result", metadata: [
                 "status": String(http.statusCode),
-                "url": url.absoluteString,
+                "path": url.loggablePath,
             ])
             return ProxyResponse(status: http.statusCode, headers: headers, body: data)
         } catch let error as APIError {
             throw error
         } catch {
-            throw APIError.transport(error)
+            throw APIError.transport(Self.withoutFailingURL(error))
         }
     }
 
@@ -232,7 +232,7 @@ actor APIClient {
 
     private func perform<Response: Decodable>(_ req: URLRequest) async throws -> Response {
         logger.debug(.uploader, "rpc \(req.httpMethod ?? "?")", metadata: [
-            "url": req.url?.absoluteString ?? "<nil>",
+            "path": req.url?.loggablePath ?? "<nil>",
         ])
         do {
             let (data, response) = try await session.data(for: req)
@@ -242,7 +242,7 @@ actor APIClient {
             guard (200..<300).contains(http.statusCode) else {
                 logger.warning(.uploader, "rpc non-2xx", metadata: [
                     "status": String(http.statusCode),
-                    "url": req.url?.absoluteString ?? "<nil>",
+                    "path": req.url?.loggablePath ?? "<nil>",
                 ])
                 throw APIError.http(status: http.statusCode)
             }
@@ -251,7 +251,7 @@ actor APIClient {
             // dangling trace if you're checking whether a response ever came.
             logger.debug(.uploader, "rpc OK", metadata: [
                 "status": String(http.statusCode),
-                "url": req.url?.absoluteString ?? "<nil>",
+                "path": req.url?.loggablePath ?? "<nil>",
             ])
             do {
                 return try decoder.decode(Response.self, from: data)
@@ -261,8 +261,33 @@ actor APIClient {
         } catch let error as APIError {
             throw error
         } catch {
-            throw APIError.transport(error)
+            throw APIError.transport(Self.withoutFailingURL(error))
         }
+    }
+}
+
+// MARK: - Transport errors
+
+extension APIClient {
+    /// A URLSession failure without the request URL URLSession puts in its
+    /// user info (and its underlying error's) — query and all, so the in-app
+    /// poll's endUserId and anonymousId. Callers log `APIError.transport`
+    /// and the bridge hands its description to the page. Code and
+    /// description stay; errors from outside URLSession pass through.
+    private static func withoutFailingURL(_ error: any Error) -> any Error {
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain else { return error }
+        return removingFailingURL(from: nsError)
+    }
+
+    private static func removingFailingURL(from error: NSError) -> NSError {
+        var userInfo = error.userInfo
+        userInfo[NSURLErrorFailingURLErrorKey] = nil
+        userInfo[NSURLErrorFailingURLStringErrorKey] = nil
+        if let underlying = userInfo[NSUnderlyingErrorKey] as? NSError {
+            userInfo[NSUnderlyingErrorKey] = removingFailingURL(from: underlying)
+        }
+        return NSError(domain: error.domain, code: error.code, userInfo: userInfo)
     }
 }
 

@@ -9,6 +9,8 @@
 //        but the response shape can still carry other variants)
 //      • resolve() pins the server's webviewVersion, with /sdk/initialize as
 //        fallback when the server returns null
+//      • a message shown while opted out isn't delivered again on a later
+//        launch (the server never hears it was shown)
 //
 
 import Foundation
@@ -85,6 +87,68 @@ final class InAppMessageManagerTests: XCTestCase {
                        "duplicate message id must not be re-emitted")
     }
 
+    // MARK: - Opted out, across launches
+
+    func test_messageShownWhileOptedOut_isNotDeliveredAgainOnTheNextLaunch() async throws {
+        // The server returns a message until the page's offer_viewed /
+        // survey_viewed marks it presented, and those aren't sent while
+        // opted out. Every launch's poll gets it back.
+        let id = UUID()
+        URLProtocolStub.handler = { request in
+            let body = TestFixtures.communicationListJSON(items: [
+                TestFixtures.makeInAppCommunication(id: id, workflow: "payment-recovery"),
+            ])
+            return (URLProtocolStub.httpResponse(url: request.url!, status: 200), body)
+        }
+        let suite = Harness.makeSuiteName()
+        let firstLaunch = await Harness.make(isOptedOut: true, presentedLogSuite: suite)
+        let delivered = await firstLaunch.manager.poll()
+        XCTAssertEqual(delivered.map(\.id), [id.uuidString.lowercased()])
+        await firstLaunch.manager.setActiveMessageId(id.uuidString.lowercased())
+
+        let nextLaunch = await Harness.make(isOptedOut: true, presentedLogSuite: suite)
+        let redelivered = await nextLaunch.manager.poll()
+
+        XCTAssertEqual(redelivered, [], "a message already shown must not show again")
+    }
+
+    func test_messageShownWhileOptedIn_isLeftToTheServer() async throws {
+        // Opted in, the page's view event tells the server, which stops
+        // returning the message — the device keeps no record of its own.
+        let id = UUID()
+        URLProtocolStub.handler = { request in
+            let body = TestFixtures.communicationListJSON(items: [
+                TestFixtures.makeInAppCommunication(id: id, workflow: "payment-recovery"),
+            ])
+            return (URLProtocolStub.httpResponse(url: request.url!, status: 200), body)
+        }
+        let suite = Harness.makeSuiteName()
+        let firstLaunch = await Harness.make(isOptedOut: false, presentedLogSuite: suite)
+        _ = await firstLaunch.manager.poll()
+        await firstLaunch.manager.setActiveMessageId(id.uuidString.lowercased())
+
+        XCTAssertNil(UserDefaults(suiteName: suite)?.stringArray(forKey: PresentedMessageLog.defaultsKey))
+        let nextLaunch = await Harness.make(isOptedOut: false, presentedLogSuite: suite)
+        let redelivered = await nextLaunch.manager.poll()
+        XCTAssertEqual(redelivered.map(\.id), [id.uuidString.lowercased()])
+    }
+
+    func test_presentedMessageLog_keepsTheNewestIds_upToItsCapacity() async {
+        let suite = Harness.makeSuiteName()
+        let log = await PresentedMessageLog(defaults: UserDefaults(suiteName: suite)!)
+        let ids = (0...PresentedMessageLog.capacity).map { "ID-\($0)" }
+
+        await log.record(ids)
+        await log.record(["id-1"])
+
+        let stored = UserDefaults(suiteName: suite)?.stringArray(forKey: PresentedMessageLog.defaultsKey)
+        XCTAssertEqual(stored?.count, PresentedMessageLog.capacity)
+        XCTAssertEqual(stored?.first, "id-1", "the oldest went first; re-recording one doesn't duplicate it")
+        let relaunched = await PresentedMessageLog(defaults: UserDefaults(suiteName: suite)!)
+        let keepsNewest = await relaunched.contains("ID-\(PresentedMessageLog.capacity)")
+        XCTAssertTrue(keepsNewest)
+    }
+
     func test_poll_returnsEmpty_onNetworkError() async throws {
         URLProtocolStub.handler = { _ in
             throw URLError(.notConnectedToInternet)
@@ -154,7 +218,14 @@ private enum TestFixtures {
 private struct Harness {
     let manager: InAppMessageManager
 
-    static func make(logger: any GalvaLogger = SilentLogger()) async -> Harness {
+    /// `presentedLogSuite`: back the manager with a `PresentedMessageLog` in
+    /// this `UserDefaults` suite — pass the same one to a second harness to
+    /// stand in for the next launch.
+    static func make(
+        logger: any GalvaLogger = SilentLogger(),
+        isOptedOut: Bool = false,
+        presentedLogSuite: String? = nil
+    ) async -> Harness {
         let session = URLProtocolStub.makeSession()
         let client = APIClient(
             baseURL: URL(string: "https://api.galva.test")!,
@@ -179,14 +250,25 @@ private struct Harness {
             cache: nil,
             logger: SilentLogger()
         )
+        var presentedMessageLog: PresentedMessageLog?
+        if let presentedLogSuite {
+            presentedMessageLog = await PresentedMessageLog(defaults: UserDefaults(suiteName: presentedLogSuite)!)
+        }
         let manager = await InAppMessageManager(
             client: client,
             identity: identity,
             stream: stream,
             bundleCache: bundleCache,
             initialization: initManager,
-            logger: logger
+            logger: logger,
+            isOptedOut: { isOptedOut },
+            presentedMessageLog: presentedMessageLog
         )
         return Harness(manager: manager)
+    }
+
+    /// A fresh, isolated `UserDefaults` suite name.
+    static func makeSuiteName() -> String {
+        "co.galva.test.\(UUID().uuidString)"
     }
 }

@@ -7,6 +7,8 @@
 //    • other 4xx → permanent → dropped (never wedges the queue).
 //    • 5xx / network → retained for retry; a later drain delivers it.
 //    • size cap evicts oldest (FIFO).
+//    • `removeAll(where:)` drops matching requests — including ones a
+//      drain already fetched and hasn't replayed yet — and returns them.
 //    • SQLite store survives across instances (cross-launch durability).
 //
 
@@ -155,6 +157,59 @@ final class DurableRequestQueueTests: XCTestCase {
             }
             let pending = await queue.pendingCount
             XCTAssertEqual(pending, 3, "queue must not grow past the cap; oldest evicted FIFO")
+        }
+    }
+
+    // MARK: - Removal
+
+    func test_removeAll_dropsTheMatchingRequests_andKeepsTheRest() async {
+        await Harness.run { queue, store in
+            for path in ["/drop", "/keep", "/drop"] {
+                try? await store.store(DurableProxyRequest(path: path, method: "POST", body: nil, headers: [:]))
+            }
+            let removed = await queue.removeAll { $0.path == "/drop" }
+            XCTAssertEqual(removed.map(\.path), ["/drop", "/drop"])
+            let left = try? await store.fetchOldest(limit: 10).map(\.path)
+            XCTAssertEqual(left, ["/keep"])
+        }
+    }
+
+    func test_removeAll_midDrain_keepsTheDrainFromSendingWhatItRemoved() async {
+        // A drain fetches a batch, then replays it one request at a time.
+        // Park it on the first replay, remove the second request, let it go:
+        // the second must not go out from the batch the drain already holds.
+        let gate = Gate()
+        URLProtocolStub.handler = { request in
+            if request.url?.path == "/first" {
+                gate.entered.signal()
+                gate.release.wait()
+            }
+            return (URLProtocolStub.httpResponse(url: Self.base, status: 200), Data())
+        }
+        await Harness.run { queue, store in
+            try? await store.store(DurableProxyRequest(
+                path: "/first", method: "POST", body: nil, headers: [:],
+                createdAt: Date(timeIntervalSince1970: 1)
+            ))
+            try? await store.store(DurableProxyRequest(
+                path: "/removed", method: "POST", body: nil, headers: [:],
+                createdAt: Date(timeIntervalSince1970: 2)
+            ))
+            let drainTask = Task { @GalvaActor in await queue.drain(force: true) }
+            let entered = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                DispatchQueue.global().async {
+                    cont.resume(returning: gate.entered.wait(timeout: .now() + 3) == .success)
+                }
+            }
+            XCTAssertTrue(entered, "the drain should be parked on its first replay")
+
+            await queue.removeAll { $0.path == "/removed" }
+            gate.release.signal()
+            await drainTask.value
+
+            XCTAssertEqual(URLProtocolStub.requests.compactMap(\.url?.path), ["/first"])
+            let pending = await queue.pendingCount
+            XCTAssertEqual(pending, 0)
         }
     }
 

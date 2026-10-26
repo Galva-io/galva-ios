@@ -498,7 +498,8 @@ private struct BudgetHarness {
             stream: stream,
             bundleCache: bundleCache,
             initialization: initManager,
-            logger: SilentLogger()
+            logger: SilentLogger(),
+            isOptedOut: { false }
         )
         return BudgetHarness(manager: manager, stream: stream)
     }

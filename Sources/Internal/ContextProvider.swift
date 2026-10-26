@@ -21,9 +21,12 @@ import AppKit
 #endif
 
 /// Sendable snapshot of UI-bound system properties. Captured once on MainActor.
+///
+/// No device name: `UIDevice.name` is the name the user gave the device on
+/// iOS 15 ("Ravi's iPhone") and `Host.localizedName` the computer name on
+/// macOS — personal data the server has no use for.
 struct DeviceSnapshot: Sendable, Hashable {
     var deviceId: String?
-    var deviceName: String?
     var deviceType: String?
     var osName: String?
     var osVersion: String?
@@ -43,7 +46,6 @@ struct DeviceSnapshot: Sendable, Hashable {
         #if canImport(UIKit)
         let d = UIDevice.current
         snap.deviceId = d.identifierForVendor?.uuidString.lowercased()
-        snap.deviceName = d.name
         snap.deviceType = Self.deviceType(for: d.userInterfaceIdiom)
         snap.osName = d.systemName
         snap.osVersion = d.systemVersion
@@ -54,7 +56,6 @@ struct DeviceSnapshot: Sendable, Hashable {
         snap.screenDensity = Double(s.scale)
 
         #elseif canImport(AppKit)
-        snap.deviceName = Host.current().localizedName
         snap.deviceType = "desktop"
         let v = ProcessInfo.processInfo.operatingSystemVersion
         snap.osName = "macOS"
@@ -150,7 +151,6 @@ struct ContextProvider: Sendable {
             id: snapshot.deviceId,
             manufacturer: "Apple",
             model: hardwareModel(),
-            name: snapshot.deviceName,
             type: snapshot.deviceType,
             token: deviceToken
         )

@@ -34,11 +34,13 @@ struct MessageContext: Sendable, Codable, Hashable {
         var namespace: String?
     }
 
+    /// No `name` — see `DeviceSnapshot`. Leaving the key out of the model
+    /// also drops it from messages an older SDK queued with it: the queue
+    /// decodes stored messages and the uploader re-encodes them.
     struct Device: Sendable, Codable, Hashable {
         var id: String?
         var manufacturer: String?
         var model: String?
-        var name: String?
         var type: String?
         var token: String?
     }

@@ -337,3 +337,36 @@ struct NoOpLogger: GalvaLogger {
     func log(_ entry: Galva.LogEntry) {}
     func isEnabled(_ level: Galva.LogLevel) -> Bool { false }
 }
+
+// MARK: - URLs in log metadata
+//
+// Log a URL by its path, never its query or fragment. The in-app poll sends
+// endUserId and anonymousId in its query, and an entry reaches os_log as
+// public (`OSLogLogger`) and any custom `GalvaLogger` the app installed.
+
+extension URL {
+    /// This URL's path, for log metadata. Used for requests to the Galva API,
+    /// whose host is a given.
+    var loggablePath: String { path.isEmpty ? "/" : path }
+
+    /// Scheme, host and path, for log metadata about URLs outside the Galva
+    /// API — a page the WebView was sent to, a link the page opens — where
+    /// the host is what tells you what happened. No query, fragment or
+    /// credentials.
+    var loggableLocation: String {
+        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: true) else {
+            return loggablePath
+        }
+        components.query = nil
+        components.fragment = nil
+        components.user = nil
+        components.password = nil
+        return components.string ?? loggablePath
+    }
+}
+
+extension String {
+    /// A relative API path the in-app page supplied (`/x/y?query`), for log
+    /// metadata: the part before any query or fragment.
+    var loggablePath: String { String(prefix { $0 != "?" && $0 != "#" }) }
+}

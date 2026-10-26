@@ -85,7 +85,7 @@ actor Uploader: MessageUploader {
 
         logger.debug(.uploader, "POST batch", metadata: [
             "batchSize": String(messages.count),
-            "url": url.absoluteString,
+            "path": url.loggablePath,
         ])
 
         do {
@@ -120,7 +120,7 @@ actor Uploader: MessageUploader {
                 return .retryable(UploadError.cancelled)
             }
             logger.warning(.uploader, "transport error", metadata: [
-                "url": url.absoluteString,
+                "path": url.loggablePath,
             ], error: error)
             return .retryable(UploadError.transport(error))
         }

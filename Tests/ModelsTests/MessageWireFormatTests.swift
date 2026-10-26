@@ -120,6 +120,31 @@ final class MessageWireFormatTests: XCTestCase {
         try assertRoundTripsToEqual(msg)
     }
 
+    // MARK: - context
+
+    func test_context_deviceNameStoredByAnOlderSDK_isNotUploaded() throws {
+        // A message queued before the upgrade still has `device.name` in
+        // its stored JSON. The queue decodes it and the uploader re-encodes
+        // it, so the name must not survive that trip.
+        let stored = #"""
+        {
+          "messageId": "01890000-0000-7000-8000-000000000004",
+          "timestamp": "2026-05-12T10:00:00.000Z",
+          "type": "track",
+          "event": "queued_before_upgrade",
+          "anonymousId": "anon",
+          "context": { "device": { "name": "Ravi's iPhone", "model": "iPhone14,5" } }
+        }
+        """#
+        let decoded = try makeDecoder().decode(Message.self, from: Data(stored.utf8))
+
+        let dict = try encodeAsDictionary(decoded)
+        let context = try XCTUnwrap(dict["context"] as? [String: Any])
+        let device = try XCTUnwrap(context["device"] as? [String: Any])
+        XCTAssertNil(device["name"])
+        XCTAssertEqual(device["model"] as? String, "iPhone14,5")
+    }
+
     // MARK: - Batch envelope
 
     func test_batchCollectRequest_wireShape() throws {

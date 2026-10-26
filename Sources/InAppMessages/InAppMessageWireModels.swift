@@ -5,6 +5,7 @@
 //  INTERNAL wire-format models for:
 //      • GET  /identities/communications?channelType=in-app   (list)
 //      • POST /identities/communications/{id}/resolve         (resolve)
+//      • POST /communications/track, as the page sends it     (read only)
 //
 //  Integrators don't touch these — they interact with the public
 //  `InAppMessages.Message` envelope. Splitting the wire surface from the
@@ -36,6 +37,33 @@ struct CommunicationItem: Sendable, Codable, Hashable {
     /// `InAppMessages.WorkflowType` wraps whatever arrives.
     let workflowType: String?
     let createdAt: Date
+}
+
+// MARK: - Page track request
+
+/// The fields the SDK reads from the body of a `POST /communications/track`
+/// the hosted page sends through `apiFetch` (revflow frontend/in-app
+/// utilities/track-events.ts): `{ communicationId, event, …, timestamp }`.
+/// The opt-out gate keys on `event`. Never re-encoded — the request goes out
+/// with the page's own bytes.
+struct CommunicationTrackBody: Sendable, Decodable, Hashable {
+    let communicationId: String?
+    let event: String?
+
+    /// `nil` when `body` is absent or not a JSON object.
+    init?(_ body: Data?) {
+        guard let body, let decoded = try? JSONDecoder().decode(Self.self, from: body) else {
+            return nil
+        }
+        self = decoded
+    }
+
+    /// The communication this event tells Galva's server went on screen, if
+    /// it's one of `SDKConstants.communicationPresentedEvents`.
+    var presentedCommunicationId: String? {
+        guard let event, SDKConstants.communicationPresentedEvents.contains(event) else { return nil }
+        return communicationId
+    }
 }
 
 // MARK: - Resolve request

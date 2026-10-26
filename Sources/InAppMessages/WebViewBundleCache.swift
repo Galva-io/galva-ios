@@ -101,7 +101,7 @@ actor WebViewBundleCache {
         let remote = SDKConstants.webviewBundleURL(version: version, cdn: cdnBaseURL)
         logger.info(.inAppMessages, "downloading bundle", metadata: [
             "version": version,
-            "url": remote.absoluteString,
+            "url": remote.loggableLocation,
         ])
         let data = try await client.download(remote)
         let destination = cachedURL(for: version)
