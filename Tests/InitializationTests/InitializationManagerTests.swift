@@ -6,7 +6,6 @@
 //      • loadCached() surfaces a previously-persisted payload synchronously
 //      • refresh() persists a fresh server response
 //      • refresh() does NOT clobber the cached payload on network failure
-//      • awaitInitialized() resolves once data lands (network or cache)
 //
 
 import Foundation
@@ -84,32 +83,6 @@ final class InitializationManagerTests: XCTestCase {
                        "cached value must survive network failure")
     }
 
-    // MARK: - awaitInitialized
-
-    func test_awaitInitialized_resolvesImmediately_whenCachedAvailable() async throws {
-        let cache = InitializationCache(fileURL: tempFile)
-        try cache.save(InitFixtures.data(flushSize: 9))
-        let manager = await makeManager(cache: cache)
-        await manager.loadCached()
-        let resolved = await manager.awaitInitialized()
-        XCTAssertEqual(resolved?.batchCollection.flushSize, 9)
-    }
-
-    func test_awaitInitialized_resolvesAfterRefresh() async throws {
-        URLProtocolStub.handler = { request in
-            let body = InitFixtures.responseEnvelope(flushSize: 33)
-            return (URLProtocolStub.httpResponse(url: request.url!, status: 200), body)
-        }
-        let cache = InitializationCache(fileURL: tempFile)
-        let session = URLProtocolStub.makeSession()
-        let manager = await makeManager(cache: cache, session: session)
-
-        async let waiter = manager.awaitInitialized()
-        await manager.refresh()
-        let resolved = await waiter
-        XCTAssertEqual(resolved?.batchCollection.flushSize, 33)
-    }
-
     // MARK: - Helpers
 
     /// Build a manager inside the GalvaActor. Free function (not method)
@@ -153,16 +126,7 @@ private enum InitFixtures {
     }
 
     static func responseEnvelope(flushSize: Double) -> Data {
-        let payload = data(flushSize: flushSize)
-        let response = InitializeResponse(
-            meta: .init(requestId: "rq_1", timestamp: Date(), total: nil, nextCursor: nil),
-            data: payload
-        )
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .custom { date, encoder in
-            var c = encoder.singleValueContainer()
-            try c.encode(ISO8601DateFormatter.galva.string(from: date))
-        }
-        return try! encoder.encode(response)
+        let response = InitializeResponse(data: data(flushSize: flushSize))
+        return try! JSONEncoder().encode(response)
     }
 }

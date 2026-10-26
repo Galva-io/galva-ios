@@ -67,22 +67,6 @@ final class MessageWireFormatTests: XCTestCase {
         try assertRoundTripsToEqual(msg)
     }
 
-    // MARK: - alias
-
-    func test_alias_wireShape() throws {
-        let msg = Message(
-            anonymousId: "anon_prev",
-            endUserId: "user_target",
-            context: nil,
-            body: .alias(previousId: "anon_prev", targetId: "user_target")
-        )
-        let dict = try encodeAsDictionary(msg)
-        XCTAssertEqual(dict["type"] as? String, "alias")
-        XCTAssertEqual(dict["previousId"] as? String, "anon_prev")
-        XCTAssertEqual(dict["targetId"] as? String, "user_target")
-        try assertRoundTripsToEqual(msg)
-    }
-
     // MARK: - track
 
     func test_track_wireShape_withProperties() throws {
@@ -94,17 +78,11 @@ final class MessageWireFormatTests: XCTestCase {
             anonymousId: "anon",
             endUserId: "user",
             context: nil,
-            body: .track(event: "Purchase",
-                         properties: props,
-                         sourceType: .productBilling,
-                         sourceId: "src-7")
+            body: .track(event: "Purchase", properties: props)
         )
         let dict = try encodeAsDictionary(msg)
         XCTAssertEqual(dict["type"] as? String, "track")
         XCTAssertEqual(dict["event"] as? String, "Purchase")
-        XCTAssertEqual(dict["sourceType"] as? String, "product-billing",
-                       "sourceType uses kebab-case on the wire")
-        XCTAssertEqual(dict["sourceId"] as? String, "src-7")
         let onTheWireProps = try XCTUnwrap(dict["properties"] as? [String: Any])
         XCTAssertEqual(onTheWireProps["sku"] as? String, "pro_yearly")
         XCTAssertEqual(onTheWireProps["price"] as? Double, 9.99)
@@ -116,56 +94,15 @@ final class MessageWireFormatTests: XCTestCase {
             anonymousId: "anon",
             endUserId: nil,
             context: nil,
-            body: .track(event: "ButtonTapped",
-                         properties: nil,
-                         sourceType: nil,
-                         sourceId: nil)
+            body: .track(event: "ButtonTapped", properties: nil)
         )
         let dict = try encodeAsDictionary(msg)
         XCTAssertEqual(dict["event"] as? String, "ButtonTapped")
         XCTAssertNil(dict["properties"])
-        XCTAssertNil(dict["sourceType"])
-        XCTAssertNil(dict["sourceId"])
         try assertRoundTripsToEqual(msg)
-    }
-
-    func test_track_sourceTypeEnum_encodesAllRawValues() throws {
-        let cases: [(Message.Body.TrackSource, String)] = [
-            (.profile, "profile"),
-            (.product, "product"),
-            (.plan, "plan"),
-            (.productBilling, "product-billing"),
-            (.entitlement, "entitlement"),
-        ]
-        for (source, raw) in cases {
-            let msg = Message(
-                anonymousId: "anon",
-                endUserId: nil,
-                context: nil,
-                body: .track(event: "e", properties: nil, sourceType: source, sourceId: nil)
-            )
-            let dict = try encodeAsDictionary(msg)
-            XCTAssertEqual(dict["sourceType"] as? String, raw,
-                           "sourceType \(source) should encode as \"\(raw)\"")
-        }
     }
 
     // MARK: - create-communication-endpoint
-
-    func test_createCommunicationEndpoint_email() throws {
-        let msg = Message(
-            anonymousId: "anon",
-            endUserId: "user",
-            context: nil,
-            body: .createCommunicationEndpoint(.email("a@b.co"))
-        )
-        let dict = try encodeAsDictionary(msg)
-        XCTAssertEqual(dict["type"] as? String, "create-communication-endpoint")
-        let endpoint = try XCTUnwrap(dict["endpoint"] as? [String: Any])
-        XCTAssertEqual(endpoint["channelType"] as? String, "email")
-        XCTAssertEqual(endpoint["email"] as? String, "a@b.co")
-        try assertRoundTripsToEqual(msg)
-    }
 
     func test_createCommunicationEndpoint_pushApns() throws {
         let msg = Message(
@@ -183,68 +120,29 @@ final class MessageWireFormatTests: XCTestCase {
         try assertRoundTripsToEqual(msg)
     }
 
-    // MARK: - delete-communication-endpoint
+    // MARK: - context
 
-    func test_deleteCommunicationEndpoint_fcm() throws {
-        let msg = Message(
-            anonymousId: "anon",
-            endUserId: "user",
-            context: nil,
-            body: .deleteCommunicationEndpoint(.pushNotification(platform: .fcm, token: "FCM_TOK"))
-        )
-        let dict = try encodeAsDictionary(msg)
-        XCTAssertEqual(dict["type"] as? String, "delete-communication-endpoint")
-        let endpoint = try XCTUnwrap(dict["endpoint"] as? [String: Any])
-        XCTAssertEqual(endpoint["channelType"] as? String, "push-notification")
-        XCTAssertEqual(endpoint["platform"] as? String, "fcm")
-        XCTAssertEqual(endpoint["token"] as? String, "FCM_TOK")
-        try assertRoundTripsToEqual(msg)
-    }
+    func test_context_deviceNameStoredByAnOlderSDK_isNotUploaded() throws {
+        // A message queued before the upgrade still has `device.name` in
+        // its stored JSON. The queue decodes it and the uploader re-encodes
+        // it, so the name must not survive that trip.
+        let stored = #"""
+        {
+          "messageId": "01890000-0000-7000-8000-000000000004",
+          "timestamp": "2026-05-12T10:00:00.000Z",
+          "type": "track",
+          "event": "queued_before_upgrade",
+          "anonymousId": "anon",
+          "context": { "device": { "name": "Ravi's iPhone", "model": "iPhone14,5" } }
+        }
+        """#
+        let decoded = try makeDecoder().decode(Message.self, from: Data(stored.utf8))
 
-    // MARK: - set-communication-preference
-
-    func test_setCommunicationPreference_wireShape() throws {
-        let categories: [String: Bool] = [
-            "payment-recovery": false,
-            "winback": true,
-        ]
-        let msg = Message(
-            anonymousId: "anon",
-            endUserId: "user",
-            context: nil,
-            body: .setCommunicationPreference(
-                channelType: .email,
-                disabled: true,
-                categories: categories
-            )
-        )
-        let dict = try encodeAsDictionary(msg)
-        XCTAssertEqual(dict["type"] as? String, "set-communication-preference")
-        XCTAssertEqual(dict["channelType"] as? String, "email")
-        XCTAssertEqual(dict["disabled"] as? Bool, true)
-        let onTheWire = try XCTUnwrap(dict["categories"] as? [String: Bool])
-        XCTAssertEqual(onTheWire["payment-recovery"], false)
-        XCTAssertEqual(onTheWire["winback"], true)
-        try assertRoundTripsToEqual(msg)
-    }
-
-    func test_setCommunicationPreference_onlyChannelRequired() throws {
-        // OpenAPI requires only channelType; disabled and categories are optional.
-        let msg = Message(
-            anonymousId: "anon",
-            endUserId: nil,
-            context: nil,
-            body: .setCommunicationPreference(
-                channelType: .inApp,
-                disabled: nil,
-                categories: nil
-            )
-        )
-        let dict = try encodeAsDictionary(msg)
-        XCTAssertEqual(dict["channelType"] as? String, "in-app")
-        XCTAssertNil(dict["disabled"])
-        XCTAssertNil(dict["categories"])
-        try assertRoundTripsToEqual(msg)
+        let dict = try encodeAsDictionary(decoded)
+        let context = try XCTUnwrap(dict["context"] as? [String: Any])
+        let device = try XCTUnwrap(context["device"] as? [String: Any])
+        XCTAssertNil(device["name"])
+        XCTAssertEqual(device["model"] as? String, "iPhone14,5")
     }
 
     // MARK: - Batch envelope
@@ -252,8 +150,7 @@ final class MessageWireFormatTests: XCTestCase {
     func test_batchCollectRequest_wireShape() throws {
         let msgs = [
             Message(anonymousId: "a", endUserId: nil, context: nil,
-                    body: .track(event: "e", properties: nil,
-                                 sourceType: nil, sourceId: nil)),
+                    body: .track(event: "e", properties: nil)),
             Message(anonymousId: "a", endUserId: "u", context: nil,
                     body: .identify(traits: nil)),
         ]

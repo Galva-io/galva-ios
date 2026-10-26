@@ -24,9 +24,6 @@ class MessageStorageContractTests: XCTestCase {
     /// when XCTest runs it directly.
     func makeStorage() async throws -> (any MessageStorage)? { nil }
 
-    /// Override for any per-test cleanup (e.g. delete the .db file).
-    func cleanupStorage(_: any MessageStorage) async {}
-
     // MARK: Round-trip
 
     func test_contract_storeAndFetchSingle() async throws {
@@ -154,10 +151,10 @@ class MessageStorageContractTests: XCTestCase {
         let round = fetched[0]
         XCTAssertEqual(round.endUserId, "user-7")
         XCTAssertEqual(round.anonymousId, "anon-7")
-        XCTAssertEqual(round.traits?["email"], .string("a@b.co"))
-        XCTAssertEqual(round.traits?["count"], .int(42))
-        XCTAssertEqual(round.traits?["ratio"], .double(1.5))
-        XCTAssertEqual(round.traits?["active"], .bool(true))
+        XCTAssertEqual(round.identifyTraits?["email"], .string("a@b.co"))
+        XCTAssertEqual(round.identifyTraits?["count"], .int(42))
+        XCTAssertEqual(round.identifyTraits?["ratio"], .double(1.5))
+        XCTAssertEqual(round.identifyTraits?["active"], .bool(true))
     }
 }
 

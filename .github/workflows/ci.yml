@@ -1,11 +1,15 @@
 # CI — runs on every PR and every push to main.
 #
 # Jobs:
-#   • lint  — scripts/lint.sh (host-app perf hazards, crash patterns)
-#   • test  — swift test (~20s, 200+ tests)
-#
-# Both are required for merging. Keep them fast — anything that
-# legitimately needs a long-running matrix belongs in release.yml.
+#   • lint      — scripts/lint.sh (host-app perf hazards, crash patterns,
+#                 the privacy manifest against Sources/)
+#   • test      — swift test (~20s, 200+ tests)
+#   • test-ios  — the same tests on an iOS Simulator, including the UIKit /
+#                 WebKit ones `swift test` on macOS doesn't build
+#   • e2e       — scripts/e2e.sh: the demo app's UI tests against an
+#                 in-process mock
+#   • perf      — scripts/perf.sh: the SDK's overhead in the demo app; fails
+#                 if extra memory passes its budget
 
 name: CI
 
@@ -59,6 +63,41 @@ jobs:
 
       - name: swift test
         run: swift test --parallel
+
+  test-ios:
+    name: Test (iOS Simulator)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same Xcode selection as the unit-test job (see the comment there).
+      - name: Select Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          [ -z "$XCODE" ] && XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "Selecting $XCODE"
+          sudo xcode-select -switch "$XCODE"
+          xcodebuild -version
+
+      # The in-app message presenter, WebView and presentation tests sit
+      # behind `#if canImport(UIKit) && canImport(WebKit)`, so only an iOS
+      # build runs them. Picks the first available iPhone simulator by UDID,
+      # as scripts/e2e.sh does — names vary by installed runtime.
+      - name: xcodebuild test
+        run: |
+          UDID="$(xcrun simctl list devices available \
+              | grep -E 'iPhone' \
+              | grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}' \
+              | head -1)"
+          if [ -z "$UDID" ]; then
+            echo "error: no available iPhone simulator found" >&2
+            exit 2
+          fi
+          # Boot and wait first: on a never-booted simulator, StoreKit and
+          # WebKit take tens of seconds to answer, which the tests would
+          # otherwise spend waiting.
+          xcrun simctl bootstatus "$UDID" -b
+          xcodebuild test -scheme Galva -destination "platform=iOS Simulator,id=$UDID"
 
   e2e:
     name: E2E (UI tests)

@@ -23,9 +23,7 @@
 //
 
 import Foundation
-#if canImport(StoreKit)
 import StoreKit
-#endif
 
 @GalvaActor
 final class InAppMessageManager {
@@ -42,13 +40,44 @@ final class InAppMessageManager {
     /// production; nil-safe so tests can omit it).
     private let durableRequestQueue: DurableRequestQueue?
 
+    /// Whether the user opted out (`Galva.setOptOut`). The bridge reads it
+    /// before proxying the page's analytics, hence `nonisolated`. Injected
+    /// so tests can flip it without touching the process-wide flag.
+    nonisolated let isOptedOut: @Sendable () -> Bool
+
+    /// Messages shown while the server couldn't learn so (opted out), kept
+    /// across launches; polls skip them. `nil` only in tests that omit it.
+    private let presentedMessageLog: PresentedMessageLog?
+
+    /// `Storefront.current?.countryCode`; injectable so tests don't wait on
+    /// StoreKit, whose first answer on a freshly booted simulator can take
+    /// over 10 seconds.
+    typealias StorefrontTerritoryLoader = @Sendable () async -> String?
+    private let loadStorefrontTerritory: StorefrontTerritoryLoader
+
     /// Drop duplicate messages observed within the lifetime of the SDK
     /// process. Prevents a rapid background/foreground toggle from
-    /// emitting the same message twice. Bounded — see prune below.
+    /// emitting the same message twice. Bounded — see prune below. A
+    /// delivered message whose presentation fails may be removed again
+    /// (`presentationFailed`).
     private var seenIds: Set<String> = []
 
+    /// Failed presentations so far, by message id. A poll delivers one of
+    /// these messages only when no other is waiting, so one that keeps
+    /// failing can't hold the head of the list.
+    private var failedAttempts: [String: Int] = [:]
+
+    /// How many times a message that fails to show is delivered before
+    /// it's given up on for the run.
+    nonisolated static let maxPresentationAttempts = 3
+
+    /// Bumped by `reset()` (logOut, user switch). A poll drops results
+    /// fetched under an earlier generation — they were for the previous
+    /// identity.
+    private var identityGeneration = 0
+
     /// Message ids that actually went ON SCREEN this run (deep-link,
-    /// programmatic, or auto-display). A presented communication must never
+    /// programmatic, or `.automatic` presentation). A presented communication must never
     /// re-present — not via a later poll (it also joins `seenIds`) and not via
     /// a re-fired `openCommunication` deep link (SwiftUI can re-deliver the
     /// same URL on scene reactivation; the deep-link route checks
@@ -61,15 +90,15 @@ final class InAppMessageManager {
     /// `getMessageData()` call resolves immediately from memory.
     private(set) var resolvedPayloads: [String: ResolvedCommunication.Valid] = [:]
 
-    /// The currently-displayed message id, if any. Used by `requestPurchase`
-    /// in the bridge to enforce "offers can only be claimed in the context
-    /// of a rendered message" (see docs).
-    var activeMessageId: String?
+    /// The currently-displayed message id, if any. The display-slot logic
+    /// reads it: a repeated claim for this message is a no-op, and a spent
+    /// slot stays spent while it's on screen.
+    private(set) var activeMessageId: String?
 
     // MARK: - Display budget (one message per foreground stint)
     //
-    // At most ONE in-app message flow per "return event" (cold start, resume
-    // from background, or an explicit `checkForMessages()`):
+    // At most ONE in-app message flow per "return event" (cold start, every
+    // time the app becomes active again, or an explicit `checkForMessages()`):
     //
     //   • `.pending`   a deep-link / programmatic show is resolving — polling
     //                  must not fetch AT ALL (a deep link is user-initiated and
@@ -107,16 +136,49 @@ final class InAppMessageManager {
     /// Roll back a claim whose presentation failed (resolve rejected, bundle
     /// unavailable, no host) — nothing was shown, so the stint's budget is
     /// restored and the next poll may fetch again.
-    func releaseDisplaySlot(messageId: String) {
+    private func releaseDisplaySlot(messageId: String) {
         switch displaySlot {
         case .pending(let id) where id == messageId:
             displaySlot = .available
         case .used(let id) where id == messageId && activeMessageId == nil:
-            // The show consumed the slot (setActiveMessageId ran) but then
-            // failed and tore down before returning — restore the budget.
+            // This message spent the slot (delivered by a poll, or shown
+            // earlier) and isn't on screen — restore the budget.
             displaySlot = .available
         default:
             break
+        }
+    }
+
+    /// Roll back a presentation that failed with `error` before the message
+    /// reached the screen: restore the stint's budget and, if a later attempt
+    /// might work, forget its delivery so a later return event's poll can
+    /// deliver it again — up to `maxPresentationAttempts` times. A message
+    /// the server rejected, or that went on screen earlier this run, stays
+    /// done.
+    func presentationFailed(messageId: String, error: any Error) {
+        releaseDisplaySlot(messageId: messageId)
+        guard !presentedIds.contains(messageId) else { return }
+        let attempts = failedAttempts[messageId, default: 0] + 1
+        failedAttempts[messageId] = attempts
+        if Self.mightPresentLater(after: error), attempts < Self.maxPresentationAttempts {
+            seenIds.remove(messageId)
+        } else {
+            seenIds.insert(messageId)
+        }
+    }
+
+    /// Whether a presentation that failed with `error` might work later: no
+    /// window yet, a bundle that didn't download, a network or server error.
+    /// Not when the server rejected the message (no longer valid, a 4xx) or
+    /// this SDK can't read it.
+    nonisolated static func mightPresentLater(after error: any Error) -> Bool {
+        switch error {
+        case let error as InAppMessageError:
+            return error == .noPresentingViewController || error == .bundleUnavailable
+        case let error as APIError:
+            return error.isRetryable
+        default:
+            return false
         }
     }
 
@@ -138,7 +200,10 @@ final class InAppMessageManager {
         bundleCache: WebViewBundleCache,
         initialization: InitializationManager,
         logger: any GalvaLogger,
-        durableRequestQueue: DurableRequestQueue? = nil
+        isOptedOut: @escaping @Sendable () -> Bool,
+        durableRequestQueue: DurableRequestQueue? = nil,
+        presentedMessageLog: PresentedMessageLog? = nil,
+        loadStorefrontTerritory: @escaping StorefrontTerritoryLoader = { await Storefront.current?.countryCode }
     ) {
         self.client = client
         self.identity = identity
@@ -146,7 +211,10 @@ final class InAppMessageManager {
         self.bundleCache = bundleCache
         self.initialization = initialization
         self.logger = logger
+        self.isOptedOut = isOptedOut
         self.durableRequestQueue = durableRequestQueue
+        self.presentedMessageLog = presentedMessageLog
+        self.loadStorefrontTerritory = loadStorefrontTerritory
     }
 
     // MARK: - Polling
@@ -154,7 +222,8 @@ final class InAppMessageManager {
     /// Hit GET /identities/communications, pick the FIRST unseen in-app
     /// message (server returns highest-priority first), publish it, and warm
     /// the bundle for its webview version. Called by the lifecycle observer on
-    /// every foreground (a "return event") and by `checkForMessages()`.
+    /// every foreground (a "return event") and by the public
+    /// `InAppMessages.checkForMessages()`.
     ///
     /// Display budget: at most one message per stint. The fetch is skipped
     /// entirely while a deep-link presentation is pending/on screen or a
@@ -166,7 +235,7 @@ final class InAppMessageManager {
         // or still on screen).
         resetDisplaySlotIfStale()
         guard case .available = displaySlot else {
-            logger.debug(.identity, "in-app poll skipped — display slot busy", metadata: [
+            logger.debug(.inAppMessages, "in-app poll skipped — display slot busy", metadata: [
                 "slot": String(describing: displaySlot),
             ])
             return []
@@ -180,21 +249,31 @@ final class InAppMessageManager {
         // Always send anonymousId — pre-identify messages should still
         // resolve to the right device.
         query.append(URLQueryItem(name: "anonymousId", value: identity.anonymousId))
+        let generation = identityGeneration
 
         do {
             let response: CommunicationListResponse = try await client.get(
                 path: SDKConstants.communicationListPath,
                 query: query
             )
-            logger.debug(.identity, "in-app poll OK", metadata: [
+            logger.debug(.inAppMessages, "in-app poll OK", metadata: [
                 "count": String(response.data.count),
             ])
+            // logOut or a user switch reset the identity while the fetch was
+            // in flight: these messages are for the previous identity. Drop
+            // them UNMARKED.
+            guard generation == identityGeneration else {
+                logger.info(.inAppMessages, "in-app poll dropped — identity changed mid-flight", metadata: [
+                    "count": String(response.data.count),
+                ])
+                return []
+            }
             // Re-check after the network suspension: a deep link may have
             // claimed the slot while the fetch was in flight (the actor
             // serializes the claim and this check). Drop the results UNMARKED
             // so they surface again on the next return event's poll.
             guard case .available = displaySlot else {
-                logger.info(.identity, "in-app poll dropped — display slot claimed mid-flight", metadata: [
+                logger.info(.inAppMessages, "in-app poll dropped — display slot claimed mid-flight", metadata: [
                     "count": String(response.data.count),
                 ])
                 return []
@@ -208,48 +287,48 @@ final class InAppMessageManager {
             let severity: Galva.LogLevel = error.isRetryable ? .info : .warning
             switch severity {
             case .warning:
-                logger.warning(.identity, "in-app poll failed", error: error)
+                logger.warning(.inAppMessages, "in-app poll failed", error: error)
             default:
-                logger.info(.identity, "in-app poll skipped (offline?)", error: error)
+                logger.info(.inAppMessages, "in-app poll skipped (offline?)", error: error)
             }
             return []
         } catch {
-            logger.warning(.identity, "in-app poll failed (unexpected)", error: error)
+            logger.warning(.inAppMessages, "in-app poll failed (unexpected)", error: error)
             return []
         }
-    }
-
-    /// Manually trigger a poll. Surfaces results synchronously to the
-    /// caller while still publishing to the broadcast stream. Used by the
-    /// public `InAppMessages.checkForMessages()` API.
-    @discardableResult
-    func checkForMessages() async -> [InAppMessages.Message] {
-        await poll()
     }
 
     private func dispatch(items: [CommunicationItem]) async -> [InAppMessages.Message] {
         // Deliver exactly ONE message per stint — the first unseen in-app item
-        // in server order (the backend returns highest-priority first). The
-        // remaining items are left UNMARKED so they surface on the next return
-        // event's poll instead of being lost.
-        for item in items {
-            let key = item.id.uuidString.lowercased()
-            if seenIds.contains(key) { continue }
-            seenIds.insert(key)
-            let message = item.toPublicMessage()
-            // Consume the stint's budget at delivery — the fetch won't run
-            // again until the next return event, even if the app never
-            // presents this message.
-            displaySlot = .used(messageId: message.id)
-            // Hop to the MainActor stream — keeps message delivery on the
-            // main thread for the SDK's MainActor-isolated consumers.
-            await stream.yield(message)
-            prefetchBundleIfPossible()
-            pruneSeenIfNeeded()
-            return [message]
+        // in server order (the backend returns highest-priority first), unless
+        // it failed to show before and another is waiting. The remaining items
+        // are left UNMARKED so they surface on the next return event's poll
+        // instead of being lost. A message an earlier launch showed while
+        // the user was opted out is still pending on the server: skip it.
+        let unseen = items.filter {
+            let key = Self.key(for: $0)
+            return !seenIds.contains(key) && presentedMessageLog?.contains(key) != true
         }
+        guard let item = unseen.first(where: { failedAttempts[Self.key(for: $0)] == nil }) ?? unseen.first else {
+            pruneSeenIfNeeded()
+            return []
+        }
+        seenIds.insert(Self.key(for: item))
+        let message = item.toPublicMessage()
+        // Consume the stint's budget at delivery — the fetch won't run
+        // again until the next return event, even if the app never
+        // presents this message.
+        displaySlot = .used(messageId: message.id)
+        // Hop to the MainActor stream — keeps message delivery on the
+        // main thread for the SDK's MainActor-isolated consumers.
+        await stream.yield(message)
+        prefetchBundleIfPossible()
         pruneSeenIfNeeded()
-        return []
+        return [message]
+    }
+
+    private static func key(for item: CommunicationItem) -> String {
+        item.id.uuidString.lowercased()
     }
 
     /// Warm the latest known bundle versions if we have any. We don't yet
@@ -269,12 +348,13 @@ final class InAppMessageManager {
         // and bounded so memory doesn't grow forever on a long-running app.
         guard seenIds.count > 1024 else { return }
         seenIds.removeAll(keepingCapacity: true)
+        failedAttempts.removeAll()
     }
 
     // MARK: - Resolve
 
     /// Resolve a single message via POST /identities/communications/{id}/resolve.
-    /// Returns a `Resolved` value with the payload + the webview version
+    /// Caches the payload for `payload(for:)` and returns the webview version
     /// the SDK should load (server-pinned, with the latest known version
     /// from /sdk/initialize as a fallback), or `nil` when the server says
     /// `valid: false`.
@@ -282,7 +362,7 @@ final class InAppMessageManager {
     /// Called by the show(message:in:) flow before opening the WebView so
     /// that the bridge's `getMessageData()` request can be served from
     /// memory the moment the bundle finishes parsing.
-    func resolve(messageId: String) async throws -> Resolved? {
+    func resolve(messageId: String) async throws -> String? {
         guard let messageUUID = UUID(uuidString: messageId) else {
             throw InAppMessageError.invalidMessageId
         }
@@ -315,35 +395,25 @@ final class InAppMessageManager {
             let chosenVersion = valid.webviewVersion
                 ?? fallbackVersion
                 ?? SDKConstants.fallbackWebviewVersion
-            logger.debug(.identity, "in-app resolve OK", metadata: [
+            logger.debug(.inAppMessages, "in-app resolve OK", metadata: [
                 "messageId": messageId,
                 "version": chosenVersion,
             ])
-            return Resolved(payload: valid, webviewVersion: chosenVersion)
+            return chosenVersion
         case .invalid:
             // Drop any stale cached payload — server has revoked.
             resolvedPayloads[messageId] = nil
-            logger.info(.identity, "in-app resolve invalidated by server", metadata: [
+            logger.info(.inAppMessages, "in-app resolve invalidated by server", metadata: [
                 "messageId": messageId,
             ])
             return nil
         }
     }
 
-    /// Outcome of `resolve` — the resolved payload plus the chosen
-    /// `webviewVersion` (server pin > /sdk/initialize fallback).
-    struct Resolved: Sendable, Hashable {
-        let payload: ResolvedCommunication.Valid
-        let webviewVersion: String
-    }
-
     // MARK: - Active message tracking
 
     /// Set the active message id. Called by the presenter when a WebView
-    /// becomes visible, and reset to `nil` on dismiss. The bridge consults
-    /// this on every call to enforce "you can only request a purchase / read
-    /// page context / read message data while an in-app message is on
-    /// screen."
+    /// becomes visible, and reset to `nil` on dismiss.
     func setActiveMessageId(_ id: String?) {
         activeMessageId = id
         // A presentation going live consumes the stint's display budget —
@@ -358,6 +428,12 @@ final class InAppMessageManager {
             // pending messages instead.
             presentedIds.insert(id)
             seenIds.insert(id)
+            // The page's `offer_viewed` / `survey_viewed` is what tells the
+            // server, and it isn't sent while opted out — remember it here,
+            // or every cold start would deliver it again.
+            if isOptedOut() {
+                presentedMessageLog?.record([id])
+            }
         }
     }
 
@@ -368,10 +444,6 @@ final class InAppMessageManager {
         presentedIds.contains(messageId)
     }
 
-    /// Accessor for the bridge layer (MainActor). Returns the current
-    /// active id under a single actor hop.
-    func currentActiveMessageId() -> String? { activeMessageId }
-
     /// Accessor for the bridge layer (MainActor). Returns the resolved
     /// payload for the given id, if cached.
     func payload(for messageId: String) -> ResolvedCommunication.Valid? {
@@ -380,10 +452,14 @@ final class InAppMessageManager {
 
     // MARK: - Reset
 
-    /// Clear cached state. Called from `logOut()` so the next user's
-    /// session doesn't see leftover messages from the previous identity.
+    /// Clear cached state. Called from `logOut()` and on a user switch so
+    /// the next user's session doesn't see leftover messages from the
+    /// previous identity — including any a poll still in flight returns.
+    /// `presentedMessageLog` stays: it stands in for the server's state.
     func reset() {
+        identityGeneration += 1
         seenIds.removeAll(keepingCapacity: false)
+        failedAttempts.removeAll(keepingCapacity: false)
         presentedIds.removeAll(keepingCapacity: false)
         resolvedPayloads.removeAll(keepingCapacity: false)
         activeMessageId = nil
@@ -395,16 +471,11 @@ final class InAppMessageManager {
     /// Read the App Store storefront's country code (ISO 3166-1 alpha-3)
     /// for inclusion in the resolve request's `billingContext.territory`.
     /// Returns `nil` when StoreKit can't surface a storefront — Simulator
-    /// without a `.storekit` config, user not signed into the App Store,
-    /// or non-Apple build target. The server treats `nil` as "no
-    /// storefront-specific rendering needed", so callers don't need to
-    /// guard against it.
+    /// without a `.storekit` config, or user not signed into the App
+    /// Store. The server treats `nil` as "no storefront-specific rendering
+    /// needed", so callers don't need to guard against it.
     private func currentStorefrontTerritory() async -> String? {
-        #if canImport(StoreKit)
-        return await Storefront.current?.countryCode
-        #else
-        return nil
-        #endif
+        await loadStorefrontTerritory()
     }
 
     // MARK: - WebView API proxy (`apiFetch` bridge)
@@ -444,7 +515,7 @@ final class InAppMessageManager {
         guard let durableRequestQueue else {
             logger.warning(.uploader, "durable proxy unavailable — request not queued", metadata: [
                 "method": method,
-                "path": path,
+                "path": path.loggablePath,
             ])
             return false
         }
@@ -460,6 +531,8 @@ final class InAppMessageManager {
 
 // MARK: - Errors
 
+/// What the presentation pipeline throws internally. Mapped to the public
+/// `InAppMessages.Error` where it leaves the SDK.
 enum InAppMessageError: Error, Sendable, Hashable {
     /// `show(message:)` received a malformed message id.
     case invalidMessageId
@@ -469,8 +542,28 @@ enum InAppMessageError: Error, Sendable, Hashable {
     /// Bundle download failed and no local copy exists for the requested
     /// webview version.
     case bundleUnavailable
-    /// Negotiated bridge protocol incompatible with the installed SDK.
-    case bridgeProtocolMismatch
-    /// SDK has not been configured yet.
-    case notConfigured
+    /// No foreground window scene, or no view controller in it, to present
+    /// on — or UIKit didn't finish presenting the sheet in time.
+    case noPresentingViewController
+}
+
+extension InAppMessages.Error {
+    /// The public error for anything the presentation pipeline throws. Used
+    /// once per entry point, where `show(in:)` and the SwiftUI sheet's
+    /// prepare leave the SDK. Anything that isn't one of Galva's own errors
+    /// came from the resolve request.
+    init(_ error: any Swift.Error) {
+        switch error {
+        case let error as InAppMessages.Error:
+            self = error
+        case let error as InAppMessageError:
+            switch error {
+            case .invalidMessageId, .messageNotFound: self = .messageNotFound
+            case .bundleUnavailable: self = .bundleUnavailable
+            case .noPresentingViewController: self = .noPresentingViewController
+            }
+        default:
+            self = .requestFailed
+        }
+    }
 }

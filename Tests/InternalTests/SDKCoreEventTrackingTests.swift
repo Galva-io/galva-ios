@@ -26,7 +26,7 @@ final class SDKCoreEventTrackingTests: XCTestCase {
 
         let messages = await harness.consumer.allMessages
         XCTAssertEqual(messages.count, 1)
-        guard case .track(let event, let props, _, _) = messages[0].body else {
+        guard case .track(let event, let props) = messages[0].body else {
             return XCTFail("Expected .track body")
         }
         XCTAssertEqual(event, "AddHabitButtonTapped")
@@ -46,7 +46,7 @@ final class SDKCoreEventTrackingTests: XCTestCase {
         await harness.core.track(event: "Purchase", properties: props)
 
         let messages = await harness.consumer.allMessages
-        guard case .track(_, let received, _, _) = messages[0].body else {
+        guard case .track(_, let received) = messages[0].body else {
             return XCTFail("Expected .track body")
         }
         XCTAssertEqual(received?["sku"], .string("pro_yearly"))
@@ -93,7 +93,7 @@ final class SDKCoreEventTrackingTests: XCTestCase {
         await harness.consumer.reset()
         await harness.core.track(event: "e", properties: ["foo": .string("bar")])
 
-        guard case .track(_, let props, _, _) =
+        guard case .track(_, let props) =
                 await harness.consumer.allMessages.first?.body
         else {
             return XCTFail("Expected .track body")

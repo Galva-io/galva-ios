@@ -68,7 +68,7 @@ extension NativeBridge {
                 message: "No view controller available to present the alert"
             ))
         }
-        logger.info(.identity, "bridge showAlert", metadata: [
+        logger.info(.inAppMessages, "bridge showAlert", metadata: [
             "actions": String(parsed.actions.count),
         ])
         // `AlertContinuationGate` ties the continuation's lifetime to the

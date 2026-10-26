@@ -11,7 +11,7 @@
 //        "anonymousId": "...",
 //        "endUserId":   "...",       // optional
 //        "timestamp":   "2026-05-12T…Z",
-//        "type":        "track" | "identify" | "alias" | "create-…" | …,
+//        "type":        "track" | "identify" | "create-communication-endpoint",
 //        "context":     { … },        // optional, server-enriched
 //        …type-specific fields…
 //      }
@@ -55,43 +55,21 @@ struct Message: Sendable, Hashable, Codable {
 
     enum Body: Sendable, Hashable {
         case identify(traits: [String: AnyJSONValue]?)
-        case alias(previousId: String, targetId: String)
-        case track(event: String,
-                   properties: [String: AnyJSONValue]?,
-                   sourceType: TrackSource?,
-                   sourceId: String?)
+        case track(event: String, properties: [String: AnyJSONValue]?)
         case createCommunicationEndpoint(CommunicationEndpoint)
-        case deleteCommunicationEndpoint(CommunicationEndpoint)
-        case setCommunicationPreference(channelType: CommunicationEndpoint.ChannelType,
-                                        disabled: Bool?,
-                                        categories: [String: Bool]?)
-
-        enum TrackSource: String, Sendable, Codable, Hashable {
-            case profile
-            case product
-            case plan
-            case productBilling = "product-billing"
-            case entitlement
-        }
 
         var wireType: WireType {
             switch self {
             case .identify:                     return .identify
-            case .alias:                        return .alias
             case .track:                        return .track
             case .createCommunicationEndpoint:  return .createCommunicationEndpoint
-            case .deleteCommunicationEndpoint:  return .deleteCommunicationEndpoint
-            case .setCommunicationPreference:   return .setCommunicationPreference
             }
         }
 
         enum WireType: String, Sendable, Codable, Hashable {
             case identify
-            case alias
             case track
             case createCommunicationEndpoint = "create-communication-endpoint"
-            case deleteCommunicationEndpoint = "delete-communication-endpoint"
-            case setCommunicationPreference  = "set-communication-preference"
         }
     }
 
@@ -101,14 +79,10 @@ struct Message: Sendable, Hashable, Codable {
         case messageId, anonymousId, endUserId, timestamp, type, context
         // identify
         case traits
-        // alias
-        case previousId, targetId
         // track
-        case event, properties, sourceType, sourceId
-        // create/delete-communication-endpoint
+        case event, properties
+        // create-communication-endpoint
         case endpoint
-        // set-communication-preference
-        case channelType, disabled, categories
     }
 
     init(from decoder: Decoder) throws {
@@ -125,31 +99,14 @@ struct Message: Sendable, Hashable, Codable {
             body = .identify(
                 traits: try c.decodeIfPresent([String: AnyJSONValue].self, forKey: .traits)
             )
-        case .alias:
-            body = .alias(
-                previousId: try c.decode(String.self, forKey: .previousId),
-                targetId: try c.decode(String.self, forKey: .targetId)
-            )
         case .track:
             body = .track(
                 event: try c.decode(String.self, forKey: .event),
-                properties: try c.decodeIfPresent([String: AnyJSONValue].self, forKey: .properties),
-                sourceType: try c.decodeIfPresent(Body.TrackSource.self, forKey: .sourceType),
-                sourceId: try c.decodeIfPresent(String.self, forKey: .sourceId)
+                properties: try c.decodeIfPresent([String: AnyJSONValue].self, forKey: .properties)
             )
         case .createCommunicationEndpoint:
             body = .createCommunicationEndpoint(
                 try c.decode(CommunicationEndpoint.self, forKey: .endpoint)
-            )
-        case .deleteCommunicationEndpoint:
-            body = .deleteCommunicationEndpoint(
-                try c.decode(CommunicationEndpoint.self, forKey: .endpoint)
-            )
-        case .setCommunicationPreference:
-            body = .setCommunicationPreference(
-                channelType: try c.decode(CommunicationEndpoint.ChannelType.self, forKey: .channelType),
-                disabled: try c.decodeIfPresent(Bool.self, forKey: .disabled),
-                categories: try c.decodeIfPresent([String: Bool].self, forKey: .categories)
             )
         }
     }
@@ -166,21 +123,11 @@ struct Message: Sendable, Hashable, Codable {
         switch body {
         case .identify(let traits):
             try c.encodeIfPresent(traits, forKey: .traits)
-        case .alias(let previousId, let targetId):
-            try c.encode(previousId, forKey: .previousId)
-            try c.encode(targetId, forKey: .targetId)
-        case .track(let event, let properties, let sourceType, let sourceId):
+        case .track(let event, let properties):
             try c.encode(event, forKey: .event)
             try c.encodeIfPresent(properties, forKey: .properties)
-            try c.encodeIfPresent(sourceType, forKey: .sourceType)
-            try c.encodeIfPresent(sourceId, forKey: .sourceId)
-        case .createCommunicationEndpoint(let ep),
-             .deleteCommunicationEndpoint(let ep):
+        case .createCommunicationEndpoint(let ep):
             try c.encode(ep, forKey: .endpoint)
-        case .setCommunicationPreference(let channelType, let disabled, let categories):
-            try c.encode(channelType, forKey: .channelType)
-            try c.encodeIfPresent(disabled, forKey: .disabled)
-            try c.encodeIfPresent(categories, forKey: .categories)
         }
     }
 }
@@ -190,55 +137,4 @@ struct Message: Sendable, Hashable, Codable {
 struct BatchCollectRequest: Sendable, Codable {
     let messages: [Message]
     let sentAt: Date
-}
-
-// MARK: - Legacy compatibility
-
-extension Message {
-    /// Coarse type discriminator preserved for compatibility with older test
-    /// code. New code should switch on `body` directly.
-    enum MessageType: Equatable, Sendable {
-        case track
-        case identify
-        case alias
-        case createCommunicationEndpoint
-        case deleteCommunicationEndpoint
-        case setCommunicationPreference
-    }
-
-    var type: MessageType {
-        switch body {
-        case .track:                         return .track
-        case .identify:                      return .identify
-        case .alias:                         return .alias
-        case .createCommunicationEndpoint:   return .createCommunicationEndpoint
-        case .deleteCommunicationEndpoint:   return .deleteCommunicationEndpoint
-        case .setCommunicationPreference:    return .setCommunicationPreference
-        }
-    }
-
-    /// Legacy alias for `endUserId` used by older test code.
-    var userId: String? { endUserId }
-
-    /// Convenience accessor for the event name of a `.track` body.
-    var event: String? {
-        if case .track(let event, _, _, _) = body { return event }
-        return nil
-    }
-
-    /// Convenience accessor for properties (`.track`) or traits (`.identify`).
-    /// Older tests treat both as a single dictionary.
-    var properties: [String: AnyJSONValue]? {
-        switch body {
-        case .track(_, let props, _, _): return props
-        case .identify(let traits):      return traits
-        default:                         return nil
-        }
-    }
-
-    /// Convenience accessor for the traits dictionary of an `.identify` body.
-    var traits: [String: AnyJSONValue]? {
-        if case .identify(let traits) = body { return traits }
-        return nil
-    }
 }

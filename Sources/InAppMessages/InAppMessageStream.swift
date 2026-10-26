@@ -12,6 +12,13 @@
 //  Per-consumer terminations are handled by `onTermination` — when a
 //  consumer cancels its iteration, its continuation is removed.
 //
+//  Held message: a message published while NOBODY is subscribed is kept
+//  (newest wins) and handed to the next subscriber, once. In `.manual` mode
+//  the app's own loop may start a moment after the first foreground poll
+//  publishes — without this, that message wouldn't reach the app until its
+//  next cold start. In `.automatic` mode the SDK is always subscribed, so
+//  nothing is ever held.
+//
 //  Isolation: the broadcaster is `@MainActor`. `yield` runs on the main
 //  actor, and `InAppMessages.messages` is `@MainActor` too, so the natural
 //  `for await` (SwiftUI `.task`, `Task { @MainActor in … }`) delivers each
@@ -32,6 +39,10 @@ final class InAppMessageStream {
     }
 
     private var subscribers: [Subscriber] = []
+
+    /// Newest message published while nobody was subscribed, waiting for
+    /// the next subscriber.
+    private(set) var heldMessage: InAppMessages.Message?
 
     /// Default init runs from non-isolated contexts so SDKCore can hold a
     /// stream instance as a stored property (initialized at construction).
@@ -58,6 +69,15 @@ final class InAppMessageStream {
             }
         }
         subscribers = alive
+        if alive.isEmpty {
+            heldMessage = message
+        }
+    }
+
+    /// Drop the held message — e.g. on logout, since it was addressed to the
+    /// previous identity.
+    func discardHeldMessage() {
+        heldMessage = nil
     }
 
     /// Create a fresh consumer stream. Caller can iterate with
@@ -79,18 +99,15 @@ final class InAppMessageStream {
         }
     }
 
-    /// Drop every subscriber. Called when the SDK shuts down or logs out
-    /// — pending iterations resolve cleanly with no further yield.
-    func terminateAll() {
-        for sub in subscribers {
-            sub.continuation.finish()
-        }
-        subscribers.removeAll()
-    }
-
     // MARK: - Subscriber bookkeeping
 
     private func register(_ subscriber: Subscriber) {
+        if let held = heldMessage {
+            // A subscriber that went away before its registration ran can't
+            // take the held message — keep it for the next one.
+            if case .terminated = subscriber.continuation.yield(held) { return }
+            heldMessage = nil
+        }
         subscribers.append(subscriber)
     }
 

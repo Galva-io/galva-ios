@@ -21,17 +21,11 @@ import Foundation
 struct MessageContext: Sendable, Codable, Hashable {
     var app: App?
     var device: Device?
-    var ip: String?
     var library: Library?
     var locale: String?
-    var network: Network?
     var os: OS?
-    var page: Page?
-    var referrer: Referrer?
     var screen: Screen?
     var timezone: String?
-    var userAgent: String?
-    var userAgentData: UserAgentData?
 
     struct App: Sendable, Codable, Hashable {
         var name: String?
@@ -40,16 +34,15 @@ struct MessageContext: Sendable, Codable, Hashable {
         var namespace: String?
     }
 
+    /// No `name` — see `DeviceSnapshot`. Leaving the key out of the model
+    /// also drops it from messages an older SDK queued with it: the queue
+    /// decodes stored messages and the uploader re-encodes them.
     struct Device: Sendable, Codable, Hashable {
         var id: String?
-        var advertisingId: String?
-        var adTrackingEnabled: Bool?
         var manufacturer: String?
         var model: String?
-        var name: String?
         var type: String?
         var token: String?
-        var version: String?
     }
 
     struct Library: Sendable, Codable, Hashable {
@@ -57,52 +50,14 @@ struct MessageContext: Sendable, Codable, Hashable {
         var version: String?
     }
 
-    struct Network: Sendable, Codable, Hashable {
-        var bluetooth: Bool?
-        var carrier: String?
-        var cellular: Bool?
-        var wifi: Bool?
-    }
-
     struct OS: Sendable, Codable, Hashable {
         var name: String?
         var version: String?
-    }
-
-    struct Page: Sendable, Codable, Hashable {
-        var path: String?
-        var referrer: String?
-        var search: String?
-        var title: String?
-        var url: String?
-    }
-
-    struct Referrer: Sendable, Codable, Hashable {
-        var id: String?
-        var type: String?
-        var name: String?
-        var url: String?
-        var link: String?
     }
 
     struct Screen: Sendable, Codable, Hashable {
         var width: Double?
         var height: Double?
         var density: Double?
-    }
-
-    struct UserAgentData: Sendable, Codable, Hashable {
-        var brands: [Brand]?
-        var mobile: Bool?
-        var platform: String?
-        var bitness: String?
-        var model: String?
-        var platformVersion: String?
-        var uaFullVersion: String?
-
-        struct Brand: Sendable, Codable, Hashable {
-            var brand: String?
-            var version: String?
-        }
     }
 }

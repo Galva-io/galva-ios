@@ -60,7 +60,7 @@ actor WebViewBundleCache {
     func bundleURL(for version: String) async throws -> URL {
         let candidate = cachedURL(for: version)
         if FileManager.default.fileExists(atPath: candidate.path) {
-            logger.debug(.configuration, "bundle cache hit", metadata: ["version": version])
+            logger.debug(.inAppMessages, "bundle cache hit", metadata: ["version": version])
             return candidate
         }
         return try await download(version: version)
@@ -75,21 +75,6 @@ actor WebViewBundleCache {
         let candidate = cachedURL(for: version)
         if FileManager.default.fileExists(atPath: candidate.path) { return }
         Task { try? await download(version: version) }
-    }
-
-    /// Tests only — drop every cached bundle.
-    func clear() throws {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: directoryURL.path) {
-            try fm.removeItem(at: directoryURL)
-        }
-        try Self.ensureDirectory(directoryURL)
-        inFlight.removeAll()
-    }
-
-    /// Tests / diagnostics — whether a given version is on disk right now.
-    func isCached(_ version: String) -> Bool {
-        FileManager.default.fileExists(atPath: cachedURL(for: version).path)
     }
 
     // MARK: - Internals
@@ -114,16 +99,16 @@ actor WebViewBundleCache {
 
     private func performDownload(version: String) async throws -> URL {
         let remote = SDKConstants.webviewBundleURL(version: version, cdn: cdnBaseURL)
-        logger.info(.configuration, "downloading bundle", metadata: [
+        logger.info(.inAppMessages, "downloading bundle", metadata: [
             "version": version,
-            "url": remote.absoluteString,
+            "url": remote.loggableLocation,
         ])
         let data = try await client.download(remote)
         let destination = cachedURL(for: version)
         // Atomic write so a kill mid-download can't leave a half-written
         // file that the next launch would happily load and crash on.
         try data.write(to: destination, options: [.atomic])
-        logger.info(.configuration, "bundle persisted", metadata: [
+        logger.info(.inAppMessages, "bundle persisted", metadata: [
             "version": version,
             "bytes": String(data.count),
         ])

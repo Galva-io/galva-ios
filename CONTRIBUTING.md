@@ -21,7 +21,7 @@ Sources/
 │                                 StorageMigrator (schema + quarantine)
 ├── Models/                     ← AnyJSONValue, MessageContext, Endpoint
 ├── Networking/                 ← APIClient, Uploader, durable request queue
-├── SwiftUI/                    ← .galvaConfigure, in-app message modifiers
+├── SwiftUI/                    ← .inAppMessageSheet, for .manual presentation
 └── Logger/                     ← GalvaLogger, OSLogLogger, LevelFilter
 
 Tests/                          ← one folder per area, mirroring Sources/
@@ -30,7 +30,8 @@ Examples/GalvaDemo/             ← SwiftUI demo app + XCUITest E2E and perf sui
                                   (Tuist project; regenerate with `tuist generate`)
 
 scripts/
-├── lint.sh                     ← canonical perf-hazard + crash-pattern checks
+├── lint.sh                     ← canonical perf-hazard + crash-pattern checks,
+│                                 and the privacy manifest against Sources/
 ├── e2e.sh                      ← generates the demo project, runs the UI tests
 └── perf.sh                     ← measures SDK overhead against a no-SDK baseline
 
@@ -51,7 +52,7 @@ Galva builds with **Xcode 26 or later**: the StoreKit offer path uses an iOS 26 
 ```bash
 swift build
 swift test                      # 440+ tests, ~15s once built
-./scripts/lint.sh               # host-app perf hazards, crash patterns
+./scripts/lint.sh               # host-app perf hazards, crash patterns, privacy manifest
 ./scripts/e2e.sh                # UI tests against an in-process mock (needs Tuist)
 ./scripts/perf.sh               # SDK overhead report (needs Tuist)
 ```
@@ -71,6 +72,7 @@ Enforced by `scripts/lint.sh`:
 - **Use the logger, not `print`/`debugPrint`/`NSLog`.** Those bypass the configured `GalvaLogger` pipeline.
 - **No `try!` / `as!` / `fatalError` in production code.** The SDK must never crash the host.
 - **No force-unwraps on String-input initializers** (`URL(string:)!`, `UUID(uuidString:)!`, etc.) without a `// galva-lint:disable reason="…"` comment justifying it.
+- **The privacy manifest matches the code.** [`Sources/Resources/PrivacyInfo.xcprivacy`](Sources/Resources/PrivacyInfo.xcprivacy) must use only Apple's keys and values, and declare exactly the required-reason API categories `Sources/` calls: file timestamps, disk space, system boot time, active keyboards, `UserDefaults`. Add a category, with the reason that fits, in the same change as the first call to its APIs. When the SDK starts or stops collecting a kind of data, update the manifest's data types and the README's Privacy section too; lint can't check those.
 
 When a rule needs an exception, add a same-line comment with a reason:
 
@@ -96,7 +98,7 @@ The suite is organised by behavioural contract, not by source-file mirror. When 
 | `MessageStorageContractTests` | shared contract both InMemory + SQLite must satisfy |
 | `StorageMigrationTests` | schema migrations, quarantine, downgrade safety |
 | `SDKCore*Tests` | integration tests using `SDKHarness` (no network, no real disk) |
-| `InAppMessage*Tests`, `Bridge*Tests` | message delivery, display budget, native bridge wire format |
+| `InAppMessage*Tests`, `Bridge*Tests` | message delivery (automatic and manual), display budget, native bridge wire format |
 | `PurchaseControllerTests` | purchase-controller dispatch and bridge error codes |
 | `IntegrationSPITests` | the `@_spi` surface integration packages build on |
 | `PublicAPIReturnLatencyTests`, `BoundedQueueTests`, `FilteredLogPerformanceTests`, `MainThreadBudgetTests` | API return latency, queue cap, filtered-log cost, main-thread budgets |
@@ -116,15 +118,21 @@ Avoid wall-clock-dependent assertions. Use the `eventually(timeout:condition:)` 
 
 The swift-tools-version stays at 6.0 so the manifest parses on every Xcode that can build the SDK; don't use newer manifest features without bumping it deliberately.
 
+### Public value sets that grow are structs
+
+SwiftPM builds this package from source, without library evolution, so adding a case to a public enum breaks every app that switches over it exhaustively. Sets that grow with the product, like `InAppMessages.WorkflowType` and `Galva.LogCategory`, are `RawRepresentable` structs with static values instead: adding one is a minor release, and an unknown server value still decodes.
+
+Public error enums (`InAppMessages.Error`, `Galva.PurchaseError`) stay enums. Their docs tell apps to switch with `@unknown default`, which turns a new case into a warning rather than a build failure, so they may gain cases in minor releases too. Closed sets (`Galva.LogLevel`, `Galva.Environment`, `Galva.PurchaseResult`) are plain enums.
+
 ### Integrations live in their own packages
 
 SDKs that integrate with another vendor's SDK (e.g. [`galva-ios-revenuecat`](https://github.com/Galva-io/galva-ios-revenuecat)) are separate packages. SwiftPM fetches and pins every dependency a package declares, even ones only used by products an app doesn't link, so a vendor dependency in this `Package.swift` would reach every Galva app.
 
-Integration packages plug in through `Galva.configure(…, integrations:)`. They build a `Galva.Integration` with the `@_spi(GalvaIntegration)` initializer, and unit-test purchase controllers with `@_spi(Testing)` `Galva.PurchaseRequest` values. `IntegrationSPITests` pins that surface, so changing it breaks a test here before it breaks an integration package.
+Integration packages plug in through `Galva.configure(…, integrations:)`. They build a `Galva.Integration` with the `@_spi(GalvaIntegration)` initializer and log through the `GalvaLogger` convenience methods, which are `@_spi(GalvaIntegration)` too. Their unit tests build `@_spi(Testing)` values: `Galva.PurchaseRequest`, `Galva.PromotionalOffer` and `Galva.IntegrationContext`. `IntegrationSPITests` pins that surface, so changing it breaks a test here before it breaks an integration package.
 
 ### React Native vendors this source
 
-[`galva-react-native`](https://github.com/Galva-io/galva-react-native) compiles a pinned snapshot of `Sources/` into its own CocoaPods pod, using the build settings in [`cocoapods/galva-build.rb`](cocoapods/galva-build.rb). When you change `Package.swift`'s platforms, Swift version or linker settings, update that file in the same commit. Wrappers report their own identity through the internal `Galva.configure(…, wrapper:)` seam.
+[`galva-react-native`](https://github.com/Galva-io/galva-react-native) compiles a pinned snapshot of `Sources/` into its own CocoaPods pod, using the build settings in [`cocoapods/galva-build.rb`](cocoapods/galva-build.rb), which also ships the privacy manifest. When you change `Package.swift`'s platforms, Swift version, linker settings or resources, update that file in the same commit. Wrappers report their own identity through the internal `Galva.configure(…, wrapper:)` seam.
 
 ### SQLite schema migrations
 
@@ -137,9 +145,9 @@ Short version:
 
 ### Logger pipeline
 
-Public surface in [`Sources/Logger/Logger.swift`](Sources/Logger/Logger.swift). All internal call sites use the typed convenience methods (`logger.warning(.uploader, "…")`) — `lint.sh` enforces no raw `print`.
+Public surface in [`Sources/Logger/Logger.swift`](Sources/Logger/Logger.swift); apps implement only `log(_:)`. All internal call sites use the typed convenience methods (`logger.warning(.uploader, "…")`), `@_spi(GalvaIntegration)` so integration packages can use them too — `lint.sh` enforces no raw `print`.
 
-Default sink is `OSLogLogger`, writing to subsystem `co.galva.sdk` (visible in Console.app). Custom loggers are wrapped in `LevelFilterLogger` so the `logLevel` set at configure time always applies, even after `Galva.setLogger(_:)`. Integrations log through `CurrentSDKLogger`, which always forwards to the SDK's current logger.
+Default sink is `OSLogLogger`, writing to subsystem `co.galva.sdk` (visible in Console.app). Custom loggers are wrapped in `LevelFilterLogger` so the `logLevel` set at configure time always applies, even after `Galva.setLogger(_:)`. Integrations get the same live logger as the SDK's own subsystems, so their output follows later level and logger changes too.
 
 The convenience methods short-circuit on filtered levels (an `isEnabled(_:)` check runs before the autoclosure message is evaluated) — a `logger.debug(.queue, "expensive \(work)")` in a hot loop costs ~zero when filtered out. Locked in by `FilteredLogPerformanceTests`.
 
@@ -152,15 +160,17 @@ A release is a Git tag on `main`. SwiftPM resolves it directly; there are no bin
 ### Cutting a release
 
 1. Bump `version` in [`Sources/Internal/SDKConstants.swift`](Sources/Internal/SDKConstants.swift). It's reported in the `x-sdk-version` header and by `Galva.sdkVersion`, so it must match the tag.
-2. Merge to `main` with CI green.
-3. Tag and push:
+2. In [`CHANGELOG.md`](CHANGELOG.md), give the release its version and date, and list its changes. Merge PRs with a CHANGELOG line for anything an app developer would notice.
+3. Merge to `main` with CI green.
+4. Confirm what the privacy manifest says about Galva's servers is true in production. Lint checks the file, not the servers. It declares the in-app message page's diagnostic logs as not linked to the user, which holds only once Galva's log gateway drops user and message IDs, every environment serves a message page that no longer sends them, and logs stored before that have aged out (7 days). The privacy step of the internal SDK release checklist has the checks. Don't tag until they pass. If they can't pass in time, ship that entry as linked and change it in a later release.
+5. Tag and push:
 
    ```bash
    git tag v1.2.3
    git push origin v1.2.3
    ```
 
-4. Create the GitHub Release with notes:
+6. Create the GitHub Release with notes:
 
    ```bash
    gh release create v1.2.3 --generate-notes
@@ -176,6 +186,7 @@ Integration packages depend on a released version of this SDK, so release here f
 
 - `lint` — `scripts/lint.sh`
 - `test` — `swift test --parallel`
+- `test-ios` — `xcodebuild test` on an iOS Simulator, which also runs the UIKit / WebKit tests `swift test` on macOS doesn't build
 - `e2e` — `scripts/e2e.sh`, the demo app's UI tests against an in-process mock
 - `perf` — `scripts/perf.sh`, which fails if the SDK's memory overhead passes its budget
 

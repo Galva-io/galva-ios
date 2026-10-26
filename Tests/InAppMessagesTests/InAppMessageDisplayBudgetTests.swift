@@ -11,7 +11,12 @@
 //      message is on screen / already shown this stint
 //    • a claim landing while a fetch is in flight drops the results unmarked
 //      (deterministic via a semaphore-blocked URL stub)
-//    • a failed programmatic show rolls the budget back
+//    • a failed programmatic show rolls the budget back, and a delivered
+//      message that never reached the screen is delivered again next stint
+//      — unless the server rejected it — behind any other waiting message,
+//      a few times at most
+//    • a poll in flight when the identity resets (logOut, user switch)
+//      drops its results unmarked
 //
 //  The manager is @GalvaActor, so claims and poll checks are serialized by the
 //  actor — these tests exercise that state machine end-to-end over a stubbed
@@ -125,7 +130,10 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
             (URLProtocolStub.httpResponse(url: request.url!, status: 200),
              BudgetFixtures.list(ids: [messageId]))
         }
-        await harness.manager.releaseDisplaySlot(messageId: "deep-link")
+        await harness.manager.presentationFailed(
+            messageId: "deep-link",
+            error: InAppMessageError.noPresentingViewController
+        )
         let nextStint = await harness.manager.poll()
         XCTAssertEqual(nextStint.map(\.id), [messageId.uuidString.lowercased()],
                        "a dropped message must surface on the next return event")
@@ -156,7 +164,7 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
                        "re-showing the on-screen message must not regress .used to .pending")
     }
 
-    func test_releaseDisplaySlot_restoresBudget_afterFailedShow() async throws {
+    func test_presentationFailed_restoresBudget_afterFailedShow() async throws {
         URLProtocolStub.handler = { request in
             (URLProtocolStub.httpResponse(url: request.url!, status: 200),
              BudgetFixtures.list(ids: [UUID()]))
@@ -164,9 +172,178 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
         let harness = await BudgetHarness.make()
 
         await harness.manager.claimDisplaySlot(messageId: "deep-link")
-        await harness.manager.releaseDisplaySlot(messageId: "deep-link") // resolve failed
+        // The deep link's resolve failed.
+        await harness.manager.presentationFailed(
+            messageId: "deep-link",
+            error: InAppMessageError.messageNotFound
+        )
         let emitted = await harness.manager.poll()
         XCTAssertEqual(emitted.count, 1, "a failed show must not burn the stint's budget")
+    }
+
+    // MARK: - Failed presentation
+
+    func test_failedPresentation_deliversTheMessageAgainNextStint() async throws {
+        let messageId = UUID()
+        URLProtocolStub.handler = { request in
+            (URLProtocolStub.httpResponse(url: request.url!, status: 200),
+             BudgetFixtures.list(ids: [messageId]))
+        }
+        let harness = await BudgetHarness.make()
+        let id = messageId.uuidString.lowercased()
+
+        let delivered = await harness.manager.poll()
+        XCTAssertEqual(delivered.map(\.id), [id])
+        // show(in:) claims, then fails before the message reaches the screen.
+        await harness.manager.claimDisplaySlot(messageId: id)
+        await harness.manager.presentationFailed(messageId: id, error: InAppMessageError.noPresentingViewController)
+
+        let nextStint = await harness.manager.poll()
+        XCTAssertEqual(nextStint.map(\.id), [id],
+                       "a message that never reached the screen must be delivered again")
+    }
+
+    func test_failedPresentation_ofAMessageShownEarlier_doesNotRedeliverIt() async throws {
+        let messageId = UUID()
+        URLProtocolStub.handler = { request in
+            (URLProtocolStub.httpResponse(url: request.url!, status: 200),
+             BudgetFixtures.list(ids: [messageId]))
+        }
+        let harness = await BudgetHarness.make()
+        let id = messageId.uuidString.lowercased()
+
+        _ = await harness.manager.poll()
+        await harness.manager.setActiveMessageId(id) // on screen
+        await harness.manager.setActiveMessageId(nil) // dismissed
+        // The app shows it again and that attempt fails.
+        await harness.manager.claimDisplaySlot(messageId: id)
+        await harness.manager.presentationFailed(messageId: id, error: InAppMessageError.noPresentingViewController)
+
+        let nextStint = await harness.manager.poll()
+        XCTAssertEqual(nextStint, [], "a message the user already saw stays done for the run")
+    }
+
+    func test_failedPresentation_isDeliveredAgain_onlyIfALaterAttemptMightWork() async {
+        let mightWorkLater: [any Error] = [
+            InAppMessageError.noPresentingViewController,
+            InAppMessageError.bundleUnavailable,
+            APIError.transport(URLError(.notConnectedToInternet)),
+            APIError.http(status: 503),
+        ]
+        for error in mightWorkLater {
+            let again = await isDeliveredAgain(afterFailingWith: error)
+            XCTAssertTrue(again, "\(error)")
+        }
+        // The server rejected the message, or this SDK can't read it.
+        let final: [any Error] = [
+            InAppMessageError.messageNotFound,
+            InAppMessageError.invalidMessageId,
+            APIError.http(status: 404),
+            APIError.decoding(URLError(.cannotDecodeContentData)),
+        ]
+        for error in final {
+            let again = await isDeliveredAgain(afterFailingWith: error)
+            XCTAssertFalse(again, "\(error)")
+        }
+    }
+
+    func test_failedPresentation_theServerRejected_doesNotHoldUpTheRest() async throws {
+        let rejected = UUID()
+        let other = UUID()
+        URLProtocolStub.handler = { request in
+            (URLProtocolStub.httpResponse(url: request.url!, status: 200),
+             BudgetFixtures.list(ids: [rejected, other]))
+        }
+        let harness = await BudgetHarness.make()
+        let id = rejected.uuidString.lowercased()
+
+        let delivered = await harness.manager.poll()
+        XCTAssertEqual(delivered.map(\.id), [id])
+        // Resolve says the message is no longer valid, but the list still
+        // has it first.
+        await harness.manager.claimDisplaySlot(messageId: id)
+        await harness.manager.presentationFailed(messageId: id, error: InAppMessageError.messageNotFound)
+
+        let nextStint = await harness.manager.poll()
+        XCTAssertEqual(nextStint.map(\.id), [other.uuidString.lowercased()])
+    }
+
+    func test_failedPresentation_waitsBehindTheOtherMessages() async throws {
+        let failed = UUID()
+        let other = UUID()
+        URLProtocolStub.handler = { request in
+            (URLProtocolStub.httpResponse(url: request.url!, status: 200),
+             BudgetFixtures.list(ids: [failed, other]))
+        }
+        let harness = await BudgetHarness.make()
+        let failedId = failed.uuidString.lowercased()
+        let otherId = other.uuidString.lowercased()
+
+        _ = await harness.manager.poll()
+        await harness.manager.claimDisplaySlot(messageId: failedId)
+        await harness.manager.presentationFailed(messageId: failedId, error: InAppMessageError.noPresentingViewController)
+
+        let nextStint = await harness.manager.poll()
+        XCTAssertEqual(nextStint.map(\.id), [otherId], "a message that failed to show must not hold the head of the list")
+        await harness.manager.setActiveMessageId(otherId) // on screen
+        await harness.manager.setActiveMessageId(nil) // dismissed
+
+        let stintAfter = await harness.manager.poll()
+        XCTAssertEqual(stintAfter.map(\.id), [failedId], "then it gets another try")
+    }
+
+    func test_failedPresentation_isGivenUpAfterRepeatedAttempts() async throws {
+        let messageId = UUID()
+        URLProtocolStub.handler = { request in
+            (URLProtocolStub.httpResponse(url: request.url!, status: 200),
+             BudgetFixtures.list(ids: [messageId]))
+        }
+        let harness = await BudgetHarness.make()
+        let id = messageId.uuidString.lowercased()
+
+        for attempt in 1 ... InAppMessageManager.maxPresentationAttempts {
+            let delivered = await harness.manager.poll()
+            XCTAssertEqual(delivered.map(\.id), [id], "attempt \(attempt)")
+            await harness.manager.claimDisplaySlot(messageId: id)
+            await harness.manager.presentationFailed(messageId: id, error: InAppMessageError.noPresentingViewController)
+        }
+
+        let nextStint = await harness.manager.poll()
+        XCTAssertEqual(nextStint, [], "a message that keeps failing must not cost a request every foreground")
+    }
+
+    // MARK: - Identity reset mid-flight
+
+    func test_poll_dropsMidFlightResultsUnmarked_whenIdentityResets() async throws {
+        let messageId = UUID()
+        let blocker = DispatchSemaphore(value: 0)
+        URLProtocolStub.handler = { request in
+            blocker.wait() // hold the response until the identity has reset
+            return (URLProtocolStub.httpResponse(url: request.url!, status: 200),
+                    BudgetFixtures.list(ids: [messageId]))
+        }
+        let harness = await BudgetHarness.make()
+
+        let poll = Task { await harness.manager.poll() }
+        for _ in 0 ..< 2_000 where URLProtocolStub.requests.isEmpty { await Task.yield() }
+        XCTAssertFalse(URLProtocolStub.requests.isEmpty, "fetch should be in flight")
+
+        // logOut / user switch lands MID-FLIGHT, then the response arrives.
+        await harness.manager.reset()
+        blocker.signal()
+
+        let emitted = await poll.value
+        XCTAssertEqual(emitted, [], "the previous identity's results must be dropped")
+        XCTAssertNil(harness.stream.heldMessage, "nothing is published to the new identity")
+
+        // Dropped UNMARKED: if the server returns it for the new identity, it
+        // is delivered.
+        URLProtocolStub.handler = { request in
+            (URLProtocolStub.httpResponse(url: request.url!, status: 200),
+             BudgetFixtures.list(ids: [messageId]))
+        }
+        let nextPoll = await harness.manager.poll()
+        XCTAssertEqual(nextPoll.map(\.id), [messageId.uuidString.lowercased()])
     }
 
     // MARK: - Presented-communication dedupe
@@ -212,6 +389,22 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
         XCTAssertFalse(afterReset, "the next identity starts clean")
     }
 
+    func test_reset_forgetsFailedPresentations() async throws {
+        let messageId = UUID()
+        URLProtocolStub.handler = { request in
+            (URLProtocolStub.httpResponse(url: request.url!, status: 200),
+             BudgetFixtures.list(ids: [messageId]))
+        }
+        let harness = await BudgetHarness.make()
+        let id = messageId.uuidString.lowercased()
+        _ = await harness.manager.poll()
+        await harness.manager.presentationFailed(messageId: id, error: InAppMessageError.messageNotFound)
+
+        await harness.manager.reset() // logOut
+        let delivered = await harness.manager.poll()
+        XCTAssertEqual(delivered.map(\.id), [id], "the next identity starts clean")
+    }
+
     func test_reset_clearsSlot() async throws {
         URLProtocolStub.handler = { request in
             (URLProtocolStub.httpResponse(url: request.url!, status: 200),
@@ -223,6 +416,26 @@ final class InAppMessageDisplayBudgetTests: XCTestCase {
         await harness.manager.reset() // logOut
         let slot = await harness.manager.displaySlot
         XCTAssertEqual(slot, .available)
+    }
+}
+
+// MARK: - Helpers
+
+extension InAppMessageDisplayBudgetTests {
+    /// Whether a delivered message whose presentation failed with `error` is
+    /// delivered again by the next poll.
+    private func isDeliveredAgain(afterFailingWith error: any Error) async -> Bool {
+        let messageId = UUID()
+        URLProtocolStub.handler = { request in
+            (URLProtocolStub.httpResponse(url: request.url!, status: 200),
+             BudgetFixtures.list(ids: [messageId]))
+        }
+        let harness = await BudgetHarness.make()
+        let id = messageId.uuidString.lowercased()
+        _ = await harness.manager.poll()
+        await harness.manager.claimDisplaySlot(messageId: id)
+        await harness.manager.presentationFailed(messageId: id, error: error)
+        return await harness.manager.poll().map(\.id) == [id]
     }
 }
 
@@ -252,6 +465,7 @@ private enum BudgetFixtures {
 @MainActor
 private struct BudgetHarness {
     let manager: InAppMessageManager
+    let stream: InAppMessageStream
 
     static func make() async -> BudgetHarness {
         let session = URLProtocolStub.makeSession()
@@ -284,8 +498,9 @@ private struct BudgetHarness {
             stream: stream,
             bundleCache: bundleCache,
             initialization: initManager,
-            logger: SilentLogger()
+            logger: SilentLogger(),
+            isOptedOut: { false }
         )
-        return BudgetHarness(manager: manager)
+        return BudgetHarness(manager: manager, stream: stream)
     }
 }

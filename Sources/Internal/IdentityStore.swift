@@ -100,15 +100,11 @@ final class IdentityStore {
         }
     }
 
-    /// Persist (or clear) the device's push token. Device-scoped — survives
+    /// Persist the device's push token. Device-scoped — survives
     /// `logOut()` so the next user keeps the same token.
-    func setDeviceToken(_ token: String?) {
+    func setDeviceToken(_ token: String) {
         deviceToken = token
-        if let token {
-            defaults.set(token, forKey: Self.deviceTokenKey)
-        } else {
-            defaults.removeObject(forKey: Self.deviceTokenKey)
-        }
+        defaults.set(token, forKey: Self.deviceTokenKey)
     }
 
     func setEndUserId(_ id: String?) {

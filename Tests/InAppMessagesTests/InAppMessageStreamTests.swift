@@ -13,7 +13,7 @@
 //
 
 import Foundation
-@testable import Galva
+@_spi(Testing) @testable import Galva
 import XCTest
 
 /// Synchronous main-thread probe. `Thread.isMainThread` is unavailable from
@@ -66,39 +66,10 @@ final class InAppMessageStreamTests: XCTestCase {
                       "a MainActor consumer must receive messages on the main thread")
     }
 
-    func test_terminateAll_finishesConsumers() async {
-        let stream = InAppMessageStream()
-        let consumer = stream.makeStream()
-
-        let finished = Box()
-        let task = Task { @MainActor in
-            for await _ in consumer { /* drain */ }
-            finished.value = true   // loop ends only when the stream finishes
-        }
-
-        // Let the subscriber register, then finish all consumers.
-        await Task.yield()
-        await Task.yield()
-        stream.terminateAll()
-
-        // The consumer's `for await` should complete.
-        var attempts = 0
-        while !finished.value && attempts < 500 {
-            await Task.yield()
-            attempts += 1
-        }
-        task.cancel()
-        XCTAssertTrue(finished.value, "terminateAll() must finish active consumer iterations")
-    }
-
     // Both fields live on the MainActor (the test + consumer task are both
     // MainActor-isolated), so a plain class is race-free here.
     @MainActor private final class Result {
         var received = false
         var wasMainThread = false
-    }
-
-    @MainActor private final class Box {
-        var value = false
     }
 }

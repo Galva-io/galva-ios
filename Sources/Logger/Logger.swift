@@ -39,20 +39,19 @@ import os.log
 /// logs into your own pipeline (Sentry, Datadog, a custom file logger),
 /// then install it via `Galva.setLogger(_:)`.
 ///
-/// Conformers receive every entry — filtering by level happens upstream
-/// in the `LevelFilterLogger` the SDK installs by default.
+/// Your logger receives only entries at or above the `logLevel` you
+/// configured; the SDK applies that filter before calling `log(_:)`.
 ///
 /// **Performance note** — implement `isEnabled(_:)` if your logger
-/// short-circuits at a level threshold. The SDK's call sites check
-/// `isEnabled` *before* evaluating their message autoclosures, so a
-/// filtered-out `logger.debug(.queue, "expensive \(work)")` costs
-/// nothing beyond a method call and a comparison.
+/// short-circuits at a level threshold. The SDK checks `isEnabled`
+/// *before* building an entry's message, so an entry your logger would
+/// drop costs nothing beyond a method call and a comparison.
 public protocol GalvaLogger: Sendable {
     func log(_ entry: Galva.LogEntry)
 
-    /// Cheap pre-check. The SDK's convenience methods call this before
-    /// building the `LogEntry` so the message autoclosure doesn't run
-    /// for an entry that would be dropped. Default returns `true`.
+    /// Cheap pre-check. The SDK calls this before building a `LogEntry`,
+    /// so it doesn't format the message of an entry that would be
+    /// dropped. Default returns `true`.
     func isEnabled(_ level: Galva.LogLevel) -> Bool
 }
 
@@ -101,12 +100,13 @@ public extension Galva {
 
 // MARK: - Convenience methods
 
-/// Ergonomic wrappers used at call sites — keeps the body of an SDK
-/// method readable without sacrificing structured-log fidelity.
+/// Ergonomic wrappers for SDK and integration call sites — keeps the body
+/// of a method readable without sacrificing structured-log fidelity.
 ///
 ///     logger.debug(.queue, "drained \(batch.count) messages")
 ///     logger.warning(.uploader, "retryable failure", metadata: ["status": "503"], error: err)
 ///
+@_spi(GalvaIntegration)
 public extension GalvaLogger {
     func debug(
         _ category: Galva.LogCategory,
@@ -223,7 +223,8 @@ struct OSLogLogger: GalvaLogger {
     /// One `os.Logger` per category, cached at construction.
     private let loggersByCategory: [Galva.LogCategory: os.Logger]
 
-    init(subsystem: String = OSLogLogger.defaultSubsystem) {
+    init() {
+        let subsystem = Self.defaultSubsystem
         self.subsystem = subsystem
         var cache: [Galva.LogCategory: os.Logger] = [:]
         for category in Galva.LogCategory.allCases {
@@ -233,9 +234,11 @@ struct OSLogLogger: GalvaLogger {
     }
 
     func log(_ entry: Galva.LogEntry) {
-        guard entry.level != .off, let logger = loggersByCategory[entry.category] else {
-            return
-        }
+        guard entry.level != .off else { return }
+        // A category outside `allCases` (built with `init(rawValue:)`) still
+        // logs, under its own name.
+        let logger = loggersByCategory[entry.category]
+            ?? os.Logger(subsystem: subsystem, category: entry.category.rawValue)
         let formatted = Self.format(entry)
         switch entry.level {
         case .debug:   logger.debug("\(formatted, privacy: .public)")
@@ -289,19 +292,40 @@ struct LevelFilterLogger: GalvaLogger {
     }
 }
 
-// MARK: - CurrentSDKLogger
+// MARK: - LiveLogger
 
-/// Forwards every call to the SDK's current logger (`SDKCore.currentLogger`).
-/// Handed to integrations, which live outside `GalvaActor`, so their entries
-/// follow the configured level and any logger installed later with
-/// `Galva.setLogger(_:)`.
-struct CurrentSDKLogger: GalvaLogger {
+/// Forwards every call to `target`, which can be swapped after this logger is
+/// handed out. SDKCore logs through one and hands it to every subsystem it
+/// builds and every integration it installs, so `Galva.setLogger(_:)` and
+/// level changes reach loggers captured at configure time. Lock-protected,
+/// hence `@unchecked Sendable`.
+final class LiveLogger: GalvaLogger, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _target: any GalvaLogger
+
+    init(_ target: any GalvaLogger) {
+        _target = target
+    }
+
+    var target: any GalvaLogger {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _target
+        }
+        set {
+            lock.lock()
+            _target = newValue
+            lock.unlock()
+        }
+    }
+
     func log(_ entry: Galva.LogEntry) {
-        SDKCore.currentLogger.log(entry)
+        target.log(entry)
     }
 
     func isEnabled(_ level: Galva.LogLevel) -> Bool {
-        SDKCore.currentLogger.isEnabled(level)
+        target.isEnabled(level)
     }
 }
 
@@ -312,4 +336,37 @@ struct CurrentSDKLogger: GalvaLogger {
 struct NoOpLogger: GalvaLogger {
     func log(_ entry: Galva.LogEntry) {}
     func isEnabled(_ level: Galva.LogLevel) -> Bool { false }
+}
+
+// MARK: - URLs in log metadata
+//
+// Log a URL by its path, never its query or fragment. The in-app poll sends
+// endUserId and anonymousId in its query, and an entry reaches os_log as
+// public (`OSLogLogger`) and any custom `GalvaLogger` the app installed.
+
+extension URL {
+    /// This URL's path, for log metadata. Used for requests to the Galva API,
+    /// whose host is a given.
+    var loggablePath: String { path.isEmpty ? "/" : path }
+
+    /// Scheme, host and path, for log metadata about URLs outside the Galva
+    /// API — a page the WebView was sent to, a link the page opens — where
+    /// the host is what tells you what happened. No query, fragment or
+    /// credentials.
+    var loggableLocation: String {
+        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: true) else {
+            return loggablePath
+        }
+        components.query = nil
+        components.fragment = nil
+        components.user = nil
+        components.password = nil
+        return components.string ?? loggablePath
+    }
+}
+
+extension String {
+    /// A relative API path the in-app page supplied (`/x/y?query`), for log
+    /// metadata: the part before any query or fragment.
+    var loggablePath: String { String(prefix { $0 != "?" && $0 != "#" }) }
 }

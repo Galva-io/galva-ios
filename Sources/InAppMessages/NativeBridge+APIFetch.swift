@@ -9,8 +9,9 @@
 //    • `handleAPIFetch(payload:)` — entry point dispatched from
 //       `NativeBridge.handle(envelope:)` for the `.apiFetch` method.
 //    • `ParsedAPIFetch`, `parseAPIFetch(_:)`, `encodeAPIResponse(_:)`,
-//      `apiFetchAllowedMethods` — `static` / pure helpers exposed for
-//      unit testing via `@testable import Galva`.
+//      `optedOutAnalyticsResponse(shouldRetry:)`, `apiFetchAllowedMethods`
+//      — `static` / pure helpers exposed for unit testing via
+//      `@testable import Galva`.
 //
 //  Add new HTTP-proxy behaviour (different durability modes, request
 //  rewriting, etc.) here rather than touching the core bridge file.
@@ -53,6 +54,14 @@ extension NativeBridge {
     ///
     /// Rejects only on a malformed / disallowed path (`invalidPayload`) or a
     /// transport-layer failure (`apiRequestFailed`).
+    ///
+    /// While the user is opted out, the page's analytics
+    /// (`SDKConstants.isPageAnalytics`: every `POST /communications/track`
+    /// but `offer_completed`) are neither sent nor queued; the page gets the
+    /// answer a delivered one gets (`optedOutAnalyticsResponse`). Everything
+    /// else — the survey answer, its follow-up, offer acceptance, the
+    /// completed offer purchase — is something the user did that the server
+    /// acts on, so it goes through.
     func handleAPIFetch(
         payload: [String: AnyJSONValue]?
     ) async -> Result<AnyJSONValue?, BridgeError> {
@@ -61,11 +70,21 @@ extension NativeBridge {
         case .success(let value): parsed = value
         case .failure(let error): return .failure(error)
         }
-        logger.debug(.identity, "bridge apiFetch", metadata: [
+        logger.debug(.inAppMessages, "bridge apiFetch", metadata: [
             "method": parsed.method,
-            "path": parsed.path,
+            "path": parsed.path.loggablePath,
             "shouldRetry": parsed.shouldRetry ? "true" : "false",
         ])
+
+        // Checked here, in the SDK, not left to the page: the server pins a
+        // bundle version per message, so pages that predate any page-side
+        // check keep running.
+        if messageManager.isOptedOut(), SDKConstants.isPageAnalytics(path: parsed.path, body: parsed.body) {
+            logger.debug(.inAppMessages, "bridge apiFetch not sent — opted out", metadata: [
+                "path": parsed.path.loggablePath,
+            ])
+            return .success(Self.optedOutAnalyticsResponse(shouldRetry: parsed.shouldRetry))
+        }
 
         // Fire-and-forget durable path: persist for guaranteed eventual
         // delivery (retries across network loss + app launches) and ack the
@@ -83,7 +102,7 @@ extension NativeBridge {
                     message: "Durable request queue unavailable"
                 ))
             }
-            return .success(.object(["queued": .bool(true)]))
+            return .success(Self.queuedResponse)
         }
 
         do {
@@ -128,6 +147,23 @@ extension NativeBridge {
         /// the request and guarantees eventual delivery (retries across
         /// network outages and app launches) rather than awaiting it inline.
         let shouldRetry: Bool
+    }
+
+    /// The ack for a `shouldRetry` request, sent once it's stored.
+    static let queuedResponse: AnyJSONValue = .object(["queued": .bool(true)])
+
+    /// What the page gets for analytics the SDK doesn't send because the
+    /// user opted out, so it carries on as normal. A `shouldRetry` one (all
+    /// of today's page's) gets the ack a queued one gets. An inline one gets
+    /// the track endpoint's success — a 200 with an empty body, its output
+    /// being void — but no headers, where a real reply carries the server's.
+    /// The page reads neither (revflow frontend/in-app
+    /// utilities/track-events.ts).
+    static func optedOutAnalyticsResponse(shouldRetry: Bool) -> AnyJSONValue {
+        guard !shouldRetry else { return queuedResponse }
+        return .object(toJSON(encodeAPIResponse(
+            APIClient.ProxyResponse(status: 200, headers: [:], body: Data())
+        )))
     }
 
     /// HTTP methods the bundle may proxy. Conservative allowlist — anything

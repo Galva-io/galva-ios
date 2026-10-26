@@ -12,6 +12,7 @@ import XCTest
 enum E2EScenarioArg: String {
     case showInAppMessage
     case showInAppMessageUIKit
+    case showInAppMessageSwiftUISheet
     case showInAppMessageTwice
     case deepLinkTarget
     case deepLinkRace

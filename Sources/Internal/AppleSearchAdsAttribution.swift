@@ -44,9 +44,8 @@ enum AppleSearchAdsAttribution {
     static let notFoundRetryDelayNanos: UInt64 = 5_000_000_000
 
     /// The install's attribution token, or `nil` when AdServices is
-    /// unavailable (older OS, simulator, non-Apple platform) or the framework
-    /// can't currently produce one — in which case resolution is retried on a
-    /// later launch.
+    /// unavailable (older OS, simulator) or the framework can't currently
+    /// produce one — in which case resolution is retried on a later launch.
     static func currentToken() -> String? {
         #if canImport(AdServices)
         if #available(iOS 14.3, macOS 11.1, tvOS 14.3, *) {

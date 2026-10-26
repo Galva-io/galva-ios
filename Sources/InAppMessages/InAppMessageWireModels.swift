@@ -5,6 +5,7 @@
 //  INTERNAL wire-format models for:
 //      • GET  /identities/communications?channelType=in-app   (list)
 //      • POST /identities/communications/{id}/resolve         (resolve)
+//      • POST /communications/track, as the page sends it     (read only)
 //
 //  Integrators don't touch these — they interact with the public
 //  `InAppMessages.Message` envelope. Splitting the wire surface from the
@@ -17,39 +18,52 @@ import Foundation
 // MARK: - List response
 
 /// `GET /identities/communications` payload. We always pass
-/// `channelType=in-app` from the SDK, so every item's `type` is one of the
-/// in-app variants (currently `trial-rescue-in-app`).
+/// `channelType=in-app` from the SDK, so the list holds in-app communications
+/// only.
 struct CommunicationListResponse: Sendable, Codable, Hashable {
-    let success: Bool
     let data: [CommunicationItem]
-    let meta: Meta
-
-    struct Meta: Sendable, Codable, Hashable {
-        let nextCursor: String?
-    }
 }
 
 /// One row in the communication list. Drives the public `InAppMessages.Message`.
 struct CommunicationItem: Sendable, Codable, Hashable {
     let id: UUID
-//    let type: CommunicationType
-    let workflowType: WorkflowType?
+    /// Workflow the communication came from, as the server's raw value
+    /// (`"trial-rescue"`, …). Nullable on the wire — the server returns null
+    /// for broadcast / manual sends.
+    ///
+    /// Deliberately a plain string, not a closed enum: the server adds
+    /// workflow types over time, and an enum would fail to decode an unknown
+    /// value — taking the whole communication list down with it. The public
+    /// `InAppMessages.WorkflowType` wraps whatever arrives.
+    let workflowType: String?
     let createdAt: Date
+}
 
-    /// Workflow the communication came from. Nullable on the wire — the
-    /// server returns null for broadcast / manual sends.
-    enum WorkflowType: String, Sendable, Codable, Hashable {
-        case cancellationRecovery    = "cancellation-recovery"
-        case winback = "winback"
-        /// Failed-payment recovery.
-        case paymentRecovery = "payment-recovery"
-        /// Trial-to-paid conversion rescue.
-        case trialRescue     = "trial-rescue"
+// MARK: - Page track request
+
+/// The fields the SDK reads from the body of a `POST /communications/track`
+/// the hosted page sends through `apiFetch` (revflow frontend/in-app
+/// utilities/track-events.ts): `{ communicationId, event, …, timestamp }`.
+/// The opt-out gate keys on `event`. Never re-encoded — the request goes out
+/// with the page's own bytes.
+struct CommunicationTrackBody: Sendable, Decodable, Hashable {
+    let communicationId: String?
+    let event: String?
+
+    /// `nil` when `body` is absent or not a JSON object.
+    init?(_ body: Data?) {
+        guard let body, let decoded = try? JSONDecoder().decode(Self.self, from: body) else {
+            return nil
+        }
+        self = decoded
     }
 
-    // The server returns workflowType as anyOf [enum, null]. Default Codable
-    // already accepts both because the field is optional in the Swift type;
-    // no custom decoder needed.
+    /// The communication this event tells Galva's server went on screen, if
+    /// it's one of `SDKConstants.communicationPresentedEvents`.
+    var presentedCommunicationId: String? {
+        guard let event, SDKConstants.communicationPresentedEvents.contains(event) else { return nil }
+        return communicationId
+    }
 }
 
 // MARK: - Resolve request
@@ -57,8 +71,8 @@ struct CommunicationItem: Sendable, Codable, Hashable {
 /// `POST /identities/communications/{id}/resolve` request body.
 ///
 /// The wire schema is `anyOf [ios, android, web]` — each platform gets a
-/// slightly different optional `billingContext` block. Since this SDK
-/// always sends `devicePlatform: .ios`, we model the iOS shape directly:
+/// slightly different optional `billingContext` block. This SDK only sends
+/// the iOS variant (`devicePlatform: "ios"`), so we model that shape alone:
 /// `billingContext.territory` is the App Store storefront country code
 /// (e.g. `"USA"`, `"GBR"`, `"JPN"`), read from `StoreKit.Storefront.current`
 /// at resolve time. Sent so the server can render storefront-aware copy
@@ -82,7 +96,7 @@ struct ResolveRequest: Sendable, Codable, Hashable {
     }
 
     enum DevicePlatform: String, Sendable, Codable, Hashable {
-        case ios, android, web
+        case ios
     }
 }
 
@@ -93,18 +107,12 @@ struct ResolveRequest: Sendable, Codable, Hashable {
 /// signature stale, etc.) in which case `data.valid == false` and there
 /// is no payload to render.
 struct ResolveResponse: Sendable, Codable, Hashable {
-    let meta: Meta?
     let data: ResolvedCommunication
-
-    struct Meta: Sendable, Codable, Hashable {
-        let requestId: String?
-        let timestamp: Date?
-    }
 }
 
-/// Tagged union of the two outcomes the resolve endpoint returns. Custom
-/// `Codable` lets the server expand `payload` over time without rebuilding
-/// the SDK (we just stash anything we don't recognize as `.unknown`).
+/// Tagged union of the two outcomes the resolve endpoint returns. `valid:
+/// false` decodes as `.invalid`; otherwise `payload` is kept as opaque JSON,
+/// so the server can expand it over time without rebuilding the SDK.
 enum ResolvedCommunication: Sendable, Codable, Hashable {
     case valid(Valid)
     case invalid
@@ -147,16 +155,11 @@ enum ResolvedCommunication: Sendable, Codable, Hashable {
 
 /// Resolved communication payload. Stored as opaque JSON because the bundle
 /// owns rendering and consumes the payload through `galva.getMessageData()`
-/// as a plain object — the SDK never needs to introspect fields. The
-/// `decodedOffer` accessor lets native code lazily peek at offer-specific
-/// fields when wiring StoreKit, without forcing every payload through a
-/// typed decoder.
+/// as a plain object — the SDK never needs to introspect fields.
 struct Payload: Sendable, Codable, Hashable {
     /// Raw JSON object exactly as the server returned it. Becomes the
     /// return value of `galva.getMessageData()` on the bridge.
     let json: [String: AnyJSONValue]
-
-    init(_ json: [String: AnyJSONValue]) { self.json = json }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -167,85 +170,10 @@ struct Payload: Sendable, Codable, Hashable {
         var c = encoder.singleValueContainer()
         try c.encode(json)
     }
-
-    /// Best-effort typed view of an offer payload. Returns `nil` for surveys,
-    /// custom pages, or any payload that doesn't carry the offer required
-    /// fields (`plan`, `signature`, `billingPlatforms`).
-    var decodedOffer: Offer? {
-        let encoder = JSONEncoder()
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let c = try decoder.singleValueContainer()
-            let s = try c.decode(String.self)
-            if let d = ISO8601DateFormatter.galva.date(from: s) { return d }
-            let fallback = ISO8601DateFormatter()
-            fallback.formatOptions = [.withInternetDateTime]
-            if let d = fallback.date(from: s) { return d }
-            throw DecodingError.dataCorruptedError(
-                in: c, debugDescription: "Invalid ISO 8601 date: \(s)"
-            )
-        }
-        guard
-            let data = try? encoder.encode(json),
-            let offer = try? decoder.decode(Offer.self, from: data)
-        else {
-            return nil
-        }
-        return offer
-    }
 }
 
-// MARK: Offer
-
-struct Offer: Sendable, Codable, Hashable {
-    let appId: UUID
-    let communicationId: UUID
-    let endUserId: String
-    let identityId: UUID
-    let app: App
-    let plan: Plan
-    let amount: Double?
-    let expiresAt: Date
-    let title: String
-    let subtitle: String?
-    let benefits: [String]?
-    let price: Price?
-    let inAppDeepLink: String?
-    let billingPlatforms: [BillingPlatform]
-    /// HMAC-signed token. Bundle echoes it back when accepting the offer so
-    /// the server can verify the render → purchase chain.
-    let signature: String
-
-    struct App: Sendable, Codable, Hashable {
-        let name: String
-        let logoUrl: String
-    }
-
-    struct Plan: Sendable, Codable, Hashable {
-        let id: String
-        let versionId: String
-        let name: String
-    }
-
-    struct Price: Sendable, Codable, Hashable {
-        let initPrice: Double
-        let offerPrice: Double
-        let currencyCode: String
-    }
-
-    struct BillingPlatform: Sendable, Codable, Hashable {
-        let platform: Platform
-        let platformConfigId: String
-        let price: Price?
-
-        enum Platform: String, Sendable, Codable, Hashable {
-            case appstore, playstore, paddle
-        }
-    }
-}
-
-// Survey and CustomPage payloads carry the same identity envelope as Offer
-// without the offer-specific fields. The bundle owns rendering; the SDK
-// only forwards JSON through `getMessageData()`. We deliberately do NOT
-// model them as typed Swift structs — that would duplicate fields and
-// invite drift the moment the server adds a new survey question type.
+// Offer, Survey and CustomPage payloads are deliberately NOT modeled as
+// typed Swift structs. The bundle owns rendering; the SDK only forwards
+// JSON through `getMessageData()`. Typed models would duplicate fields and
+// invite drift the moment the server adds a new field or survey question
+// type.

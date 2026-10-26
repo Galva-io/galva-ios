@@ -39,18 +39,10 @@ struct InitializeRequest: Sendable, Codable, Hashable {
     let bridgeProtocolVersion: String
 }
 
-// MARK: - Response envelope (meta + data)
+// MARK: - Response envelope
 
 struct InitializeResponse: Sendable, Codable, Hashable {
-    let meta: Meta?
     let data: InitializationData
-
-    struct Meta: Sendable, Codable, Hashable {
-        let requestId: String?
-        let timestamp: Date?
-        let total: Double?
-        let nextCursor: String?
-    }
 }
 
 // MARK: - Initialization data (the iOS-relevant slice)

@@ -14,9 +14,9 @@
 //
 
 @globalActor
-public actor GalvaActor {
+actor GalvaActor {
     /// The single GalvaActor instance. Not for direct use — annotate types
     /// with `@GalvaActor` instead.
-    public static let shared = GalvaActor()
+    static let shared = GalvaActor()
     private init() {}
 }

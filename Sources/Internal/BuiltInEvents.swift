@@ -20,9 +20,10 @@
 
 import Foundation
 
-/// `session_start` — auto-emitted by `SessionTracker` on cold start and at the
-/// start of each new session window. All properties are predictable, so they're
-/// required, typed init parameters; `attributes` maps them to the `$gv`-free
+/// `session_start` — auto-emitted by `SessionTracker` on the first launch, then
+/// whenever 30+ minutes have passed since the last one (the window is persisted
+/// across launches). All properties are predictable, so they're required,
+/// typed init parameters; `attributes` maps them to the `$gv`-free
 /// wire keys the backend expects. Built by `ContextProvider.sessionStartEvent()`
 /// from the same values that feed each message's `context` envelope.
 struct SessionStartEvent: AppEvents.Event {

@@ -9,8 +9,8 @@
 //  ━━━━━━━━━━━━
 //  • RecordingConsumer is a real Swift actor — every mutation is serialised
 //    by the actor runtime, no semaphores, no @unchecked Sendable.
-//  • Tests synchronise on `XCTestExpectation` (idiomatic XCTest) rather
-//    than the consumer signalling a semaphore.
+//  • Tests synchronise by polling with `eventually` / `waitForMessages`
+//    rather than the consumer signalling a semaphore.
 //  • Test messages are random UUIDv7 (just like production). Tests must
 //    NEVER assert on `messageId`; they tag each message with an `event`
 //    name and assert on that. This keeps the factory honest and the
@@ -76,7 +76,7 @@ actor RecordingConsumer: MessageConsumer {
     /// `event` field of every consumed track message, in order.
     var consumedEvents: [String] { allMessages.compactMap(\.event) }
 
-    /// Number of batches with size matching `predicate`.
+    /// Size of each batch, in order.
     func batchSizes() -> [Int] { batches.map(\.count) }
 
     func reset() {
@@ -141,7 +141,7 @@ extension Message {
             endUserId: userId,
             timestamp: Date(),
             context: nil,
-            body: .track(event: event, properties: properties, sourceType: nil, sourceId: nil)
+            body: .track(event: event, properties: properties)
         )
     }
 
@@ -167,6 +167,12 @@ extension Message {
             makeTrack(event: "\(prefix)-\(String(format: "%03d", idx))")
         }
     }
+
+    /// The event name of a `.track` body, or `nil` — the assertion key.
+    var event: String? {
+        if case .track(let event, _) = body { return event }
+        return nil
+    }
 }
 
 // MARK: - Storage factories
@@ -175,7 +181,7 @@ enum TestStorage {
     /// Spin up a SQLite store backed by a unique file under the OS temp dir.
     /// Caller is responsible for releasing the storage and deleting the file
     /// — `TempSQLiteHandle` does both on `cleanup()`.
-    static func sqlite(file: StaticString = #filePath) throws -> TempSQLiteHandle {
+    static func sqlite() throws -> TempSQLiteHandle {
         let path = NSTemporaryDirectory()
             .appending("galva-test-\(UUID().uuidString).db")
         let storage = try SQLiteMessageStorage(dbPath: path)

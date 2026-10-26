@@ -2,12 +2,15 @@
 //  ContextProviderTests.swift
 //  GalvaTests
 //
-//  Covers `ContextProvider.sessionProperties()` — the property bag attached
-//  to the auto-tracked `session_start` event. The point of routing these
-//  through `ContextProvider` (rather than re-reading `ProcessInfo` /
+//  Covers `ContextProvider.sessionStartEvent()` — the typed `session_start`
+//  event (`SessionStartEvent`) the SDK auto-tracks. The point of routing its
+//  values through `ContextProvider` (rather than re-reading `ProcessInfo` /
 //  `Bundle` / `Locale` independently) is consistency: a session_start's
 //  custom properties must agree with the `context` envelope on its own
 //  message. These tests pin that contract.
+//
+//  Also pins what the `context` envelope leaves out: the user-assigned
+//  device name.
 //
 
 import Foundation
@@ -54,5 +57,19 @@ final class ContextProviderTests: XCTestCase {
         // With no captured snapshot, os_version falls back to "" rather than
         // dropping the field — keeps the event shape stable.
         XCTAssertEqual(ContextProvider().sessionStartEvent().osVersion, "")
+    }
+
+    // MARK: - Device name
+
+    @MainActor
+    func test_context_neverCarriesTheDeviceName() throws {
+        // The device name is one the user picks ("Ravi's iPhone" on iOS 15,
+        // the computer name on macOS) and the server has no use for it, so
+        // a context built from a real capture has no `device.name`.
+        let context = ContextProvider(snapshot: DeviceSnapshot.capture()).currentContext()
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(context))
+        let device = try XCTUnwrap((json as? [String: Any])?["device"] as? [String: Any])
+        XCTAssertNil(device["name"])
+        XCTAssertNotNil(device["model"], "the rest of the device context still goes")
     }
 }

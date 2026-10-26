@@ -43,9 +43,11 @@ targets: [
 
 </details>
 
-### 3. Configure Galva and show in-app messages
+### 3. Configure Galva
 
-In SwiftUI, add two modifiers to your root view:
+Call `Galva.configure` once at launch. From then on, Galva presents its in-app messages on its own, as a sheet on your app's active window.
+
+In SwiftUI, configure Galva in your `App` initializer, and forward Galva links from your root view:
 
 ```swift
 import SwiftUI
@@ -53,11 +55,14 @@ import Galva
 
 @main
 struct MyApp: App {
+    init() {
+        Galva.configure(apiKey: "pk_your_app_id")
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .galvaConfigure(apiKey: "pk_your_app_id")  // configures Galva and opens Galva links
-                .autoDisplayInAppMessages()                // presents Galva's in-app messages
+                .onOpenURL { url in Galva.handleOpenURL(url) }  // opens Galva links
         }
     }
 }
@@ -78,23 +83,15 @@ func application(
 }
 ```
 
-Forward Galva links and present in-app messages from your scene delegate:
+Forward Galva links from your scene delegate:
 
 ```swift
-private var messageTask: Task<Void, Never>?
-
 func scene(
     _ scene: UIScene,
     willConnectTo session: UISceneSession,
     options connectionOptions: UIScene.ConnectionOptions
 ) {
     Galva.scene(scene, willConnectTo: session, options: connectionOptions)
-    messageTask = Task { @MainActor in
-        for await message in InAppMessages.messages {
-            guard let windowScene = scene as? UIWindowScene else { continue }
-            try? await message.show(in: windowScene)
-        }
-    }
 }
 
 func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
@@ -102,11 +99,11 @@ func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>)
 }
 ```
 
-Apps without scenes forward links with `Galva.application(_:didFinishLaunchingWithOptions:)` and `Galva.application(_:open:options:)`. See [Handle deep links](https://docs.galva.io/sdks/ios/deep-links).
+Apps without scenes forward links from `application(_:open:options:)` with `Galva.application(_:open:options:)`. UIKit calls that method for the launch URL too. See [Handle deep links](https://docs.galva.io/sdks/ios/deep-links).
 
 </details>
 
-Replace `pk_your_app_id` with your App ID. While you integrate, add `logLevel: .debug` to see everything the SDK does.
+Replace `pk_your_app_id` with your App ID. While you integrate, add `logLevel: .debug` to see everything the SDK does. To decide yourself when messages appear, see [Present messages yourself](#present-messages-yourself).
 
 ### 4. Identify subscribers
 
@@ -121,6 +118,8 @@ AppUser.logOut()
 ```
 
 Using RevenueCat? Skip this step and add the [RevenueCat integration](#using-revenuecat) instead.
+
+If your app has its own type named `AppUser`, `AppEvents` or `InAppMessages`, write `Galva.AppUser`, `Galva.AppEvents` or `Galva.InAppMessages` to reach the SDK's.
 
 ### 5. Register your URL scheme
 
@@ -171,6 +170,8 @@ subsystem:co.galva.sdk
 
 You should see `SDK configured`, `endUserId changed from=<anonymous> to=user_42` and `uploaded batch`. In Galva, your client under **Client SDKs** now shows a **Last seen** time.
 
+To follow one area, add a category to the filter: `category:inAppMessages` for in-app messages (fetching, presenting, the page's calls into your app) or `category:purchases` for offers bought from messages, StoreKit prices and transaction reconciliation.
+
 ---
 
 ## Push notifications
@@ -182,11 +183,49 @@ func application(
     _ application: UIApplication,
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
 ) {
-    Galva.applicationDidRegisterForRemoteNotificationsWithDeviceToken(deviceToken)
+    Galva.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
 }
 ```
 
 Asking for permission and registering for remote notifications stay in your app; Galva never prompts. To report taps on Galva notifications, see [Send push tokens](https://docs.galva.io/sdks/ios/push).
+
+## Present messages yourself
+
+By default Galva presents each in-app message as soon as it's ready. To decide when and where messages appear, for example only after onboarding, configure `.manual`. Galva then doesn't present the messages it fetches; your app reads them from `InAppMessages.messages` and presents them. A Galva link the user opens, such as "Continue in App" in an email, still presents its message right away, because the user asked for it.
+
+```swift
+Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual)
+```
+
+In SwiftUI, read the stream into state and present it with `.inAppMessageSheet`:
+
+```swift
+struct RootView: View {
+    @State private var message: InAppMessages.Message?
+
+    var body: some View {
+        ContentView()
+            .task {
+                for await incoming in InAppMessages.messages {
+                    message = incoming
+                }
+            }
+            .inAppMessageSheet($message)
+    }
+}
+```
+
+In UIKit, read the stream and call `show()`, which presents on your app's active window:
+
+```swift
+Task { @MainActor in
+    for await message in InAppMessages.messages {
+        try? await message.show()
+    }
+}
+```
+
+To filter, check `message.workflowType`, the recovery flow that sent the message. To wait, keep the message and present it later. A message that arrives before your loop starts is held and handed to it when it does, so starting the loop a moment after launch is fine. Present each message in one place.
 
 ## Using RevenueCat
 
@@ -235,9 +274,59 @@ You can also buy through your own purchase API instead of `purchaseWithStoreKit(
 ## How the SDK behaves
 
 - **It never blocks your app.** Every call returns immediately and does its work on a background actor.
-- **Calls aren't lost.** They're saved to disk before upload and retried with backoff, so they survive crashes, app kills and offline periods.
+- **Calls aren't lost.** Calls you make right after `configure`, while it's still starting, wait for it and run in order. Everything is saved to disk before upload and retried with backoff, so it survives crashes, app kills and offline periods.
 - **It stays out of your way.** No method swizzling, no IDFA or tracking prompt, and no network call before `configure`.
-- **Subscribers can opt out.** `Galva.setOptOut(true)` stops tracking; in-app messages keep working. See [Privacy and App Review](https://docs.galva.io/sdks/ios/privacy).
+- **It declares its data use.** The package ships a privacy manifest. See [Privacy](#privacy).
+
+## Privacy
+
+The package ships a privacy manifest (`PrivacyInfo.xcprivacy`) in its resource bundle. Xcode's privacy report for your app includes it, so you don't copy Galva's entries into your app's own manifest.
+
+**Required-reason APIs.** The manifest declares the two the SDK uses:
+
+- `UserDefaults` (CA92.1), for the SDK's own `co.galva.*` settings.
+- System boot time (35F9.1): `ProcessInfo.systemUptime`, only to time out showing or dismissing an in-app message. It never leaves the device.
+
+**Collected data.** Galva doesn't track: nothing it collects goes to ad networks or data brokers, so it needs no tracking prompt. The manifest declares every type the SDK can collect:
+
+| Data type | Collected | Linked to the user | Purposes |
+|---|---|---|---|
+| Email address | If you set `.email` | Yes | Developer's advertising, app functionality |
+| Name | If you set `.fullName`, `.firstName` or `.lastName` | Yes | Developer's advertising, app functionality |
+| User ID | When you identify a subscriber | Yes | Developer's advertising, analytics, app functionality |
+| Device ID | Always: the IDFV and Galva's anonymous ID, plus the push token if you forward it | Yes | Developer's advertising, analytics, app functionality |
+| Purchase history | Always | Yes | Developer's advertising, analytics, app functionality |
+| Product interaction | Always, including the reason a subscriber picks in an exit survey | Yes | Developer's advertising, analytics, app functionality |
+| Advertising data | If the install came from Apple Search Ads and `.appleSearchAds` is on (the default). Once found, it's sent with the subscriber's attributes even if you turn `.appleSearchAds` off later. | Yes | Developer's advertising, analytics |
+| Coarse location | Always: the country, from the IP address and the App Store storefront | Yes | Developer's advertising, analytics, app functionality |
+| Other user content | If a survey in a message asks a free-text follow-up question | Yes | Analytics |
+| Other diagnostic data | When a message shows: its page's error logs, which carry no user or device ID | No | App functionality |
+
+[GalvaRevenueCat](#using-revenuecat) ships its own manifest, which declares only `UserDefaults`. The RevenueCat app user IDs and entitlements it passes to Galva are the user ID and purchase history above.
+
+**What's still yours to do:**
+
+- Fill in your App Privacy answers in App Store Connect. Xcode's privacy report is only a reference: it lists every type above, so use the "Collected" column to leave out what your app never sends, such as email if you never set it.
+- Classify what you send in custom attributes, event properties and the user ID, such as a phone number or health data. Galva's manifest doesn't cover it.
+- Declare your own app's required-reason APIs in your app's manifest.
+- Never list Galva's domains in `NSPrivacyTrackingDomains`: iOS would block Galva's requests for users who don't allow tracking. Whether your app needs the tracking prompt for other reasons is your call.
+
+**Opting out.** `Galva.setOptOut(true)` stops the SDK's analytics and attribution but keeps in-app messages working. While a subscriber is opted out:
+
+- `AppEvents.track`, `AppUser.identify`, `AppUser.set` and push token registration are dropped, and `session_start`, Apple Search Ads attribution and purchase matching (the transaction sweep and `Galva.reconcileTransactions()`) don't run.
+- The in-app message page's analytics (views, dismissals and failed offer purchases) aren't sent. Galva then can't tell a message was shown, so the SDK remembers it on the device and doesn't show it again.
+- Events and page analytics still waiting on the device when the subscriber opts out are deleted, so opting back in doesn't send them.
+
+These still go to Galva, so messages can be shown and used:
+
+- The check for messages each time the app becomes active, and on `InAppMessages.checkForMessages()`, with Galva's anonymous ID and the last identified user ID.
+- When a message shows, the same IDs, the platform and the App Store storefront country. The page download and the SDK's setup request carry no IDs.
+- What the subscriber does in a message: survey answers, including free-text follow-ups, accepting an offer, and completing its purchase. The completed purchase carries its transaction ID, which Galva needs to apply the offer and end the flow.
+- The app account token on offer purchases Galva makes, which links the purchase to the subscriber in App Store Server Notifications.
+- The message page's diagnostic logs, which carry no user or device ID.
+- The IP address of every request, which Galva uses only to find the country.
+
+Opting out doesn't change your App Privacy answers. See [Privacy and App Review](https://docs.galva.io/sdks/ios/privacy).
 
 ## Documentation
 

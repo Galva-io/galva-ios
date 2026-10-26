@@ -10,7 +10,7 @@
 //
 //  Separate from `Uploader` because:
 //      • The batch uploader is a single-purpose actor optimized for the hot
-//        identify/track/alias path. Pulling RPC calls into it would muddy
+//        identify/track path. Pulling RPC calls into it would muddy
 //        the contract and complicate retry semantics.
 //      • RPC calls have caller-visible Codable responses; the batch endpoint
 //        only cares about the HTTP outcome.
@@ -70,21 +70,19 @@ actor APIClient {
     /// Issue a JSON-bodied POST to `path`, decoding the response as `Response`.
     func post<Body: Encodable, Response: Decodable>(
         path: String,
-        body: Body,
-        responseType: Response.Type = Response.self
+        body: Body
     ) async throws -> Response {
         let url = baseURL.appendingPathComponent(path)
         var req = makeRequest(url: url, method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try encoder.encode(body)
-        return try await perform(req, responseType: Response.self)
+        return try await perform(req)
     }
 
     /// Issue a GET with optional query items, decoding the response as `Response`.
     func get<Response: Decodable>(
         path: String,
-        query: [URLQueryItem] = [],
-        responseType: Response.Type = Response.self
+        query: [URLQueryItem] = []
     ) async throws -> Response {
         var comps = URLComponents(
             url: baseURL.appendingPathComponent(path),
@@ -93,7 +91,7 @@ actor APIClient {
         if !query.isEmpty { comps?.queryItems = query }
         guard let url = comps?.url else { throw APIError.malformedURL(path) }
         let req = makeRequest(url: url, method: "GET")
-        return try await perform(req, responseType: Response.self)
+        return try await perform(req)
     }
 
     /// Download the raw bytes at `url` (no auth headers, no base URL). Used
@@ -107,13 +105,13 @@ actor APIClient {
                 throw APIError.invalidResponse
             }
             guard (200..<300).contains(http.statusCode) else {
-                throw APIError.http(status: http.statusCode, body: data)
+                throw APIError.http(status: http.statusCode)
             }
             return data
         } catch let error as APIError {
             throw error
         } catch {
-            throw APIError.transport(error)
+            throw APIError.transport(Self.withoutFailingURL(error))
         }
     }
 
@@ -166,7 +164,7 @@ actor APIClient {
         req.setValue(SDKIdentity.header, forHTTPHeaderField: "x-sdk-version")
         req.httpBody = body
 
-        logger.debug(.uploader, "proxy \(method)", metadata: ["url": url.absoluteString])
+        logger.debug(.uploader, "proxy \(method)", metadata: ["path": url.loggablePath])
         do {
             let (data, response) = try await session.data(for: req)
             guard let http = response as? HTTPURLResponse else {
@@ -184,13 +182,13 @@ actor APIClient {
             // throwing, so the SDK trace is the only place to see the status.
             logger.debug(.uploader, "proxy result", metadata: [
                 "status": String(http.statusCode),
-                "url": url.absoluteString,
+                "path": url.loggablePath,
             ])
             return ProxyResponse(status: http.statusCode, headers: headers, body: data)
         } catch let error as APIError {
             throw error
         } catch {
-            throw APIError.transport(error)
+            throw APIError.transport(Self.withoutFailingURL(error))
         }
     }
 
@@ -232,12 +230,9 @@ actor APIClient {
         return req
     }
 
-    private func perform<Response: Decodable>(
-        _ req: URLRequest,
-        responseType: Response.Type
-    ) async throws -> Response {
+    private func perform<Response: Decodable>(_ req: URLRequest) async throws -> Response {
         logger.debug(.uploader, "rpc \(req.httpMethod ?? "?")", metadata: [
-            "url": req.url?.absoluteString ?? "<nil>",
+            "path": req.url?.loggablePath ?? "<nil>",
         ])
         do {
             let (data, response) = try await session.data(for: req)
@@ -247,16 +242,16 @@ actor APIClient {
             guard (200..<300).contains(http.statusCode) else {
                 logger.warning(.uploader, "rpc non-2xx", metadata: [
                     "status": String(http.statusCode),
-                    "url": req.url?.absoluteString ?? "<nil>",
+                    "path": req.url?.loggablePath ?? "<nil>",
                 ])
-                throw APIError.http(status: http.statusCode, body: data)
+                throw APIError.http(status: http.statusCode)
             }
             // Symmetric "request OK" log so the request/response pair is
             // visible end-to-end at .debug — the start log alone leaves a
             // dangling trace if you're checking whether a response ever came.
             logger.debug(.uploader, "rpc OK", metadata: [
                 "status": String(http.statusCode),
-                "url": req.url?.absoluteString ?? "<nil>",
+                "path": req.url?.loggablePath ?? "<nil>",
             ])
             do {
                 return try decoder.decode(Response.self, from: data)
@@ -266,8 +261,33 @@ actor APIClient {
         } catch let error as APIError {
             throw error
         } catch {
-            throw APIError.transport(error)
+            throw APIError.transport(Self.withoutFailingURL(error))
         }
+    }
+}
+
+// MARK: - Transport errors
+
+extension APIClient {
+    /// A URLSession failure without the request URL URLSession puts in its
+    /// user info (and its underlying error's) — query and all, so the in-app
+    /// poll's endUserId and anonymousId. Callers log `APIError.transport`
+    /// and the bridge hands its description to the page. Code and
+    /// description stay; errors from outside URLSession pass through.
+    private static func withoutFailingURL(_ error: any Error) -> any Error {
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain else { return error }
+        return removingFailingURL(from: nsError)
+    }
+
+    private static func removingFailingURL(from error: NSError) -> NSError {
+        var userInfo = error.userInfo
+        userInfo[NSURLErrorFailingURLErrorKey] = nil
+        userInfo[NSURLErrorFailingURLStringErrorKey] = nil
+        if let underlying = userInfo[NSUnderlyingErrorKey] as? NSError {
+            userInfo[NSUnderlyingErrorKey] = removingFailingURL(from: underlying)
+        }
+        return NSError(domain: error.domain, code: error.code, userInfo: userInfo)
     }
 }
 
@@ -276,22 +296,22 @@ actor APIClient {
 enum APIError: Error, @unchecked Sendable {
     case malformedURL(String)
     case invalidResponse
-    case http(status: Int, body: Data)
+    case http(status: Int)
     case transport(Error)
     case decoding(Error)
 }
 
 extension APIError {
-    /// True for errors where a future retry might succeed. Used by callers
-    /// that want to bias toward fresh data — initialization, for instance,
-    /// retains the disk cache only on retryable failures.
+    /// True for errors where a future retry might succeed. Callers use it to
+    /// decide whether to retry and how loudly to log — initialization, for
+    /// instance, keeps its disk cache on any failure and only logs this flag.
     var isRetryable: Bool {
         switch self {
         case .malformedURL, .decoding:
             return false
         case .invalidResponse, .transport:
             return true
-        case .http(let status, _):
+        case .http(let status):
             // 408/429/5xx → transient. 4xx → bad request / auth → permanent.
             return status == 408 || status == 429 || (500..<600).contains(status)
         }

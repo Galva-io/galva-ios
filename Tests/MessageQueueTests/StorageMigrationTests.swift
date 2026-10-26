@@ -175,12 +175,6 @@ final class StorageMigrationTests: XCTestCase {
                        "Quarantine table must be bounded — got \(quarantined)")
     }
 
-    func test_inMemoryStorage_reportsZeroQuarantine() async throws {
-        let storage = InMemoryMessageStorage()
-        let count = try await storage.quarantineCount()
-        XCTAssertEqual(count, 0, "InMemory storage has no quarantine")
-    }
-
     // MARK: - Raw-SQLite helpers
     //
     // We use the same SQLite3 module the SDK uses to set up test

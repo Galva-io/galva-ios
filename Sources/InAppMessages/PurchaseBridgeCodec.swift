@@ -18,7 +18,6 @@
 //
 
 import Foundation
-#if canImport(StoreKit)
 import StoreKit
 
 enum PurchaseBridgeCodec {
@@ -38,12 +37,16 @@ enum PurchaseBridgeCodec {
             let result = try await controller.purchase(request)
             return .success(.object(encode(StoreKitPurchaser.Outcome(result))))
         } catch let error as Galva.PurchaseError {
-            logger.info(.identity, "purchase controller failed", metadata: [
+            logger.info(.purchases, "purchase controller failed", metadata: [
                 "productId": request.productId,
             ], error: error)
             return .failure(bridgeError(for: error))
+        } catch StoreKitError.userCancelled {
+            // A controller that drives StoreKit itself and lets its thrown
+            // cancel (Apple ID sign-in dismissed) escape.
+            return .success(.object(encode(.cancelled)))
         } catch {
-            logger.warning(.identity, "purchase controller threw a non-Galva error", metadata: [
+            logger.warning(.purchases, "purchase controller threw a non-Galva error", metadata: [
                 "productId": request.productId,
             ], error: error)
             return .failure(BridgeError(code: .purchaseFailed, message: String(describing: error)))
@@ -60,7 +63,7 @@ enum PurchaseBridgeCodec {
             return ["outcome": .string("pending")]
         case .cancelled:
             return ["outcome": .string("cancelled")]
-        case .completed(let verified, let transactionId, let originalId,
+        case .completed(let transactionId, let originalId,
                         let productId, let purchaseDate, let expirationDate,
                         let appAccountToken):
             var transaction: [String: AnyJSONValue] = [
@@ -68,7 +71,7 @@ enum PurchaseBridgeCodec {
                 "originalId":          .string(String(originalId)),
                 "productId":           .string(productId),
                 "purchaseDate":        .string(ISO8601DateFormatter.galva.string(from: purchaseDate)),
-                "verified":            .bool(verified),
+                "verified":            .bool(true),
             ]
             if let exp = expirationDate {
                 transaction["expirationDate"] = .string(ISO8601DateFormatter.galva.string(from: exp))
@@ -124,5 +127,3 @@ enum PurchaseBridgeCodec {
         }
     }
 }
-
-#endif // canImport(StoreKit)
