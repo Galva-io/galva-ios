@@ -111,11 +111,13 @@ final class InAppMessageStream {
     // MARK: - Subscriber bookkeeping
 
     private func register(_ subscriber: Subscriber) {
-        subscribers.append(subscriber)
         if let held = heldMessage {
+            // A subscriber that went away before its registration ran can't
+            // take the held message — keep it for the next one.
+            if case .terminated = subscriber.continuation.yield(held) { return }
             heldMessage = nil
-            subscriber.continuation.yield(held)
         }
+        subscribers.append(subscriber)
     }
 
     private func unregister(id: UUID) {

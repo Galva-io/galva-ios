@@ -45,6 +45,25 @@ final class SDKCoreOptOutTests: XCTestCase {
         XCTAssertFalse(SDKCore.shared.isOptedOut)
     }
 
+    func test_loadingAtConfigure_keepsAnOptOutAlreadySet() {
+        let suiteName = "co.galva.test.\(UUID().uuidString)"
+        guard let set = UserDefaults(suiteName: suiteName),
+              let loaded = UserDefaults(suiteName: suiteName + ".loaded") else {
+            return XCTFail("Failed to allocate UserDefaults suites")
+        }
+        defer {
+            set.removePersistentDomain(forName: suiteName)
+            loaded.removePersistentDomain(forName: suiteName + ".loaded")
+        }
+
+        // `Galva.setOptOut(true)` racing configure: configure reads the
+        // defaults before the opt-out's write lands there.
+        SDKCore.setOptedOutFlag(true, defaults: set)
+        SDKCore.loadOptedOutFlag(defaults: loaded)
+
+        XCTAssertTrue(SDKCore.shared.isOptedOut)
+    }
+
     // MARK: - Event gating
 
     func test_track_isNoOp_whenOptedOut() async {

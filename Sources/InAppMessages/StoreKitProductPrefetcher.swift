@@ -35,29 +35,40 @@ import StoreKit
 @GalvaActor
 final class StoreKitProductPrefetcher {
 
+    /// `Product.products(for:)`; injectable so tests can fail or count
+    /// fetches without the App Store.
+    typealias ProductLoader = @Sendable ([String]) async throws -> [Product]
+
     private let logger: any GalvaLogger
+    private let loadProducts: ProductLoader
 
     /// Last fetched product set, keyed by productId.
     private var byId: [String: Product] = [:]
 
     /// In-flight fetch task. Cancelled when a new prefetch comes in with
     /// a different productId set so we don't pile up duplicate StoreKit
-    /// calls during init-storms.
-    private var fetchTask: Task<Void, Never>?
+    /// calls during init-storms. Readable so tests can await it.
+    private(set) var fetchTask: Task<Void, Never>?
 
     /// Most recently requested productId set — short-circuits redundant
-    /// prefetch calls that arrive with an identical list.
+    /// prefetch calls that arrive with an identical list. Cleared when its
+    /// fetch fails, so a later prefetch retries.
     private var lastRequested: Set<String> = []
 
-    init(logger: any GalvaLogger) {
+    init(
+        logger: any GalvaLogger,
+        loadProducts: @escaping ProductLoader = { try await Product.products(for: $0) }
+    ) {
         self.logger = logger
+        self.loadProducts = loadProducts
     }
 
     // MARK: - Public lifecycle
 
     /// Kick off a background StoreKit fetch for `productIds`. No-op when
-    /// the id set hasn't changed. Errors are swallowed and logged — the
-    /// bundle handles the resulting empty / partial product map.
+    /// the same ids are in flight or already fetched. Errors are swallowed
+    /// and logged — the bundle handles the resulting empty / partial
+    /// product map.
     func prefetch(productIds: [String]) {
         let requested = Set(productIds)
         if requested.isEmpty {
@@ -79,7 +90,7 @@ final class StoreKitProductPrefetcher {
 
     private func performFetch(productIds: [String], logger: any GalvaLogger) async {
         do {
-            let fetched = try await Product.products(for: productIds)
+            let fetched = try await loadProducts(productIds)
             // Preserve the request order for stable diagnostics.
             var byId: [String: Product] = [:]
             for product in fetched { byId[product.id] = product }
@@ -91,6 +102,10 @@ final class StoreKitProductPrefetcher {
         } catch is CancellationError {
             // Superseded by a newer request — silent.
         } catch {
+            // Forget the ids so the next prefetch with them retries (an
+            // offline launch would otherwise leave the cache empty for the
+            // process) — unless a newer request already replaced them.
+            if lastRequested == Set(productIds) { lastRequested = [] }
             logger.warning(.configuration, "storekit prefetch failed", error: error)
         }
     }

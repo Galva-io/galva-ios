@@ -15,6 +15,14 @@
 
 import Foundation
 
+/// Points `SDKCore.shared` — and so every public entry point — at a test's
+/// own core: `SDKCoreTestBinding.$core.withValue(harness.core) { … }`.
+/// Calls made inside, and tasks they start, reach that core instead of the
+/// production singleton.
+enum SDKCoreTestBinding {
+    @TaskLocal static var core: SDKCore?
+}
+
 @GalvaActor
 extension SDKCore {
 
@@ -24,12 +32,18 @@ extension SDKCore {
     var isConfigured: Bool { configured }
 
     /// Wire up pre-built dependencies, skipping the production setup that
-    /// builds a real `Uploader` and a SQLite-backed `MessageQueue`. Mirrors
-    /// `configure(apiKey:autoTrack:logLevel:)` in every behaviour that
-    /// matters for integration testing:
-    ///   • marks the SDK as configured (idempotency holds)
+    /// builds a real `Uploader` and a SQLite-backed `MessageQueue`. Then
+    /// runs the same startup as `configure(apiKey:autoTrack:logLevel:)` —
+    /// `beginConfiguring()` and `finishConfiguring(queue:integrations:)`:
+    ///   • a repeat call is ignored; `submit`ted calls wait for it, then run
+    ///     in order
+    ///   • seeds an initial identify with device traits, then replays a
+    ///     deferred deep link
     ///   • starts the queue runloop
-    ///   • seeds an initial identify with device traits
+    ///
+    /// `midConfigure` runs where production suspends for the MainActor
+    /// snapshot — after the identity is set, before the queue and context
+    /// exist — so a test can hold configure there.
     ///
     /// Tests construct their own SDKCore instance (not `.shared`) so state
     /// doesn't leak between tests, and supply a queue backed by a recording
@@ -40,29 +54,27 @@ extension SDKCore {
         contextProvider: ContextProvider,
         logger: any GalvaLogger = OSLogLogger(),
         minLogLevel: Galva.LogLevel = .debug,
-        integrations: [Galva.Integration] = []
+        integrations: [Galva.Integration] = [],
+        midConfigure: (@Sendable () async -> Void)? = nil
     ) async {
-        guard !configured else {
-            logger.warning(.configuration, "configureForTesting called more than once — ignoring")
+        guard beginConfiguring() else {
+            self.logger.warning(.configuration, "configure called more than once — ignoring")
             return
         }
-        self.identity = identity
-        self.queue = queue
-        self.contextProvider = contextProvider
         // Mirror production: store the sink + level and rebuild the filter
         // through the same code path. Default `minLogLevel` is `.debug` so
         // tests see every breadcrumb out of the box. Later calls to
         // `installLogger(_:)` preserve the same filter level.
         installLogger(logger, minLevel: minLogLevel)
+        self.identity = identity
+        if let midConfigure { await midConfigure() }
+        self.queue = queue
+        self.contextProvider = contextProvider
         setCachedEndUserId(identity.endUserId)
         setCachedAppAccountToken(identity.purchaseAttributionToken)
-        await queue.startRunloop()
-        configured = true
         self.logger.info(.configuration, "SDK configured (testing)", metadata: [
             "anonymousId": identity.anonymousId,
         ])
-        // Seed identity with device traits, matching production behaviour.
-        await identify(userId: nil, appAccountToken: nil, traits: nil)
-        installIntegrations(integrations)
+        await finishConfiguring(queue: queue, integrations: integrations)
     }
 }

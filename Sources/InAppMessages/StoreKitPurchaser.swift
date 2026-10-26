@@ -28,7 +28,7 @@
 //  Outputs:
 //      • `Outcome.completed(Transaction)`  — verified + completed
 //      • `Outcome.pending`                 — Ask to Buy / SCA pending
-//      • `Outcome.cancelled`               — user dismissed the sheet
+//      • `Outcome.cancelled`               — user dismissed the sheet or sign-in
 //      • `Outcome.unverified(error)`       — App Store signature failed
 //      Or, thrown as `Failure`:
 //      • `productUnavailable`              — App Store doesn't sell it
@@ -140,8 +140,22 @@ struct StoreKitPurchaser {
                 }
         }
 
+        return try await Self.settle {
+            try await product.purchase(options: options)
+        }
+    }
+
+    /// Await StoreKit's purchase call, mapping what it throws onto
+    /// `Failure`. Static so the mapping is testable without a `Product`.
+    static func settle(
+        _ purchase: () async throws -> Product.PurchaseResult
+    ) async throws -> Product.PurchaseResult {
         do {
-            return try await product.purchase(options: options)
+            return try await purchase()
+        } catch StoreKitError.userCancelled {
+            // Thrown rather than returned when the user cancels the Apple ID
+            // sign-in StoreKit asks for. Still a cancel, not a failure.
+            return .userCancelled
         } catch let error as Product.PurchaseError {
             throw mapPurchaseError(error)
         } catch let error as StoreKitError {
@@ -165,7 +179,7 @@ struct StoreKitPurchaser {
         do {
             products = try await Product.products(for: [productId])
         } catch let error as StoreKitError {
-            throw mapStoreKitError(error)
+            throw Self.mapStoreKitError(error)
         } catch {
             throw Failure.underlying(error)
         }
@@ -240,7 +254,7 @@ struct StoreKitPurchaser {
 
     // MARK: - Error mapping
 
-    private func mapPurchaseError(_ error: Product.PurchaseError) -> Failure {
+    private static func mapPurchaseError(_ error: Product.PurchaseError) -> Failure {
         switch error {
         case .productUnavailable:
             return .productUnavailable
@@ -270,12 +284,11 @@ struct StoreKitPurchaser {
         }
     }
 
-    private func mapStoreKitError(_ error: StoreKitError) -> Failure {
+    private static func mapStoreKitError(_ error: StoreKitError) -> Failure {
         switch error {
         case .userCancelled:
-            // Treated as a flow outcome elsewhere; thrown here only if
-            // StoreKit raises it as an error (rare — usually returned as
-            // PurchaseResult.userCancelled). Surface as a no-op cancel.
+            // From the purchase itself `settle` returns it as
+            // `.userCancelled`; only a product lookup lands here.
             return .underlying(error)
         case .networkError(let underlying):
             return .networkError(underlying: underlying)

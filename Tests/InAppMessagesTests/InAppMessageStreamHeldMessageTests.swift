@@ -5,7 +5,8 @@
 //  A message published while nobody is subscribed is held — newest wins —
 //  and handed to the next subscriber, once. In `.manual` mode this is what
 //  lets an app's loop that starts a moment after launch still get the
-//  cold-start message.
+//  cold-start message. A subscriber that went away before registering
+//  doesn't take it.
 //
 
 import Foundation
@@ -22,6 +23,11 @@ final class InAppMessageStreamHeldMessageTests: XCTestCase {
     /// Let `makeStream()`'s main-actor registration hop run.
     private func settle() async {
         for _ in 0..<20 { await Task.yield() }
+    }
+
+    /// Wait without suspending, so the main actor can't run anything meanwhile.
+    private nonisolated static func block(on semaphore: DispatchSemaphore) {
+        _ = semaphore.wait(timeout: .now() + 5)
     }
 
     /// First message `stream` delivers, or `nil` if none arrives within
@@ -81,6 +87,28 @@ final class InAppMessageStreamHeldMessageTests: XCTestCase {
 
         XCTAssertNil(stream.heldMessage)
         let received = await firstMessage(of: live)
+        XCTAssertEqual(received?.id, "a")
+    }
+
+    func test_subscriberGoneBeforeRegistering_leavesTheHeldMessage() async {
+        let stream = InAppMessageStream()
+        stream.yield(message("a"))
+
+        // End a subscriber's iteration before its main-actor registration
+        // runs: the test keeps the main actor busy until the iteration is over.
+        let gone = stream.makeStream()
+        let ended = DispatchSemaphore(value: 0)
+        let iteration = Task.detached {
+            for await _ in gone {}
+            ended.signal()
+        }
+        iteration.cancel()
+        Self.block(on: ended)
+        await settle()
+
+        XCTAssertEqual(stream.heldMessage?.id, "a",
+                       "a subscriber that already went away must not take the held message")
+        let received = await firstMessage(of: stream.makeStream())
         XCTAssertEqual(received?.id, "a")
     }
 

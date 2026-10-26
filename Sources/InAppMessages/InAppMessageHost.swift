@@ -12,7 +12,8 @@
 //      • Tell the host to reveal the WebView when the bundle calls
 //        `galva.ready()` (anti-flash).
 //      • Tell the host to dismiss the presentation when the bundle calls
-//        `galva.dismiss(reason?)`.
+//        `galva.dismiss(reason?)` — or, from the WebView's navigation
+//        policy, when the page can't load or its process dies.
 //
 //  Both hosts conform to this protocol; the bridge holds a `weak var
 //  host: (any InAppMessageHost)?` reference.
@@ -77,7 +78,9 @@ protocol InAppMessageHost: AnyObject, Sendable {
     /// switches from the loading placeholder to the WebView.
     func reveal()
 
-    /// Bundle called `galva.dismiss(reason?)` — close the presentation.
+    /// Bundle called `galva.dismiss(reason?)`, or its page failed to load
+    /// or its web content process died (`InAppMessageNavigationPolicy`) —
+    /// close the presentation.
     /// In UIKit this calls `dismiss(animated:)` on the presenting VC;
     /// in SwiftUI this clears the `@Binding` that drives the sheet, which
     /// triggers SwiftUI to dismiss.

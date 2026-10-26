@@ -29,6 +29,9 @@
 //  • All public APIs are fire-and-forget — they return synchronously and
 //    enqueue work on `GalvaActor` behind the scenes. Safe to call from any
 //    thread / actor.
+//  • Calls made while `configure` is still starting wait for it, then run in
+//    call order. Identify and track calls made before `configure` are
+//    dropped with a warning.
 //  • Events are persisted to disk (SQLite) before they leave the SDK, so they
 //    survive crashes, kills, and network outages.
 //  • Failed uploads retry with exponential backoff + jitter. 4xx errors
@@ -158,8 +161,8 @@ public enum Galva {
     ///
     ///     .debug   — extremely verbose; per-event payloads, every HTTP call
     ///     .info    — significant lifecycle: configure, identify, logOut, flush
-    ///     .notice  — state changes worth knowing about (default in dev)
-    ///     .warning — recoverable issues: retries, rate-limits, malformed config
+    ///     .notice  — state changes worth knowing about
+    ///     .warning — recoverable issues: retries, rate-limits, malformed config (default)
     ///     .error   — operation failed: permanent upload failure, decode failure
     ///     .fault   — invariant broken, data-loss risk
     ///     .off     — silence the SDK entirely
@@ -229,7 +232,10 @@ public enum Galva {
     /// Configure the SDK. Call this once on app launch, ideally from
     /// `App.init()` or `application(_:didFinishLaunchingWithOptions:)`.
     ///
-    /// Subsequent calls are ignored with a warning log line.
+    /// Returns immediately and finishes in the background. Calls you make
+    /// right after it, such as `AppUser.identify(userId:)`, wait for it and
+    /// run in the order you made them. Subsequent calls are ignored with a
+    /// warning log line.
     ///
     /// Example:
     ///
@@ -274,17 +280,16 @@ public enum Galva {
         logger: (any GalvaLogger)? = nil,
         integrations: [Integration] = []
     ) {
-        Task { @GalvaActor in
-            await SDKCore.shared.configure(
-                apiKey: apiKey,
-                environment: environment,
-                autoTrack: autoTrackCategories,
-                logLevel: logLevel,
-                userLogger: logger,
-                inAppMessages: inAppMessages,
-                integrations: integrations
-            )
-        }
+        configure(
+            apiKey: apiKey,
+            environment: environment,
+            inAppMessages: inAppMessages,
+            autoTrackCategories: autoTrackCategories,
+            logLevel: logLevel,
+            logger: logger,
+            integrations: integrations,
+            wrapper: nil
+        )
     }
 
     /// Configure the SDK on behalf of a first-party wrapper SDK (React Native,
@@ -310,20 +315,31 @@ public enum Galva {
         integrations: [Integration] = [],
         wrapper: SDKWrapper?
     ) {
-        // Set the reported identity synchronously, before any request is built,
-        // then run the standard configure.
-        SDKIdentity.wrapper = wrapper
-        configure(
-            apiKey: apiKey,
-            environment: environment,
-            inAppMessages: inAppMessages,
-            autoTrackCategories: autoTrackCategories,
-            logLevel: logLevel,
-            logger: logger,
-            integrations: integrations
-        )
+        let core = SDKCore.shared
+        guard claimConfiguration(of: core, reportingAs: wrapper) else { return }
+        Task { @GalvaActor in
+            await core.configure(
+                apiKey: apiKey,
+                environment: environment,
+                autoTrack: autoTrackCategories,
+                logLevel: logLevel,
+                userLogger: logger,
+                inAppMessages: inAppMessages,
+                integrations: integrations
+            )
+        }
     }
     
+    /// The synchronous half of `configure`: claim `core`'s configuration, so
+    /// a repeat call is ignored (reported identity included) and calls made
+    /// from here on wait for this configure, then set the reported identity
+    /// before any request is built. `false` if `core` was already claimed.
+    static func claimConfiguration(of core: SDKCore, reportingAs wrapper: SDKWrapper?) -> Bool {
+        guard core.claimConfiguration() else { return false }
+        SDKIdentity.wrapper = wrapper
+        return true
+    }
+
     /// Install a custom `GalvaLogger` at any point after `configure(...)`.
     /// The `logLevel` filter set at configure time is preserved — your
     /// logger only sees entries that pass it.
@@ -338,6 +354,8 @@ public enum Galva {
     ///
     ///     Galva.setLogger(CrashlyticsLogger())
     public static func setLogger(_ logger: any GalvaLogger) {
+        // Not held for an in-progress configure, so a logger set right after
+        // `configure` also gets configure's own logs.
         Task { @GalvaActor in
             SDKCore.shared.installLogger(logger)
         }
@@ -366,9 +384,7 @@ public enum Galva {
     /// from anywhere, including duplicated taps. Errors are logged at
     /// `.info` / `.warning` and never surfaced to the caller.
     public static func reconcileTransactions() {
-        Task { @GalvaActor in
-            await SDKCore.shared.reconcileTransactions()
-        }
+        SDKCore.shared.submit { await $0.reconcileTransactions() }
     }
     
     // MARK: Opt-out
@@ -392,12 +408,11 @@ public enum Galva {
     /// it survives app restarts. Defaults to `false` (tracking enabled)
     /// on first launch.
     ///
-    /// Fire-and-forget: returns immediately. Read the current value
-    /// synchronously via `Galva.isOptedOut`.
+    /// Takes effect at once, even while `configure` is still starting:
+    /// `Galva.isOptedOut` and every call made after this one see it. The
+    /// queue purge runs in the background.
     public static func setOptOut(_ enabled: Bool) {
-        Task { @GalvaActor in
-            await SDKCore.shared.setOptedOut(enabled)
-        }
+        SDKCore.shared.requestOptOut(enabled)
     }
     
     /// Current opt-out state. Synchronous read — safe to call from any
@@ -428,9 +443,7 @@ public enum Galva {
     ///     }
     public static func applicationDidRegisterForRemoteNotificationsWithDeviceToken(_ tokenData: Data) {
         let hex = tokenData.map { String(format: "%02x", $0) }.joined()
-        Task { @GalvaActor in
-            await SDKCore.shared.registerDeviceToken(hex)
-        }
+        SDKCore.shared.submit { await $0.registerDeviceToken(hex) }
     }
 
     /// Hand an incoming URL to Galva. SwiftUI apps call it from `onOpenURL` on
@@ -463,9 +476,7 @@ public enum Galva {
     @discardableResult
     public static func handleOpenURL(_ url: URL) -> Bool {
         guard DeepLink.canHandle(url) else { return false }
-        Task { @GalvaActor in
-            await SDKCore.shared.handleOpenURL(url)
-        }
+        SDKCore.shared.submit { await $0.handleOpenURL(url) }
         return true
     }
 
@@ -581,18 +592,14 @@ public enum AppEvents {
             let coerced = AnyJSONValue.coercing(dictionary: dict)
             return coerced.isEmpty ? nil : coerced
         }
-        Task { @GalvaActor in
-            await SDKCore.shared.track(event: eventName, properties: props)
-        }
+        SDKCore.shared.submit { await $0.track(event: eventName, properties: props) }
     }
 
     /// Track a strongly-typed `AppEvents.Event` value. Attributes flow through
     /// the typed `GalvaCompatibleValue` path — lossless, nothing is filtered.
     public static func track<E: Event>(_ event: E) {
         let props = event.attributes?.mapValues { AnyJSONValue($0) }
-        Task { @GalvaActor in
-            await SDKCore.shared.track(event: event.eventName, properties: props)
-        }
+        SDKCore.shared.submit { await $0.track(event: event.eventName, properties: props) }
     }
 }
 
@@ -771,12 +778,8 @@ public enum AppUser {
     ///
     ///     AppUser.identify(userId: "user_42")
     public static func identify(userId: String, appAccountToken: UUID? = nil) {
-        Task { @GalvaActor in
-            await SDKCore.shared.identify(
-                userId: userId,
-                appAccountToken: appAccountToken,
-                traits: nil
-            )
+        SDKCore.shared.submit {
+            await $0.identify(userId: userId, appAccountToken: appAccountToken, traits: nil)
         }
     }
 
@@ -788,9 +791,7 @@ public enum AppUser {
     ///     AppUser.set(.firstName, "Peter")
     public static func set<A: AppUserAttribute>(_ attribute: A, _ value: A.Value) {
         let trait = [attribute.attributeName: AnyJSONValue(value)]
-        Task { @GalvaActor in
-            await SDKCore.shared.identify(userId: nil, appAccountToken: nil, traits: trait)
-        }
+        SDKCore.shared.submit { await $0.identify(userId: nil, appAccountToken: nil, traits: trait) }
     }
 
     /// Set an arbitrary user trait by string key. Use the typed `set(_:_:)`
@@ -798,13 +799,11 @@ public enum AppUser {
     ///
     /// Example:
     ///
-    ///     AppUser.set("plan_tier", "pro")
-    ///     AppUser.set("habit_count", 13)
+    ///     AppUser.set(attribute: "plan_tier", "pro")
+    ///     AppUser.set(attribute: "habit_count", 13)
     public static func set<V: GalvaCompatibleValue>(attribute attributeName: String, _ value: V) {
         let trait = [attributeName: AnyJSONValue(value)]
-        Task { @GalvaActor in
-            await SDKCore.shared.identify(userId: nil, appAccountToken: nil, traits: trait)
-        }
+        SDKCore.shared.submit { await $0.identify(userId: nil, appAccountToken: nil, traits: trait) }
     }
 
     /// Set one or more user traits from a loose `[String: Any]` dictionary
@@ -838,22 +837,14 @@ public enum AppUser {
     public static func set(_ attributes: [String: Any]) {
         let coerced = AnyJSONValue.coercing(dictionary: attributes)
         guard !coerced.isEmpty else { return }
-        Task { @GalvaActor in
-            await SDKCore.shared.identify(
-                userId: nil,
-                appAccountToken: nil,
-                traits: coerced
-            )
-        }
+        SDKCore.shared.submit { await $0.identify(userId: nil, appAccountToken: nil, traits: coerced) }
     }
 
     /// Log out the current user. Clears the identified user id and rotates
     /// the anonymous id so subsequent events are attributed to a fresh
     /// anonymous session.
     public static func logOut() {
-        Task { @GalvaActor in
-            await SDKCore.shared.logOut()
-        }
+        SDKCore.shared.submit { await $0.logOut() }
     }
 }
 
@@ -906,12 +897,10 @@ public enum InAppMessages {
     /// (e.g. after the user completes an in-app action that should
     /// retrigger a workflow attempt).
     public static func checkForMessages() {
-        Task { @GalvaActor in
-            await SDKCore.shared.inAppMessageManager?.checkForMessages()
-        }
+        SDKCore.shared.submit { await $0.inAppMessageManager?.checkForMessages() }
     }
 
-    /// Errors surfaced from the in-app messaging pipeline.
+    /// Errors `message.show(in:)` throws when a message can't be shown.
     ///
     /// Galva may add cases in minor releases. If you switch on this error,
     /// add an `@unknown default` case, so a new one only warns instead of
@@ -919,14 +908,18 @@ public enum InAppMessages {
     public enum Error: Swift.Error, Sendable, Hashable {
         /// SDK has not been configured.
         case notConfigured
-        /// `show(_:in:)` received a message id the server no longer
-        /// considers valid (workflow exited, message invalidated).
+        /// The server no longer considers the message valid (workflow
+        /// exited, message invalidated), or its id isn't one Galva issued.
         case messageNotFound
         /// WebView bundle for the resolved version isn't on disk and
         /// couldn't be downloaded.
         case bundleUnavailable
-        /// Bundle requested a bridge protocol the installed SDK doesn't
-        /// support — update the SDK to render this message.
-        case bridgeProtocolMismatch
+        /// No foreground window scene, or no view controller in it, to
+        /// present the message on — or UIKit didn't finish presenting the
+        /// sheet within a few seconds.
+        case noPresentingViewController
+        /// Galva's servers couldn't be reached, or returned an error, while
+        /// resolving the message.
+        case requestFailed
     }
 }

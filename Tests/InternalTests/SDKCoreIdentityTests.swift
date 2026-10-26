@@ -8,6 +8,8 @@
 //      values win on key collision
 //    • identify(appAccountToken:) → adds $gv_appAccountToken trait
 //    • logOut() → clears endUserId, rotates anonymousId, re-seeds identify
+//    • switching users (A → B) drops A's appAccountToken override and
+//      in-app state; first login (anonymous → A) keeps both
 //    • cachedEndUserId is observable synchronously after the async call
 //      returns (the lock-protected mirror is updated before the queue.emit)
 //
@@ -136,6 +138,84 @@ final class SDKCoreIdentityTests: XCTestCase {
         XCTAssertEqual(first.anonymousId, harness.identity.anonymousId)
     }
 
+    // MARK: - Switching users
+
+    func test_switchingUsers_dropsPreviousUsersAppAccountToken() async {
+        let harness = await SDKHarness.makeConfigured()
+        defer { harness.cleanup() }
+        let tokenA = UUID()
+
+        await harness.core.identify(userId: "user_A", appAccountToken: tokenA, traits: nil)
+        await harness.core.identify(userId: "user_B", appAccountToken: nil, traits: nil)
+
+        let generated = UUID(uuidString: harness.identity.anonymousId)
+        XCTAssertNil(harness.identity.appAccountToken, "user_A's override must not carry over to user_B")
+        XCTAssertEqual(harness.identity.purchaseAttributionToken, generated)
+        XCTAssertEqual(harness.core.cachedAppAccountToken, generated, "AppUser.appAccountToken follows")
+    }
+
+    func test_switchingUsers_withNewToken_usesIt() async {
+        let harness = await SDKHarness.makeConfigured()
+        defer { harness.cleanup() }
+        let tokenB = UUID()
+
+        await harness.core.identify(userId: "user_A", appAccountToken: UUID(), traits: nil)
+        await harness.core.identify(userId: "user_B", appAccountToken: tokenB, traits: nil)
+
+        XCTAssertEqual(harness.identity.purchaseAttributionToken, tokenB)
+        XCTAssertEqual(harness.core.cachedAppAccountToken, tokenB)
+    }
+
+    func test_reidentifyingSameUser_keepsToken() async {
+        let harness = await SDKHarness.makeConfigured()
+        defer { harness.cleanup() }
+        let tokenA = UUID()
+
+        await harness.core.identify(userId: "user_A", appAccountToken: tokenA, traits: nil)
+        await harness.core.identify(userId: "user_A", appAccountToken: nil, traits: nil)
+
+        XCTAssertEqual(harness.identity.purchaseAttributionToken, tokenA)
+        XCTAssertEqual(harness.core.cachedAppAccountToken, tokenA)
+    }
+
+    func test_switchingUsers_resetsPreviousUsersInAppState() async {
+        let harness = await SDKHarness.makeConfigured()
+        defer { harness.cleanup() }
+        let manager = harness.makeInAppMessageManager()
+        harness.core.inAppMessageManager = manager
+        let stream = harness.core.inAppMessageStream
+
+        await harness.core.identify(userId: "user_A", appAccountToken: nil, traits: nil)
+        manager.setActiveMessageId("message_for_A")
+        await MainActor.run { stream.yield(Self.message("held_for_A")) }
+        let anonymousId = harness.identity.anonymousId
+
+        await harness.core.identify(userId: "user_B", appAccountToken: nil, traits: nil)
+
+        XCTAssertFalse(manager.hasPresented(messageId: "message_for_A"), "in-app dedupe is per user")
+        XCTAssertNil(manager.activeMessageId)
+        let held = await MainActor.run { stream.heldMessage }
+        XCTAssertNil(held, "a message held for user_A must not reach user_B")
+        XCTAssertEqual(harness.identity.anonymousId, anonymousId, "only logOut rotates the anonymousId")
+    }
+
+    func test_firstLogin_keepsInAppState() async {
+        let harness = await SDKHarness.makeConfigured()
+        defer { harness.cleanup() }
+        let manager = harness.makeInAppMessageManager()
+        harness.core.inAppMessageManager = manager
+        let stream = harness.core.inAppMessageStream
+
+        manager.setActiveMessageId("shown_while_anonymous")
+        await MainActor.run { stream.yield(Self.message("held")) }
+
+        await harness.core.identify(userId: "user_A", appAccountToken: nil, traits: nil)
+
+        XCTAssertTrue(manager.hasPresented(messageId: "shown_while_anonymous"))
+        let held = await MainActor.run { stream.heldMessage }
+        XCTAssertEqual(held?.id, "held", "anonymous → identified is the same person; nothing resets")
+    }
+
     // MARK: - Identity persistence
 
     func test_identifyTraitsOnly_doesNotChangeUserId() async {
@@ -177,5 +257,9 @@ final class SDKCoreIdentityTests: XCTestCase {
             return nil
         }
         return traits
+    }
+
+    private nonisolated static func message(_ id: String) -> InAppMessages.Message {
+        InAppMessages.Message(id: id, workflowType: nil, createdAt: Date())
     }
 }

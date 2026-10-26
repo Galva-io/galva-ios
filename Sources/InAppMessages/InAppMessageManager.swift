@@ -44,8 +44,24 @@ final class InAppMessageManager {
 
     /// Drop duplicate messages observed within the lifetime of the SDK
     /// process. Prevents a rapid background/foreground toggle from
-    /// emitting the same message twice. Bounded — see prune below.
+    /// emitting the same message twice. Bounded — see prune below. A
+    /// delivered message whose presentation fails may be removed again
+    /// (`presentationFailed`).
     private var seenIds: Set<String> = []
+
+    /// Failed presentations so far, by message id. A poll delivers one of
+    /// these messages only when no other is waiting, so one that keeps
+    /// failing can't hold the head of the list.
+    private var failedAttempts: [String: Int] = [:]
+
+    /// How many times a message that fails to show is delivered before
+    /// it's given up on for the run.
+    nonisolated static let maxPresentationAttempts = 3
+
+    /// Bumped by `reset()` (logOut, user switch). A poll drops results
+    /// fetched under an earlier generation — they were for the previous
+    /// identity.
+    private var identityGeneration = 0
 
     /// Message ids that actually went ON SCREEN this run (deep-link,
     /// programmatic, or auto-display). A presented communication must never
@@ -112,11 +128,44 @@ final class InAppMessageManager {
         case .pending(let id) where id == messageId:
             displaySlot = .available
         case .used(let id) where id == messageId && activeMessageId == nil:
-            // The show consumed the slot (setActiveMessageId ran) but then
-            // failed and tore down before returning — restore the budget.
+            // This message spent the slot (delivered by a poll, or shown
+            // earlier) and isn't on screen — restore the budget.
             displaySlot = .available
         default:
             break
+        }
+    }
+
+    /// Roll back a presentation that failed with `error` before the message
+    /// reached the screen: restore the stint's budget and, if a later attempt
+    /// might work, forget its delivery so a later return event's poll can
+    /// deliver it again — up to `maxPresentationAttempts` times. A message
+    /// the server rejected, or that went on screen earlier this run, stays
+    /// done.
+    func presentationFailed(messageId: String, error: any Error) {
+        releaseDisplaySlot(messageId: messageId)
+        guard !presentedIds.contains(messageId) else { return }
+        let attempts = failedAttempts[messageId, default: 0] + 1
+        failedAttempts[messageId] = attempts
+        if Self.mightPresentLater(after: error), attempts < Self.maxPresentationAttempts {
+            seenIds.remove(messageId)
+        } else {
+            seenIds.insert(messageId)
+        }
+    }
+
+    /// Whether a presentation that failed with `error` might work later: no
+    /// window yet, a bundle that didn't download, a network or server error.
+    /// Not when the server rejected the message (no longer valid, a 4xx) or
+    /// this SDK can't read it.
+    nonisolated static func mightPresentLater(after error: any Error) -> Bool {
+        switch error {
+        case let error as InAppMessageError:
+            return error == .noPresentingViewController || error == .bundleUnavailable
+        case let error as APIError:
+            return error.isRetryable
+        default:
+            return false
         }
     }
 
@@ -180,6 +229,7 @@ final class InAppMessageManager {
         // Always send anonymousId — pre-identify messages should still
         // resolve to the right device.
         query.append(URLQueryItem(name: "anonymousId", value: identity.anonymousId))
+        let generation = identityGeneration
 
         do {
             let response: CommunicationListResponse = try await client.get(
@@ -189,6 +239,15 @@ final class InAppMessageManager {
             logger.debug(.identity, "in-app poll OK", metadata: [
                 "count": String(response.data.count),
             ])
+            // logOut or a user switch reset the identity while the fetch was
+            // in flight: these messages are for the previous identity. Drop
+            // them UNMARKED.
+            guard generation == identityGeneration else {
+                logger.info(.identity, "in-app poll dropped — identity changed mid-flight", metadata: [
+                    "count": String(response.data.count),
+                ])
+                return []
+            }
             // Re-check after the network suspension: a deep link may have
             // claimed the slot while the fetch was in flight (the actor
             // serializes the claim and this check). Drop the results UNMARKED
@@ -229,27 +288,31 @@ final class InAppMessageManager {
 
     private func dispatch(items: [CommunicationItem]) async -> [InAppMessages.Message] {
         // Deliver exactly ONE message per stint — the first unseen in-app item
-        // in server order (the backend returns highest-priority first). The
-        // remaining items are left UNMARKED so they surface on the next return
-        // event's poll instead of being lost.
-        for item in items {
-            let key = item.id.uuidString.lowercased()
-            if seenIds.contains(key) { continue }
-            seenIds.insert(key)
-            let message = item.toPublicMessage()
-            // Consume the stint's budget at delivery — the fetch won't run
-            // again until the next return event, even if the app never
-            // presents this message.
-            displaySlot = .used(messageId: message.id)
-            // Hop to the MainActor stream — keeps message delivery on the
-            // main thread for the SDK's MainActor-isolated consumers.
-            await stream.yield(message)
-            prefetchBundleIfPossible()
+        // in server order (the backend returns highest-priority first), unless
+        // it failed to show before and another is waiting. The remaining items
+        // are left UNMARKED so they surface on the next return event's poll
+        // instead of being lost.
+        let unseen = items.filter { !seenIds.contains(Self.key(for: $0)) }
+        guard let item = unseen.first(where: { failedAttempts[Self.key(for: $0)] == nil }) ?? unseen.first else {
             pruneSeenIfNeeded()
-            return [message]
+            return []
         }
+        seenIds.insert(Self.key(for: item))
+        let message = item.toPublicMessage()
+        // Consume the stint's budget at delivery — the fetch won't run
+        // again until the next return event, even if the app never
+        // presents this message.
+        displaySlot = .used(messageId: message.id)
+        // Hop to the MainActor stream — keeps message delivery on the
+        // main thread for the SDK's MainActor-isolated consumers.
+        await stream.yield(message)
+        prefetchBundleIfPossible()
         pruneSeenIfNeeded()
-        return []
+        return [message]
+    }
+
+    private static func key(for item: CommunicationItem) -> String {
+        item.id.uuidString.lowercased()
     }
 
     /// Warm the latest known bundle versions if we have any. We don't yet
@@ -269,6 +332,7 @@ final class InAppMessageManager {
         // and bounded so memory doesn't grow forever on a long-running app.
         guard seenIds.count > 1024 else { return }
         seenIds.removeAll(keepingCapacity: true)
+        failedAttempts.removeAll()
     }
 
     // MARK: - Resolve
@@ -380,10 +444,13 @@ final class InAppMessageManager {
 
     // MARK: - Reset
 
-    /// Clear cached state. Called from `logOut()` so the next user's
-    /// session doesn't see leftover messages from the previous identity.
+    /// Clear cached state. Called from `logOut()` and on a user switch so
+    /// the next user's session doesn't see leftover messages from the
+    /// previous identity — including any a poll still in flight returns.
     func reset() {
+        identityGeneration += 1
         seenIds.removeAll(keepingCapacity: false)
+        failedAttempts.removeAll(keepingCapacity: false)
         presentedIds.removeAll(keepingCapacity: false)
         resolvedPayloads.removeAll(keepingCapacity: false)
         activeMessageId = nil
@@ -460,6 +527,8 @@ final class InAppMessageManager {
 
 // MARK: - Errors
 
+/// What the presentation pipeline throws internally. Mapped to the public
+/// `InAppMessages.Error` where it leaves the SDK.
 enum InAppMessageError: Error, Sendable, Hashable {
     /// `show(message:)` received a malformed message id.
     case invalidMessageId
@@ -469,8 +538,28 @@ enum InAppMessageError: Error, Sendable, Hashable {
     /// Bundle download failed and no local copy exists for the requested
     /// webview version.
     case bundleUnavailable
-    /// Negotiated bridge protocol incompatible with the installed SDK.
-    case bridgeProtocolMismatch
-    /// SDK has not been configured yet.
-    case notConfigured
+    /// No foreground window scene, or no view controller in it, to present
+    /// on — or UIKit didn't finish presenting the sheet in time.
+    case noPresentingViewController
+}
+
+extension InAppMessages.Error {
+    /// The public error for anything the presentation pipeline throws. Used
+    /// once per entry point, where `show(in:)` and the SwiftUI sheet's
+    /// prepare leave the SDK. Anything that isn't one of Galva's own errors
+    /// came from the resolve request.
+    init(_ error: any Swift.Error) {
+        switch error {
+        case let error as InAppMessages.Error:
+            self = error
+        case let error as InAppMessageError:
+            switch error {
+            case .invalidMessageId, .messageNotFound: self = .messageNotFound
+            case .bundleUnavailable: self = .bundleUnavailable
+            case .noPresentingViewController: self = .noPresentingViewController
+            }
+        default:
+            self = .requestFailed
+        }
+    }
 }

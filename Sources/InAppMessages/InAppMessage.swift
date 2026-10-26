@@ -19,8 +19,8 @@ import UIKit
 public extension InAppMessages {
 
     /// A single pending in-app message addressed to the current identity.
-    /// Receive these through `InAppMessages.messages` and pass them back to
-    /// `InAppMessages.show(_:in:)` to render.
+    /// Receive these through `InAppMessages.messages` and render them with
+    /// `show(in:)` or `.inAppMessageSheet(_:)`.
     struct Message: Sendable, Hashable, Identifiable {
 
         /// Server-generated communication id. Stable for the lifetime of
@@ -116,7 +116,9 @@ public extension InAppMessages.Message {
     /// bridge, loads the cached HTML bundle for this message's webview
     /// version, and presents a managed view controller via
     /// `present(_:animated:completion:)`. Idempotent — calling `show` a
-    /// second time with the same message is a no-op while it is on screen.
+    /// second time with the same message is a no-op while it is on screen
+    /// or still being shown. Calls for different messages run one at a
+    /// time, in call order; each replaces the sheet before it.
     ///
     /// Use this in `.manual` mode, from your
     /// `for await message in InAppMessages.messages` loop:
@@ -127,11 +129,19 @@ public extension InAppMessages.Message {
     ///         }
     ///     }
     ///
+    /// If the message can't be shown for a reason that may clear up — no
+    /// window to present on, a network error — `InAppMessages.messages` may
+    /// deliver it again the next time your app comes to the foreground.
+    ///
     /// - Parameter scene: The window scene to present in. Default: your
     ///   app's active window scene.
-    /// - Throws: `InAppMessages.Error.notConfigured` if `Galva.configure`
-    ///   hasn't run, `.messageNotFound` if the server says the message is
-    ///   no longer valid (workflow exited / invalidated), or
+    /// - Throws: `InAppMessages.Error`: `.notConfigured` if
+    ///   `Galva.configure` hasn't run, `.noPresentingViewController` if
+    ///   there's no foreground window scene or view controller to present
+    ///   on, or UIKit doesn't finish presenting the sheet within a few
+    ///   seconds, `.messageNotFound` if the server says the message is no longer
+    ///   valid (workflow exited / invalidated), `.requestFailed` if Galva's
+    ///   servers couldn't be reached or returned an error, or
     ///   `.bundleUnavailable` if the WebView bundle for the resolved
     ///   version can't be downloaded and isn't cached on disk.
     func show(in scene: UIWindowScene? = nil) async throws {

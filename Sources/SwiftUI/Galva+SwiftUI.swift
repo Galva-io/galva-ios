@@ -206,7 +206,12 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
                     // `sheet(item:)` handles the visual transition because
                     // the item identity changes — no manual dismiss/present
                     // dance. The new bundle hasn't called `ready()` yet, so
-                    // reset the reveal flag.
+                    // reset the reveal flag. Sever the replaced page first:
+                    // its late `galva.dismiss()` or load failure would
+                    // otherwise close the new sheet.
+                    if let replaced = self.webView {
+                        InAppMessageWebViewFactory.tearDown(webView: replaced, bridge: self.bridge)
+                    }
                     self.webView = prepared.webView
                     self.bridge = prepared.bridge
                     self.bundleURL = prepared.bundleURL
@@ -277,9 +282,7 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
         didLoadBundle = false
         bridge = nil
         isRevealed = false
-        Task { @GalvaActor in
-            await SDKCore.shared.clearActiveMessage()
-        }
+        SDKCore.shared.submit { await $0.clearActiveMessage() }
     }
 }
 
@@ -292,6 +295,8 @@ extension InAppMessagePresentationCoordinator: InAppMessageHost {
         isRevealed = true
     }
 
+    /// The bundle called `galva.dismiss()`, or its page couldn't load or
+    /// its web content process died (`InAppMessageNavigationPolicy`).
     func dismiss(reason: String?) {
         _ = reason
         // Clearing readyMessage tells SwiftUI to dismiss the sheet, which

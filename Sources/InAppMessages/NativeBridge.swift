@@ -31,6 +31,10 @@
 //  Security
 //      • The script-message handler name is `galva` — that one inbound
 //        channel is the entire native attack surface.
+//      • Only the bundle's own page may use it: messages are taken from
+//        the main frame of a file:// page only — never an iframe or a
+//        remote page. The navigation policy keeps the main frame on the
+//        bundle file.
 //      • Unknown method names are never dispatched — they resolve to
 //        `BridgeRequest.method == nil` and are answered with a structured
 //        `unknownMethod` error (carrying the `requestId`) so the bundle's
@@ -75,6 +79,12 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     /// dismiss would also keep the console handler alive. `nil` outside
     /// debug logging.
     var consoleLogHandler: WebViewConsoleLogHandler?
+
+    /// The WebView's navigation + UI delegate. WebKit holds delegates
+    /// weakly, so the bridge keeps it alive for the presentation, the same
+    /// way it keeps `consoleLogHandler`; dropped by
+    /// `InAppMessageWebViewFactory.tearDown(webView:bridge:)`.
+    var navigationPolicy: InAppMessageNavigationPolicy?
 
     /// The message this bridge belongs to. `getMessageData` / `getPageContext` /
     /// `requestPurchase` resolve against THIS id — not a shared global active id
@@ -130,6 +140,17 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         didReceive message: WKScriptMessage
     ) {
         guard message.name == kGalvaBridgeHandlerName else { return }
+        let frame = message.frameInfo
+        guard Self.acceptsMessage(
+            fromMainFrame: frame.isMainFrame,
+            originProtocol: frame.securityOrigin.protocol
+        ) else {
+            logger.warning(.identity, "bridge: message from outside the bundle page dropped", metadata: [
+                "mainFrame": String(frame.isMainFrame),
+                "origin": frame.securityOrigin.protocol,
+            ])
+            return
+        }
         let envelope: BridgeRequest
         do {
             envelope = try Self.decodeEnvelope(message.body)
@@ -146,6 +167,14 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
             let outcome = await self.handle(envelope: envelope)
             await self.respond(requestId: envelope.requestId, outcome: outcome)
         }
+    }
+
+    /// Whether a script message comes from the bundle's own page: the main
+    /// frame, with a `file` origin — the navigation policy keeps the main
+    /// frame on the bundle file. Iframes (a `srcdoc` one inherits the
+    /// `file` origin) and remote pages don't get the bridge.
+    static func acceptsMessage(fromMainFrame isMainFrame: Bool, originProtocol: String) -> Bool {
+        isMainFrame && originProtocol == "file"
     }
 
     // MARK: - Dispatch

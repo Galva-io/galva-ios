@@ -10,7 +10,8 @@
 //  Encapsulating the build logic in one place keeps the two hosts in
 //  lockstep — same `WKUserContentController` script handler, same
 //  `window.galvaProducts` pre-injection, same security posture (no DOM
-//  persistence, file:// allowlist).
+//  persistence, the `InAppMessageNavigationPolicy` bundle-file allowlist
+//  and load-failure handling, a bridge that answers only the main frame).
 //
 
 import Foundation
@@ -43,9 +44,13 @@ enum InAppMessageWebViewFactory {
     /// `Product.products(for:)` round-trip when the SKU is warm. The
     /// `#if canImport(StoreKit)` overload mirrors the same conditional
     /// on `NativeBridge.init` — non-Apple builds use the slimmer init.
+    ///
+    /// `bundleURL` is the bundle file the host will load — the one page the
+    /// WebView may navigate to.
     #if canImport(StoreKit)
     static func make(
         messageId: String,
+        bundleURL: URL,
         messageManager: InAppMessageManager,
         identity: IdentityStore,
         storeKitPrefetcher: StoreKitProductPrefetcher?,
@@ -63,6 +68,7 @@ enum InAppMessageWebViewFactory {
         )
         return assemble(
             bridge: bridge,
+            bundleURL: bundleURL,
             host: host,
             prefetchedProducts: prefetchedProducts,
             deepLinkParameters: deepLinkParameters
@@ -71,6 +77,7 @@ enum InAppMessageWebViewFactory {
     #else
     static func make(
         messageId: String,
+        bundleURL: URL,
         messageManager: InAppMessageManager,
         identity: IdentityStore,
         host: any InAppMessageHost,
@@ -86,6 +93,7 @@ enum InAppMessageWebViewFactory {
         )
         return assemble(
             bridge: bridge,
+            bundleURL: bundleURL,
             host: host,
             prefetchedProducts: prefetchedProducts,
             deepLinkParameters: deepLinkParameters
@@ -94,12 +102,13 @@ enum InAppMessageWebViewFactory {
     #endif
 
     /// Wire the bridge into a fresh `WKWebView`, install the
-    /// `window.galvaProducts` user script, and apply our standard
-    /// WebView config (no DOM persistence, inline media, transparent
-    /// background). The bridge-init branching above feeds into this
-    /// shared assembly.
+    /// `window.galvaProducts` user script and the navigation policy, and
+    /// apply our standard WebView config (no DOM persistence, inline media,
+    /// transparent background). The bridge-init branching above feeds into
+    /// this shared assembly.
     private static func assemble(
         bridge: NativeBridge,
+        bundleURL: URL,
         host: any InAppMessageHost,
         prefetchedProducts: [String: AnyJSONValue],
         deepLinkParameters: [String: String] = [:]
@@ -163,6 +172,15 @@ enum InAppMessageWebViewFactory {
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+
+        // Same navigation + UI delegate for both hosts. WebKit holds
+        // delegates weakly; the bridge keeps the policy alive for the
+        // presentation (released in `tearDown`).
+        let policy = InAppMessageNavigationPolicy(bundleURL: bundleURL, logger: bridge.logger)
+        policy.host = host
+        webView.navigationDelegate = policy
+        webView.uiDelegate = policy
+        bridge.navigationPolicy = policy
         return (webView, bridge)
     }
 
@@ -199,6 +217,10 @@ enum InAppMessageWebViewFactory {
         // but it prevents an in-flight bridge call from re-entering a
         // half-destructed host.
         bridge?.host = nil
+        // Same for the navigation policy: a late load failure can't close
+        // whatever the host presents next.
+        bridge?.navigationPolicy?.host = nil
+        bridge?.navigationPolicy = nil
     }
 
     /// Build a `.atDocumentStart` user script that assigns `object` (encoded

@@ -42,6 +42,10 @@ enum PurchaseBridgeCodec {
                 "productId": request.productId,
             ], error: error)
             return .failure(bridgeError(for: error))
+        } catch StoreKitError.userCancelled {
+            // A controller that drives StoreKit itself and lets its thrown
+            // cancel (Apple ID sign-in dismissed) escape.
+            return .success(.object(encode(.cancelled)))
         } catch {
             logger.warning(.identity, "purchase controller threw a non-Galva error", metadata: [
                 "productId": request.productId,

@@ -66,16 +66,80 @@ struct SDKHarness: Sendable {
         return harness
     }
 
+    /// `midConfigure` runs where production configure suspends (the MainActor
+    /// snapshot), before the queue exists — await a `TestGate` in it to hold
+    /// configure there.
     @GalvaActor
-    func configure(integrations: [Galva.Integration] = []) async {
+    func configure(
+        logger: any GalvaLogger = SilentLogger(),
+        integrations: [Galva.Integration] = [],
+        midConfigure: (@Sendable () async -> Void)? = nil
+    ) async {
         let queue = MessageQueueAccess.queue(for: consumer, storage: storage)
         await core.configureForTesting(
             identity: identity,
             queue: queue,
             contextProvider: ContextProvider(),
-            logger: SilentLogger(),
-            integrations: integrations
+            logger: logger,
+            integrations: integrations,
+            midConfigure: midConfigure
         )
+    }
+
+    /// An in-app message manager on this harness's identity and stream, for
+    /// tests that assign it to `core.inAppMessageManager`. Network goes to
+    /// `URLProtocolStub`; bundles to a temp directory.
+    @GalvaActor
+    func makeInAppMessageManager() -> InAppMessageManager {
+        makeInAppMessaging().manager
+    }
+
+    /// Wire in-app messaging into `core` (manager + bundle cache), as
+    /// configure does, without the lifecycle observer. Returns the manager.
+    @GalvaActor
+    func installInAppMessaging() -> InAppMessageManager {
+        let (manager, bundleCache) = makeInAppMessaging()
+        core.inAppMessageManager = manager
+        core.bundleCache = bundleCache
+        return manager
+    }
+
+    @GalvaActor
+    private func makeInAppMessaging() -> (manager: InAppMessageManager, bundleCache: WebViewBundleCache) {
+        let client = APIClient(
+            baseURL: URL(string: "https://api.galva.test")!,
+            apiKey: "pk_test",
+            session: URLProtocolStub.makeSession(),
+            logger: SilentLogger()
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("galva-harness-\(UUID().uuidString)", isDirectory: true)
+        guard let bundleCache = try? WebViewBundleCache(
+            directoryURL: directory,
+            client: client,
+            cdnBaseURL: URL(string: "https://webview.galva.test")!,
+            logger: SilentLogger()
+        ) else {
+            preconditionFailure("Failed to create a bundle cache for test")
+        }
+        let manager = InAppMessageManager(
+            client: client,
+            identity: identity,
+            stream: core.inAppMessageStream,
+            bundleCache: bundleCache,
+            initialization: InitializationManager(client: client, cache: nil, logger: SilentLogger()),
+            logger: SilentLogger()
+        )
+        return (manager, bundleCache)
+    }
+
+    /// The isolated UserDefaults suite — for state the SDK keeps outside
+    /// `IdentityStore`, such as the opt-out flag.
+    var defaults: UserDefaults {
+        guard let defaults = UserDefaults(suiteName: userDefaultsSuiteName) else {
+            preconditionFailure("Failed to open UserDefaults suite for test")
+        }
+        return defaults
     }
 
     /// Drain the isolated UserDefaults suite. Call from `tearDown` so
@@ -83,6 +147,25 @@ struct SDKHarness: Sendable {
     func cleanup() {
         UserDefaults(suiteName: userDefaultsSuiteName)?
             .removePersistentDomain(forName: userDefaultsSuiteName)
+    }
+}
+
+/// One-shot signal: `wait()` suspends until `open()` is called. Two of them
+/// (reached / release) hold `SDKHarness.configure(midConfigure:)` mid-flight
+/// while a test makes calls.
+actor TestGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        isOpen = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
     }
 }
 

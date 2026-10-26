@@ -307,6 +307,42 @@ struct CurrentSDKLogger: GalvaLogger {
     }
 }
 
+// MARK: - LiveLogger
+
+/// Forwards every call to `target`, which can be swapped after this logger is
+/// handed out. SDKCore logs through one and hands it to every subsystem it
+/// builds, so `Galva.setLogger(_:)` and level changes reach loggers captured
+/// at configure time. Lock-protected, hence `@unchecked Sendable`.
+final class LiveLogger: GalvaLogger, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _target: any GalvaLogger
+
+    init(_ target: any GalvaLogger) {
+        _target = target
+    }
+
+    var target: any GalvaLogger {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _target
+        }
+        set {
+            lock.lock()
+            _target = newValue
+            lock.unlock()
+        }
+    }
+
+    func log(_ entry: Galva.LogEntry) {
+        target.log(entry)
+    }
+
+    func isEnabled(_ level: Galva.LogLevel) -> Bool {
+        target.isEnabled(level)
+    }
+}
+
 // MARK: - Disabled logger
 
 /// A no-op logger. Useful as a default before configure() runs and in
