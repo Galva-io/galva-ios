@@ -131,7 +131,7 @@ public extension InAppMessages.Message {
     ///
     /// If the message can't be shown for a reason that may clear up — no
     /// window to present on, a network error — `InAppMessages.messages` may
-    /// deliver it again the next time your app comes to the foreground.
+    /// deliver it again the next time your app becomes active.
     ///
     /// - Parameter scene: The window scene to present in. Default: your
     ///   app's active window scene.

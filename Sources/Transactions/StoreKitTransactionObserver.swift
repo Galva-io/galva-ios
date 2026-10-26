@@ -36,8 +36,9 @@
 //
 //  Cadence
 //  ───────
-//  • Sweeps on every foreground (cold start + return from background)
-//    via `AppLifecycleObserver` in SDKCore.
+//  • Sweeps every time the app becomes active (cold start, return from
+//    background, a system overlay closing) via `AppLifecycleObserver` in
+//    SDKCore.
 //  • Plus on demand via `Galva.reconcileTransactions()` — useful right
 //    after the host billing observer acknowledges a transaction inside
 //    the same session (no foreground transition will happen between

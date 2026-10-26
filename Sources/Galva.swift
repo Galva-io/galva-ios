@@ -364,7 +364,8 @@ public enum Galva {
     /// Force an off-cycle reconciliation of the device's StoreKit
     /// transaction history with Galva's backend.
     ///
-    /// On every foreground (cold start + return from background) the
+    /// Every time the app becomes active (cold start, return from the
+    /// background, or a system overlay like Control Center closing) the
     /// SDK silently sweeps `Transaction.all` and posts
     /// `(originalTransactionId, userId)` mappings so Galva can resolve
     /// App Store notifications that arrive without an `appAccountToken`
@@ -852,8 +853,9 @@ public enum AppUser {
 
 /// In-app message delivery.
 ///
-/// Galva fetches pending in-app messages from active workflows on every
-/// app foreground event (cold start + return from background). The
+/// Galva fetches pending in-app messages from active workflows every time
+/// the app becomes active: the cold start, a return from the background, or
+/// a system overlay like Control Center closing. Never on a timer. The
 /// highest-priority message — resolved server-side from the workflow
 /// waterfall — reaches the screen the way `Galva.configure(…, inAppMessages:)`
 /// says:

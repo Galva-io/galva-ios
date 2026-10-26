@@ -84,8 +84,8 @@ final class InAppMessageManager {
 
     // MARK: - Display budget (one message per foreground stint)
     //
-    // At most ONE in-app message flow per "return event" (cold start, resume
-    // from background, or an explicit `checkForMessages()`):
+    // At most ONE in-app message flow per "return event" (cold start, every
+    // time the app becomes active again, or an explicit `checkForMessages()`):
     //
     //   • `.pending`   a deep-link / programmatic show is resolving — polling
     //                  must not fetch AT ALL (a deep link is user-initiated and
