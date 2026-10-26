@@ -187,7 +187,7 @@ Asking for permission and registering for remote notifications stay in your app;
 
 ## Present messages yourself
 
-By default Galva presents each in-app message as soon as it's ready. To decide when and where messages appear, for example only after onboarding, configure `.manual`. Galva then presents nothing itself; your app reads messages from `InAppMessages.messages` and presents them.
+By default Galva presents each in-app message as soon as it's ready. To decide when and where messages appear, for example only after onboarding, configure `.manual`. Galva then doesn't present the messages it fetches; your app reads them from `InAppMessages.messages` and presents them. A Galva link the user opens, such as "Continue in App" in an email, still presents its message right away, because the user asked for it.
 
 ```swift
 Galva.configure(apiKey: "pk_your_app_id", inAppMessages: .manual)

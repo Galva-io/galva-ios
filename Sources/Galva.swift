@@ -862,9 +862,13 @@ public enum AppUser {
 ///
 /// - `.automatic` (default): the SDK presents it as a sheet on your app's
 ///   active window. There's nothing to write.
-/// - `.manual`: the SDK presents nothing. Your app reads `messages` and
-///   presents each one with `.inAppMessageSheet(_:)` (SwiftUI) or
-///   `message.show()` (UIKit).
+/// - `.manual`: the SDK doesn't present the messages it fetches. Your app
+///   reads `messages` and presents each one with `.inAppMessageSheet(_:)`
+///   (SwiftUI) or `message.show()` (UIKit).
+///
+/// A Galva link the user opens (for example "Continue in App" from an email)
+/// presents its message right away in both modes, since the user asked for
+/// it. It doesn't go through `messages`.
 ///
 /// Either way, the SDK handles the page download and cache, identity, and the
 /// native bridge (purchase prompt, dismissal, deep link, manage-subscription

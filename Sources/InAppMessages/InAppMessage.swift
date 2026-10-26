@@ -98,9 +98,11 @@ public extension InAppMessages {
         /// active window, as soon as it's ready. The default.
         case automatic
 
-        /// Galva presents nothing itself. Read `InAppMessages.messages` and
-        /// present each message when and where you choose: with
-        /// `.inAppMessageSheet(_:)` in SwiftUI, or `message.show()` in UIKit.
+        /// Galva doesn't present the messages it fetches. Read
+        /// `InAppMessages.messages` and present each message when and where
+        /// you choose: with `.inAppMessageSheet(_:)` in SwiftUI, or
+        /// `message.show()` in UIKit. A Galva link the user opens still
+        /// presents its message right away.
         case manual
     }
 }
