@@ -128,11 +128,12 @@ public enum Galva {
         /// Emit `session_start` events automatically. Driven by
         /// `UIApplication.didBecomeActive`:
         ///
-        /// • Cold start always emits a `session_start`.
-        /// • Foreground transition after 30+ minutes of background
-        ///   inactivity emits a fresh `session_start`.
-        /// • Returning to the foreground within 30 minutes does NOT
-        ///   emit — the session continues.
+        /// • The app's first launch always emits a `session_start`.
+        /// • After that, a launch or foreground transition emits a fresh
+        ///   `session_start` only if 30+ minutes have passed since the last
+        ///   one. The window is persisted, so it carries across relaunches.
+        /// • Launching or returning to the foreground within 30 minutes
+        ///   does NOT emit — the session continues.
         /// • There is no `session_end` event — duration is computed
         ///   server-side from successive `session_start` timestamps.
         ///

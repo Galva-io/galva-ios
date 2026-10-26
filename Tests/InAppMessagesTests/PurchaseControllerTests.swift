@@ -15,7 +15,6 @@ import Foundation
 @_spi(Testing) @testable import Galva
 import XCTest
 
-#if canImport(StoreKit)
 import StoreKit
 
 @MainActor
@@ -249,5 +248,3 @@ final class PurchaseControllerTests: XCTestCase {
         XCTAssertNil(PurchaseControllerRegistry.current)
     }
 }
-
-#endif // canImport(StoreKit)

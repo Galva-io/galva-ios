@@ -24,9 +24,7 @@ import WebKit
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(StoreKit)
 import StoreKit
-#endif
 
 #if canImport(WebKit) && canImport(UIKit)
 
@@ -74,7 +72,6 @@ extension NativeBridge {
         case .failure(let err): return .failure(err)
         }
 
-        #if canImport(StoreKit)
         // 2. Snapshot the SDK's attribution token across the actor hop.
         let appAccountToken = await identity.purchaseAttributionToken
         let controller = PurchaseControllerRegistry.current
@@ -136,25 +133,13 @@ extension NativeBridge {
                 message: String(describing: error)
             ))
         }
-        #else
-        // Non-Apple platform — StoreKit isn't available; surface a
-        // structured failure so the bundle UX degrades gracefully.
-        return .failure(BridgeError(
-            code: .purchaseFailed,
-            message: "StoreKit unavailable on this platform"
-        ))
-        #endif
     }
 
     // MARK: - Purchase payload parsing
 
     private struct ParsedPurchaseRequest {
         let productId: String
-        #if canImport(StoreKit)
         let promotionalOffer: StoreKitPurchaser.PromotionalOffer?
-        #else
-        let promotionalOffer: Void?
-        #endif
     }
 
     private func parsePurchaseRequest(
@@ -169,7 +154,6 @@ extension NativeBridge {
             ))
         }
 
-        #if canImport(StoreKit)
         // promotionalOffer is optional — absent or null both mean "no
         // offer, standard list-price purchase". When present, every
         // field is required; partial offers are rejected so we never
@@ -191,12 +175,8 @@ extension NativeBridge {
             ))
         }
         return .success(.init(productId: productId, promotionalOffer: promo))
-        #else
-        return .success(.init(productId: productId, promotionalOffer: nil))
-        #endif
     }
 
-    #if canImport(StoreKit)
     /// Parse the JWS-only promotional offer payload. Both `offerId` and
     /// `signature` (a JWS compact string) are required — we never quietly
     /// drop a partial offer since the bundle's UX promised the user a
@@ -221,7 +201,6 @@ extension NativeBridge {
 
         return .success(.init(offerId: offerId, compactJWS: jws))
     }
-    #endif // canImport(StoreKit)
 }
 
 #endif // canImport(WebKit) && canImport(UIKit)

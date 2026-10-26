@@ -277,9 +277,9 @@ enum APIError: Error, @unchecked Sendable {
 }
 
 extension APIError {
-    /// True for errors where a future retry might succeed. Used by callers
-    /// that want to bias toward fresh data — initialization, for instance,
-    /// retains the disk cache only on retryable failures.
+    /// True for errors where a future retry might succeed. Callers use it to
+    /// decide whether to retry and how loudly to log — initialization, for
+    /// instance, keeps its disk cache on any failure and only logs this flag.
     var isRetryable: Bool {
         switch self {
         case .malformedURL, .decoding:

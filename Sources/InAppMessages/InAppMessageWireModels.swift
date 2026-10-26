@@ -17,8 +17,8 @@ import Foundation
 // MARK: - List response
 
 /// `GET /identities/communications` payload. We always pass
-/// `channelType=in-app` from the SDK, so every item's `type` is one of the
-/// in-app variants (currently `trial-rescue-in-app`).
+/// `channelType=in-app` from the SDK, so the list holds in-app communications
+/// only.
 struct CommunicationListResponse: Sendable, Codable, Hashable {
     let data: [CommunicationItem]
 }
@@ -26,7 +26,6 @@ struct CommunicationListResponse: Sendable, Codable, Hashable {
 /// One row in the communication list. Drives the public `InAppMessages.Message`.
 struct CommunicationItem: Sendable, Codable, Hashable {
     let id: UUID
-//    let type: CommunicationType
     /// Workflow the communication came from, as the server's raw value
     /// (`"trial-rescue"`, …). Nullable on the wire — the server returns null
     /// for broadcast / manual sends.
@@ -83,9 +82,9 @@ struct ResolveResponse: Sendable, Codable, Hashable {
     let data: ResolvedCommunication
 }
 
-/// Tagged union of the two outcomes the resolve endpoint returns. Custom
-/// `Codable` lets the server expand `payload` over time without rebuilding
-/// the SDK (we just stash anything we don't recognize as `.unknown`).
+/// Tagged union of the two outcomes the resolve endpoint returns. `valid:
+/// false` decodes as `.invalid`; otherwise `payload` is kept as opaque JSON,
+/// so the server can expand it over time without rebuilding the SDK.
 enum ResolvedCommunication: Sendable, Codable, Hashable {
     case valid(Valid)
     case invalid

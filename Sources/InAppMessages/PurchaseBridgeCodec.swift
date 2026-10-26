@@ -18,7 +18,6 @@
 //
 
 import Foundation
-#if canImport(StoreKit)
 import StoreKit
 
 enum PurchaseBridgeCodec {
@@ -128,5 +127,3 @@ enum PurchaseBridgeCodec {
         }
     }
 }
-
-#endif // canImport(StoreKit)

@@ -174,8 +174,10 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
     /// Guards the one-shot bundle load from the sheet's `onAppear`.
     private var didLoadBundle = false
 
-    /// Bridge held strongly — `WKUserContentController.add(_:name:)` only
-    /// keeps a weak ref, so the channel dies the moment we drop the bridge.
+    /// Bridge for the prepared WebView. WebKit already retains it strongly as
+    /// the script-message handler; held here to hand to
+    /// `InAppMessageWebViewFactory.tearDown(webView:bridge:)`, which removes
+    /// that handler.
     private var bridge: NativeBridge?
 
     /// In-flight prepare. Cancelled if a newer message arrives so we never
@@ -255,10 +257,6 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
         tearDown()
     }
 
-    /// Idempotent state reset. Cancels any in-flight prepare, severs
-    /// every native ↔ WebView edge (so WebKit can wind down its
-    /// resources eagerly), drops the WebView + bridge + reveal flag, and
-    /// asks the SDK to forget the active message id on the GalvaActor.
     /// Load the prepared bundle once, from the sheet content's `onAppear` — the
     /// point where the WebView is in the sheet's window and its safe-area insets
     /// are valid. Booting the page here (rather than at prepare time, off-screen)
@@ -270,6 +268,10 @@ private final class InAppMessagePresentationCoordinator: ObservableObject {
         webView.loadFileURL(bundleURL, allowingReadAccessTo: bundleURL.deletingLastPathComponent())
     }
 
+    /// Idempotent state reset. Cancels any in-flight prepare, severs
+    /// every native ↔ WebView edge (so WebKit can wind down its
+    /// resources eagerly), drops the WebView + bridge + reveal flag, and
+    /// asks the SDK to forget the active message id on the GalvaActor.
     private func tearDown() {
         prepareTask?.cancel()
         prepareTask = nil

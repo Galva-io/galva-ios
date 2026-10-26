@@ -5,9 +5,10 @@
 #   • test      — swift test (~20s, 200+ tests)
 #   • test-ios  — the same tests on an iOS Simulator, including the UIKit /
 #                 WebKit ones `swift test` on macOS doesn't build
-#
-# Keep them fast — anything that legitimately needs a long-running matrix
-# belongs in release.yml.
+#   • e2e       — scripts/e2e.sh: the demo app's UI tests against an
+#                 in-process mock
+#   • perf      — scripts/perf.sh: the SDK's overhead in the demo app; fails
+#                 if extra memory passes its budget
 
 name: CI
 

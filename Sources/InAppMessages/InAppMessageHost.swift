@@ -5,7 +5,7 @@
 //  Contract between `NativeBridge` and whatever is hosting the WebView
 //  presentation. The bridge doesn't care whether the WebView lives inside
 //  a UIKit sheet (`InAppMessagePresenter`) or a SwiftUI sheet
-//  (`InAppMessageSheetCoordinator`) — it only needs to:
+//  (`InAppMessagePresentationCoordinator`) — it only needs to:
 //
 //      • Read the `WKWebView` to post `evaluateJavaScript` responses.
 //      • Read safe-area insets for `getPageContext().safeArea`.
@@ -30,10 +30,11 @@ import UIKit
 #if canImport(WebKit) && canImport(UIKit)
 
 /// Pair returned by `SDKCore.prepareInAppMessage(_:host:)` — the SwiftUI
-/// coordinator mounts the `webView` inside a `UIViewRepresentable` and
-/// retains the `bridge` strongly for the lifetime of the sheet (the
-/// `WKUserContentController.add(_:name:)` reference to the bridge is
-/// weak, so dropping the bridge tears the channel down).
+/// coordinator mounts the `webView` inside a `UIViewRepresentable` and keeps
+/// the `bridge` for the lifetime of the sheet. WebKit retains the bridge
+/// strongly as the script-message handler; the coordinator holds it to hand
+/// to `InAppMessageWebViewFactory.tearDown(webView:bridge:)`, which removes
+/// that handler on dismiss.
 ///
 /// `@unchecked Sendable` because both `WKWebView` and `NativeBridge` are
 /// `@MainActor`-isolated reference types — passing the pointer across
@@ -50,8 +51,8 @@ struct PreparedInAppMessage: @unchecked Sendable {
 
 /// What `NativeBridge` needs from its presentation owner. Both
 /// `InAppMessagePresenter` (UIKit sheet via `present(animated:)`) and
-/// `InAppMessageSheetCoordinator` (SwiftUI `.sheet(item:)` content)
-/// conform to this — the bridge stays platform-agnostic.
+/// `InAppMessagePresentationCoordinator` (drives the SwiftUI
+/// `.sheet(item:)`) conform to this — the bridge stays platform-agnostic.
 ///
 /// Marked `Sendable` so `any InAppMessageHost` values can cross from
 /// `SDKCore`'s `@GalvaActor` context into the `MainActor.run` block

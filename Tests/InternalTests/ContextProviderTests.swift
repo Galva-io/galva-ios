@@ -2,9 +2,9 @@
 //  ContextProviderTests.swift
 //  GalvaTests
 //
-//  Covers `ContextProvider.sessionProperties()` — the property bag attached
-//  to the auto-tracked `session_start` event. The point of routing these
-//  through `ContextProvider` (rather than re-reading `ProcessInfo` /
+//  Covers `ContextProvider.sessionStartEvent()` — the typed `session_start`
+//  event (`SessionStartEvent`) the SDK auto-tracks. The point of routing its
+//  values through `ContextProvider` (rather than re-reading `ProcessInfo` /
 //  `Bundle` / `Locale` independently) is consistency: a session_start's
 //  custom properties must agree with the `context` envelope on its own
 //  message. These tests pin that contract.

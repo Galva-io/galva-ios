@@ -36,8 +36,9 @@ final class InAppMessageUITests: XCTestCase {
         // home-indicator insets), not `.zero`. On a notched simulator the bundle
         // surfaces a `safeArea:nonzero…` marker (top>0 OR bottom>0) once
         // getPageContext resolves. This exercises automatic presentation, the
-        // SDK's own UIKit presenter. Requires a notched device — CI pins
-        // iPhone 16 Pro.
+        // SDK's own UIKit presenter. Requires a notched simulator — CI and
+        // scripts/e2e.sh take the first available iPhone, so set
+        // GALVA_E2E_DESTINATION to pin one.
         assertNonZeroSafeArea(scenario: .showInAppMessage)
     }
 
@@ -233,10 +234,11 @@ final class InAppMessageUITests: XCTestCase {
             NSPredicate(format: "label BEGINSWITH %@", "msgid:22222222")
         ).firstMatch
         XCTAssertTrue(deepLinkMsg.waitForExistence(timeout: 15),
-                      "the deep-link WebView must serve its OWN message id (Fix A)")
+                      "the deep-link WebView must serve its OWN message id")
 
         // A concurrent poll now delivers a DIFFERENT message (44444444-…). The
-        // SwiftUI auto-display must yield to the active deep-link (Fix B).
+        // SDK's automatic presenter must not stack it on the active deep-link
+        // sheet.
         tapControl(app, "nextMessage")
         let pollMsg = app.webViews.staticTexts.matching(
             NSPredicate(format: "label BEGINSWITH %@", "msgid:44444444")

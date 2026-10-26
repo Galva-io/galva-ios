@@ -73,7 +73,7 @@ final class SDKCoreOptOutTests: XCTestCase {
         // message, plus any other startup-time messages).
         let baseline = await harness.consumer.allMessages.count
 
-        await Self.setOptedOut(true)
+        await harness.core.setOptedOut(true)
         await harness.core.track(event: "after_optout", properties: nil)
         // Give the queue runloop a chance to drain anything that was
         // already enqueued before the opt-out. New messages should
@@ -91,7 +91,7 @@ final class SDKCoreOptOutTests: XCTestCase {
         defer { harness.cleanup() }
 
         let baseline = await harness.consumer.allMessages.count
-        await Self.setOptedOut(true)
+        await harness.core.setOptedOut(true)
         await harness.core.identify(
             userId: "user_after_optout",
             appAccountToken: nil,
@@ -111,7 +111,7 @@ final class SDKCoreOptOutTests: XCTestCase {
         defer { harness.cleanup() }
 
         let baseline = await harness.consumer.allMessages.count
-        await Self.setOptedOut(true)
+        await harness.core.setOptedOut(true)
         await harness.core.createEndpoint(.pushNotification(platform: .apns, token: "tok"))
         await eventually(timeout: 0.5) {
             await harness.consumer.allMessages.count == baseline
@@ -126,9 +126,9 @@ final class SDKCoreOptOutTests: XCTestCase {
         let harness = await SDKHarness.makeConfigured()
         defer { harness.cleanup() }
 
-        await Self.setOptedOut(true)
+        await harness.core.setOptedOut(true)
         await harness.core.track(event: "while_opted_out", properties: nil)
-        await Self.setOptedOut(false)
+        await harness.core.setOptedOut(false)
         await harness.core.track(event: "after_opt_back_in", properties: nil)
 
         await waitForMessages(harness.consumer, count: 1, timeout: 2.0)
@@ -137,12 +137,21 @@ final class SDKCoreOptOutTests: XCTestCase {
         XCTAssertFalse(events.contains("while_opted_out"))
     }
 
-    // MARK: - Helpers
+    // MARK: - Queue purge
 
-    /// Routes through the GalvaActor-isolated setter so the call
-    /// matches the production path the public API takes.
-    @GalvaActor
-    private static func setOptedOut(_ value: Bool) async {
-        await SDKCore.shared.setOptedOut(value)
+    func test_optingOut_purgesEventsStillQueued() async throws {
+        let harness = await SDKHarness.makeConfigured()
+        defer { harness.cleanup() }
+
+        // An event still waiting to upload. Stored straight into storage,
+        // so the queue doesn't flush it before the opt-out lands.
+        try await harness.storage.storeMessage(.makeTrack(event: "pending_upload"))
+
+        await harness.core.setOptedOut(true)
+
+        let stored = try await harness.storage.getQueueSize()
+        XCTAssertEqual(stored, 0, "opting out purges what's still queued")
+        let events = await harness.consumer.consumedEvents
+        XCTAssertFalse(events.contains("pending_upload"))
     }
 }

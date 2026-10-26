@@ -24,9 +24,6 @@ class MessageStorageContractTests: XCTestCase {
     /// when XCTest runs it directly.
     func makeStorage() async throws -> (any MessageStorage)? { nil }
 
-    /// Override for any per-test cleanup (e.g. delete the .db file).
-    func cleanupStorage(_: any MessageStorage) async {}
-
     // MARK: Round-trip
 
     func test_contract_storeAndFetchSingle() async throws {

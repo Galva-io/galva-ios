@@ -37,7 +37,6 @@
 
 import Foundation
 
-#if canImport(StoreKit)
 import StoreKit
 
 // MARK: - GalvaPurchaseController
@@ -215,5 +214,3 @@ enum PurchaseControllerRegistry {
         }
     }
 }
-
-#endif // canImport(StoreKit)

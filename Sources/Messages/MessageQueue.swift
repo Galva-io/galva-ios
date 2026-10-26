@@ -56,6 +56,7 @@ class MessageQueue {
     enum State {
         case idle
         case processing
+        /// Set by `stop()`, which only tests call.
         case stopped
     }
 
@@ -92,8 +93,8 @@ class MessageQueue {
         self.logger = logger
     }
 
-    /// Convenience initializer — picks SQLite under the app's Documents
-    /// directory using `name` as the file stem; falls back to in-memory if
+    /// Convenience initializer — picks SQLite under the app's Application
+    /// Support directory using `name` as the file stem; falls back to in-memory if
     /// SQLite fails to open. Production callers use this; tests inject a
     /// storage explicitly via the designated initializer.
     nonisolated convenience init(
@@ -197,6 +198,7 @@ class MessageQueue {
         }
     }
 
+    /// Messages currently stored. Used by tests.
     var size: Int {
         get async throws {
             try await storage.getQueueSize()
@@ -356,6 +358,8 @@ class MessageQueue {
         }
     }
 
+    /// Stop the runloop; `startRunloop()` restarts it. Used by tests — the
+    /// SDK's queue runs for the life of the process.
     func stop() async {
         state = .stopped
         processingTask?.cancel()

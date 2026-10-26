@@ -183,6 +183,7 @@ Integration packages depend on a released version of this SDK, so release here f
 
 - `lint` — `scripts/lint.sh`
 - `test` — `swift test --parallel`
+- `test-ios` — `xcodebuild test` on an iOS Simulator, which also runs the UIKit / WebKit tests `swift test` on macOS doesn't build
 - `e2e` — `scripts/e2e.sh`, the demo app's UI tests against an in-process mock
 - `perf` — `scripts/perf.sh`, which fails if the SDK's memory overhead passes its budget
 

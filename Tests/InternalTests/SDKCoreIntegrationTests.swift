@@ -85,7 +85,7 @@ final class SDKCoreIntegrationTests: XCTestCase {
 
         await harness.configure()
 
-        XCTAssertTrue(harness.core.isConfigured)
+        XCTAssertTrue(harness.core.configured)
     }
 
     func test_contextLogger_followsLoggerAndLevelSetAfterInstall() async throws {

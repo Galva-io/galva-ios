@@ -3,7 +3,7 @@
 //  Galva
 //
 //  Parses Galva deep links into a strongly-typed route. Galva owns URL
-//  schemes that begin with `gv` (e.g. `gvAbc123://…`, the per-app scheme
+//  schemes that begin with `gv` (e.g. `gv-abc123://…`, the per-app scheme
 //  Galva assigns); every other scheme — `http`/`https`, the host app's own
 //  custom schemes — is ignored so the app's existing links pass through
 //  untouched.

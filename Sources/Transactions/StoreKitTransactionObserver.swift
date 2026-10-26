@@ -54,11 +54,7 @@
 //
 
 import Foundation
-#if canImport(StoreKit)
 import StoreKit
-#endif
-
-#if canImport(StoreKit)
 
 @GalvaActor
 final class StoreKitTransactionObserver {
@@ -122,9 +118,9 @@ final class StoreKitTransactionObserver {
         let anonymousId = identity.anonymousId
         let endUserId = identity.endUserId
 
-        // Snapshot the existing dedupe set so we can revert it on
-        // network failure — we only consider mappings "reported" after
-        // the server acks them.
+        // Mappings count as "reported" only once the server acks them: the
+        // ids this sweep newly inserts into `reportedIds` are collected in
+        // `fresh` and removed again if the post fails.
         var fresh: [String] = []
         for await result in Transaction.all {
             let transaction: Transaction
@@ -216,5 +212,3 @@ struct EmptyAPIResponse: Decodable, Sendable {
         _ = try? decoder.singleValueContainer().decode(AnyJSONValue.self)
     }
 }
-
-#endif // canImport(StoreKit)

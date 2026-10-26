@@ -31,9 +31,7 @@ import UIKit
 #if canImport(WebKit)
 import WebKit
 #endif
-#if canImport(StoreKit)
 import StoreKit
-#endif
 
 @GalvaActor
 final class SDKCore {
@@ -51,11 +49,9 @@ final class SDKCore {
     // MARK: State
     //
     // A few members below are deliberately `internal` rather than `private`
-    // so that `SDKCore+Testing.swift` (a same-module extension) can wire
-    // pre-built dependencies in without going through the production
-    // `configure(apiKey:...)` path. Keep the *production* surface that
-    // touches these members in this file; testing helpers live in the
-    // extension.
+    // so that the test target's `configureForTesting` (reached through
+    // `@testable import`) can wire pre-built dependencies in without going
+    // through the production `configure(apiKey:...)` path.
 
     var configured = false
     private var logLevel: Galva.LogLevel = .warning
@@ -92,9 +88,7 @@ final class SDKCore {
     /// message offers. Populated after each successful /sdk/initialize
     /// refresh; the WebView presenter injects its current snapshot as
     /// `window.galvaProducts` on every present.
-    #if canImport(StoreKit)
     var storeKitPrefetcher: StoreKitProductPrefetcher?
-    #endif
 
     /// `Transaction.all` sweeper that posts
     /// `(originalTransactionId, userId)` mappings to Galva so organic
@@ -102,9 +96,7 @@ final class SDKCore {
     /// to the right user even when no `appAccountToken` made it onto the
     /// App Store receipt. See
     /// https://docs.galva.io/integrations/app-store#match-purchases-to-subscribers
-    #if canImport(StoreKit)
     var transactionObserver: StoreKitTransactionObserver?
-    #endif
 
     /// Foreground lifecycle observer driving the in-app message poller.
     /// Held to keep the registration alive across the SDK's lifetime.
@@ -227,16 +219,10 @@ final class SDKCore {
         submit { await $0.optOutDidChange(to: value) }
     }
 
-    /// `requestOptOut` for callers already on GalvaActor, which also waits
-    /// for the purge.
-    func setOptedOut(_ value: Bool) async {
-        guard Self.setOptedOutFlag(value) else { return }
-        await optOutDidChange(to: value)
-    }
-
     /// Purge the queue on the false → true transition so pre-existing events
-    /// don't leak after the user opts out.
-    private func optOutDidChange(to value: Bool) async {
+    /// don't leak after the user opts out. Internal so the tests'
+    /// `setOptedOut` can await it.
+    func optOutDidChange(to value: Bool) async {
         if value {
             // Drop everything still on disk so opting back in doesn't
             // resurrect events the user wanted ignored.
@@ -273,8 +259,6 @@ final class SDKCore {
         Self._appAccountToken = value
         Self._appAccountTokenLock.unlock()
     }
-
-    var currentEndUserId: String? { identity?.endUserId }
 
     // MARK: Startup gate
     //
@@ -476,9 +460,7 @@ final class SDKCore {
                         maxCount: live.batchCollection.flushAtCount
                     )
                 }
-                #if canImport(StoreKit)
                 self.storeKitPrefetcher?.prefetch(productIds: live.storekitProductIds)
-                #endif
             }
         }
 
@@ -490,11 +472,11 @@ final class SDKCore {
         await finishConfiguring(queue: queue, integrations: integrations)
     }
 
-    /// The end of `configure()`, shared with `configureForTesting`: seed the
-    /// anonymous identify, replay a deep link that arrived early, run the
-    /// calls the app made meanwhile, then start the queue. Those calls don't
-    /// wait for the queue to upload what a previous launch left, which can
-    /// take a while. Until the queue starts, emits are only stored, so the
+    /// The end of `configure()`, shared with the tests' `configureForTesting`:
+    /// seed the anonymous identify, replay a deep link that arrived early, run
+    /// the calls the app made meanwhile, then start the queue. Those calls
+    /// don't wait for the queue to upload what a previous launch left, which
+    /// can take a while. Until the queue starts, emits are only stored, so the
     /// seed identify still goes out first.
     func finishConfiguring(queue: MessageQueue, integrations: [Galva.Integration]) async {
         configured = true
@@ -585,9 +567,7 @@ final class SDKCore {
         }
         self.bundleCache = bundleCache
 
-        // StoreKit warm-cache. Always available on Apple platforms; the
-        // canImport guard is defensive for non-Apple builds (linux).
-        #if canImport(StoreKit)
+        // StoreKit warm-cache.
         self.storeKitPrefetcher = StoreKitProductPrefetcher(logger: logger)
         // Warm immediately if we have cached init data — yesterday's
         // catalog is a fine starting point on cold start. The refresh
@@ -606,7 +586,6 @@ final class SDKCore {
             identity: identity,
             logger: logger
         )
-        #endif
 
         // Durable retry queue for `shouldRetry` apiFetch requests. Owns its
         // own SQLite store (separate failure domain from the event queue) and
@@ -666,11 +645,9 @@ final class SDKCore {
                     await self.inAppMessageManager?.poll()
                     // Transaction observer is server-bound telemetry —
                     // skip when opted out so we don't leak originalIds.
-                    #if canImport(StoreKit)
                     if !self.isOptedOut {
                         await self.transactionObserver?.sweep()
                     }
-                    #endif
                     // Retry any durable apiFetch requests that failed earlier
                     // (network was down, app was killed mid-flight). Forced —
                     // foreground is a good moment to retry sooner than the
@@ -987,9 +964,7 @@ final class SDKCore {
         inAppMessageManager?.reset()
         let stream = inAppMessageStream
         Task { @MainActor in stream.discardHeldMessage() }
-        #if canImport(StoreKit)
         transactionObserver?.reset()
-        #endif
     }
 
     // MARK: Transaction reconciliation
@@ -1009,9 +984,7 @@ final class SDKCore {
             logger.debug(.purchases, "reconcileTransactions skipped (opted out)")
             return
         }
-        #if canImport(StoreKit)
         await transactionObserver?.sweep()
-        #endif
     }
 
     // MARK: Track
@@ -1121,18 +1094,12 @@ final class SDKCore {
         // It crosses as `[String: AnyJSONValue]` (a Sendable, structured JSON
         // value), NOT a pre-serialized string: the presenter / factory owns
         // serialization at the `window.galvaProducts` injection boundary.
-        #if canImport(StoreKit)
         let products = storeKitPrefetcher?.currentSummaryObject() ?? [:]
-        #else
-        let products: [String: AnyJSONValue] = [:]
-        #endif
 
         // Snapshot the prefetcher reference too — it crosses the hop as
         // a sendable reference (GalvaActor-isolated class, but reference
         // passing is safe; we only call its methods through await).
-        #if canImport(StoreKit)
         let prefetcher = self.storeKitPrefetcher
-        #endif
 
         // Hop to MainActor to construct / reuse the presenter. The
         // presenter then runs its async show() on the main actor.
@@ -1142,7 +1109,6 @@ final class SDKCore {
                 if let existing = self.presenter {
                     presenter = existing
                 } else {
-                    #if canImport(StoreKit)
                     presenter = InAppMessagePresenter(
                         messageManager: manager,
                         identity: identity,
@@ -1150,14 +1116,6 @@ final class SDKCore {
                         storeKitPrefetcher: prefetcher,
                         logger: snapshotLogger
                     )
-                    #else
-                    presenter = InAppMessagePresenter(
-                        messageManager: manager,
-                        identity: identity,
-                        bundleCache: bundleCache,
-                        logger: snapshotLogger
-                    )
-                    #endif
                     self.presenter = presenter
                 }
                 return presenter
@@ -1231,23 +1189,19 @@ final class SDKCore {
         //    GalvaActor before crossing to MainActor. Products cross as a
         //    Sendable `[String: AnyJSONValue]`; the factory serializes them
         //    at the `window.galvaProducts` injection boundary.
-        #if canImport(StoreKit)
         let products = storeKitPrefetcher?.currentSummaryObject() ?? [:]
         let prefetcher = self.storeKitPrefetcher
-        #else
-        let products: [String: AnyJSONValue] = [:]
-        #endif
 
-        // 4. Mark active so the bridge's getPageContext / getMessageData
-        //    / requestPurchase calls all see this id. Synchronous —
-        //    we're already on the GalvaActor with the manager.
+        // 4. Mark active: spends the stint's display slot and records the
+        //    message as presented, so later polls and deep links don't
+        //    surface it again. Synchronous — we're already on the
+        //    GalvaActor with the manager.
         manager.setActiveMessageId(message.id)
 
         // 5. Build the WebView + bridge on the main actor — with the same
         //    navigation policy as the UIKit sheet — and hand the pair back.
         //    The coordinator retains both for the lifetime of the sheet.
         return await MainActor.run {
-            #if canImport(StoreKit)
             let (webView, bridge) = InAppMessageWebViewFactory.make(
                 messageId: message.id,
                 bundleURL: bundleURL,
@@ -1258,17 +1212,6 @@ final class SDKCore {
                 prefetchedProducts: products,
                 logger: snapshotLogger
             )
-            #else
-            let (webView, bridge) = InAppMessageWebViewFactory.make(
-                messageId: message.id,
-                bundleURL: bundleURL,
-                messageManager: manager,
-                identity: identity,
-                host: host,
-                prefetchedProducts: products,
-                logger: snapshotLogger
-            )
-            #endif
             // NOTE: the bundle is NOT loaded here. The coordinator loads it from
             // the sheet's `onAppear`, so the page boots (and reads safe-area
             // insets) only once the WebView is in the sheet's window — otherwise
@@ -1282,8 +1225,8 @@ final class SDKCore {
     }
 
     /// Clear the active message id. Called by the SwiftUI coordinator on
-    /// dismiss so the bridge doesn't serve stale `getMessageData()` /
-    /// `requestPurchase` calls to a sheet that's already off screen.
+    /// dismiss so, with nothing on screen, the next return event's poll can
+    /// reset the stint's display slot.
     func clearActiveMessage() async {
         inAppMessageManager?.setActiveMessageId(nil)
     }

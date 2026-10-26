@@ -16,9 +16,6 @@ import Foundation
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(WatchKit)
-import WatchKit
-#endif
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -34,8 +31,7 @@ struct DeviceSnapshot: Sendable, Hashable {
     var screenHeight: Double?
     var screenDensity: Double?
 
-    /// Empty snapshot (used as a safe default before the UI is reachable, or
-    /// on platforms where these values don't apply).
+    /// Empty snapshot (used as a safe default before the UI is reachable).
     static let empty = DeviceSnapshot()
 
     /// Capture UI-bound values from the current platform. Must be invoked on
@@ -57,13 +53,6 @@ struct DeviceSnapshot: Sendable, Hashable {
         snap.screenHeight  = Double(s.bounds.height * s.scale)
         snap.screenDensity = Double(s.scale)
 
-        #elseif canImport(WatchKit)
-        let d = WKInterfaceDevice.current()
-        snap.deviceName = d.name
-        snap.deviceType = "watch"
-        snap.osName = d.systemName
-        snap.osVersion = d.systemVersion
-
         #elseif canImport(AppKit)
         snap.deviceName = Host.current().localizedName
         snap.deviceType = "desktop"
@@ -75,10 +64,6 @@ struct DeviceSnapshot: Sendable, Hashable {
             snap.screenHeight  = Double(s.frame.height * s.backingScaleFactor)
             snap.screenDensity = Double(s.backingScaleFactor)
         }
-        #else
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        snap.osName = "linux"
-        snap.osVersion = "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
         #endif
 
         return snap
@@ -125,7 +110,7 @@ struct ContextProvider: Sendable {
 
     // MARK: - Session event properties
 
-    /// Property bag for the auto-tracked `session_start` event (see
+    /// The typed event for the auto-tracked `session_start` (see
     /// `SessionTracker`). Every value is derived from the same snapshot /
     /// bundle / library constants that feed `currentContext()`, so a
     /// session_start's custom properties never disagree with the `context`

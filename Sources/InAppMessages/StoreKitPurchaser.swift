@@ -20,10 +20,9 @@
 //  `promotionalOffer(offerID:keyID:nonce:signature:timestamp:)` form (and
 //  the iOS 17.4 `Signature`-wrapped variant) in favor of
 //  `promotionalOffer(_:compactJWS:)`. Galva commits to the JWS path so the
-//  server only needs one signing pipeline. Older OSes that don't have the
-//  JWS API surface `Failure.invalidOffer` so the bundle can present an
-//  "update iOS to redeem" state instead of attempting a fallback that
-//  would silently drop the discount.
+//  server only needs one signing pipeline. Apple back-deployed that API to
+//  the SDK's floor (iOS 15 / macOS 12), so there's no OS check and no
+//  fallback that could silently drop the discount.
 //
 //  Outputs:
 //      • `Outcome.completed(…)`            — verified + completed
@@ -51,11 +50,7 @@
 //
 
 import Foundation
-#if canImport(StoreKit)
 import StoreKit
-#endif
-
-#if canImport(StoreKit)
 
 @MainActor
 struct StoreKitPurchaser {
@@ -65,7 +60,7 @@ struct StoreKitPurchaser {
     let prefetcher: StoreKitProductPrefetcher?
     let logger: any GalvaLogger
 
-    // MARK: - Public types
+    // MARK: - Types
 
     /// Promotional offer parameters. Galva's backend signs offers as JWS
     /// compact strings (header.payload.signature, base64url-encoded). The
@@ -232,15 +227,10 @@ struct StoreKitPurchaser {
     /// multiple internal options (offerID, signed timestamp, signature,
     /// etc.) that the purchase flow expects to find independently.
     ///
-    /// Availability: Apple back-deployed this API to iOS 15 / macOS 12
-    /// / tvOS 15 / watchOS 8 / visionOS 1 — the SDK's deployment floor —
-    /// via `@backDeployed(before: iOS 26.0, …)`. No runtime
-    /// `#available` gate is needed; the symbol is safe to call on every
-    /// supported OS.
-    ///
-    /// `throws` is preserved despite being a no-throw body today so a
-    /// future malformed-JWS check can land here without re-plumbing
-    /// every call site.
+    /// Availability: Apple back-deployed this API to iOS 15 / macOS 12 —
+    /// the SDK's deployment floor — via `@backDeployed(before: iOS 26.0, …)`.
+    /// No runtime `#available` gate is needed; the symbol is safe to call
+    /// on every supported OS.
     private func makePromotionalOptions(
         _ promo: PromotionalOffer
     ) -> [Product.PurchaseOption] {
@@ -366,5 +356,3 @@ extension StoreKitPurchaser.Failure {
         }
     }
 }
-
-#endif // canImport(StoreKit)

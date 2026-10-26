@@ -10,7 +10,7 @@
 # 2026-12-02 anyway). The React Native vendor step copies this file alongside
 # `Sources/`, and that package's podspec applies it:
 #
-#     require_relative 'ios/galva/galva-build.rb'
+#     require_relative 'ios/galva-src/galva-build.rb'
 #     Pod::Spec.new do |s|
 #       # ...glue + vendored source_files...
 #       galva_apply_build_settings(s)
@@ -27,9 +27,8 @@
 #
 # System frameworks (UIKit, WebKit, StoreKit, UserNotifications, AdServices)
 # are intentionally NOT listed. Swift autolinking emits each one's link
-# directive from its `import` statement (every import sits behind a
-# `#if canImport(...)` gate), exactly as under SPM — so listing them here
-# would be a second source of truth that could drift from the code.
+# directive from its `import` statement, exactly as under SPM — so listing
+# them here would be a second source of truth that could drift from the code.
 #
 # iOS-only: the React Native pod targets iOS, so the macOS platform that
 # Package.swift also supports is deliberately omitted here.
@@ -45,7 +44,7 @@ end
 # declarations in their privacy report. Pass the vendored `Sources/`
 # directory, relative to the podspec:
 #
-#     galva_apply_privacy_manifest(s, 'ios/galva/Sources')
+#     galva_apply_privacy_manifest(s, 'ios/galva-src/Sources')
 #
 # Opt-in so existing podspecs keep working until they call it. It sets
 # `resource_bundles`, replacing any the podspec set before.

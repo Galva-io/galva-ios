@@ -31,8 +31,7 @@ extension NativeBridge {
     /// `UIApplication.canOpenURL`, and call `UIApplication.open`. The
     /// completion handler logs success / failure at debug / warning
     /// severity — the bundle's Promise resolves synchronously with
-    /// `.bool(true)` as soon as we hand the URL off (matching the
-    /// "fire-and-forget" semantics of the legacy bridge).
+    /// `.bool(true)` as soon as we hand the URL off (fire-and-forget).
     func openURL(
         from payload: [String: AnyJSONValue]?,
         logTag: String

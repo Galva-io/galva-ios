@@ -51,9 +51,7 @@ import WebKit
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(StoreKit)
 import StoreKit
-#endif
 
 #if canImport(WebKit) && canImport(UIKit)
 
@@ -65,7 +63,7 @@ let kGalvaBridgeHandlerName = "galva"
 final class NativeBridge: NSObject, WKScriptMessageHandler {
 
     /// Whoever owns the WebView presentation — `InAppMessagePresenter`
-    /// for the UIKit path, `InAppMessageSheetCoordinator` for SwiftUI.
+    /// for the UIKit path, `InAppMessagePresentationCoordinator` for SwiftUI.
     /// The bridge stays platform-agnostic by talking through the
     /// `InAppMessageHost` protocol.
     weak var host: (any InAppMessageHost)?
@@ -90,22 +88,19 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
     /// `requestPurchase` resolve against THIS id — not a shared global active id
     /// — so a bridge always serves its own message's data even if a second
     /// presentation is momentarily live (e.g. a deep-link message + a
-    /// concurrently-polled auto-display message).
+    /// concurrently-polled message presented by `.automatic`).
     let messageId: String
 
     let messageManager: InAppMessageManager
     let identity: IdentityStore
     let logger: any GalvaLogger
 
-    #if canImport(StoreKit)
     /// Warm cache used by `requestPurchase` to skip a `Product.products(for:)`
     /// round-trip when the SDK already pre-fetched the SKU during
     /// `/sdk/initialize`. Optional — purchase still works without it
     /// (cold-path live fetch inside `StoreKitPurchaser`).
     let storeKitPrefetcher: StoreKitProductPrefetcher?
-    #endif
 
-    #if canImport(StoreKit)
     init(
         messageId: String,
         messageManager: InAppMessageManager,
@@ -119,19 +114,6 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
         self.storeKitPrefetcher = storeKitPrefetcher
         self.logger = logger
     }
-    #else
-    init(
-        messageId: String,
-        messageManager: InAppMessageManager,
-        identity: IdentityStore,
-        logger: any GalvaLogger
-    ) {
-        self.messageId = messageId
-        self.messageManager = messageManager
-        self.identity = identity
-        self.logger = logger
-    }
-    #endif
 
     // MARK: - WKScriptMessageHandler
 

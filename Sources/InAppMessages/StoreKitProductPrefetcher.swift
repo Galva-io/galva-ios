@@ -26,11 +26,7 @@
 //
 
 import Foundation
-#if canImport(StoreKit)
 import StoreKit
-#endif
-
-#if canImport(StoreKit)
 
 @GalvaActor
 final class StoreKitProductPrefetcher {
@@ -91,7 +87,6 @@ final class StoreKitProductPrefetcher {
     private func performFetch(productIds: [String], logger: any GalvaLogger) async {
         do {
             let fetched = try await loadProducts(productIds)
-            // Preserve the request order for stable diagnostics.
             var byId: [String: Product] = [:]
             for product in fetched { byId[product.id] = product }
             self.byId = byId
@@ -252,5 +247,3 @@ final class StoreKitProductPrefetcher {
         }
     }
 }
-
-#endif // canImport(StoreKit)

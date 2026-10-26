@@ -23,9 +23,7 @@
 //
 
 import Foundation
-#if canImport(StoreKit)
 import StoreKit
-#endif
 
 @GalvaActor
 final class InAppMessageManager {
@@ -64,7 +62,7 @@ final class InAppMessageManager {
     private var identityGeneration = 0
 
     /// Message ids that actually went ON SCREEN this run (deep-link,
-    /// programmatic, or auto-display). A presented communication must never
+    /// programmatic, or `.automatic` presentation). A presented communication must never
     /// re-present — not via a later poll (it also joins `seenIds`) and not via
     /// a re-fired `openCommunication` deep link (SwiftUI can re-deliver the
     /// same URL on scene reactivation; the deep-link route checks
@@ -441,16 +439,11 @@ final class InAppMessageManager {
     /// Read the App Store storefront's country code (ISO 3166-1 alpha-3)
     /// for inclusion in the resolve request's `billingContext.territory`.
     /// Returns `nil` when StoreKit can't surface a storefront — Simulator
-    /// without a `.storekit` config, user not signed into the App Store,
-    /// or non-Apple build target. The server treats `nil` as "no
-    /// storefront-specific rendering needed", so callers don't need to
-    /// guard against it.
+    /// without a `.storekit` config, or user not signed into the App
+    /// Store. The server treats `nil` as "no storefront-specific rendering
+    /// needed", so callers don't need to guard against it.
     private func currentStorefrontTerritory() async -> String? {
-        #if canImport(StoreKit)
-        return await Storefront.current?.countryCode
-        #else
-        return nil
-        #endif
+        await Storefront.current?.countryCode
     }
 
     // MARK: - WebView API proxy (`apiFetch` bridge)

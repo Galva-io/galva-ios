@@ -2,7 +2,8 @@
 //  SDKCoreTestSupport.swift
 //  GalvaTests
 //
-//  Shared harness for SDKCore integration tests.
+//  Shared harness for SDKCore integration tests, plus the SDKCore test
+//  hooks it configures through (`configureForTesting`, `setOptedOut`).
 //
 //  Each test builds an `SDKHarness` instance. The harness wires:
 //    • a fresh `SDKCore` (not the production singleton, so tests don't
@@ -23,7 +24,7 @@
 //
 
 import Foundation
-@testable import Galva
+@_spi(GalvaIntegration) @testable import Galva
 import XCTest
 
 /// Bundle of everything an SDKCore test needs: the SDK under test, the
@@ -150,6 +151,67 @@ struct SDKHarness: Sendable {
     }
 }
 
+// MARK: - SDKCore test hooks
+
+@GalvaActor
+extension SDKCore {
+
+    /// Wire up pre-built dependencies, skipping the production setup that
+    /// builds a real `Uploader` and a SQLite-backed `MessageQueue`. Then
+    /// runs the same startup as `configure(apiKey:autoTrack:logLevel:)` —
+    /// `beginConfiguring()` and `finishConfiguring(queue:integrations:)`:
+    ///   • a repeat call is ignored; `submit`ted calls wait for it, then run
+    ///     in order
+    ///   • seeds an initial identify with device traits, then replays a
+    ///     deferred deep link
+    ///   • starts the queue runloop
+    ///
+    /// `midConfigure` runs where production suspends for the MainActor
+    /// snapshot — after the identity is set, before the queue and context
+    /// exist — so a test can hold configure there.
+    ///
+    /// Tests construct their own SDKCore instance (not `.shared`) so state
+    /// doesn't leak between tests, and supply a queue backed by a recording
+    /// consumer to assert on emitted messages.
+    func configureForTesting(
+        identity: IdentityStore,
+        queue: MessageQueue,
+        contextProvider: ContextProvider,
+        logger: any GalvaLogger = OSLogLogger(),
+        integrations: [Galva.Integration] = [],
+        midConfigure: (@Sendable () async -> Void)? = nil
+    ) async {
+        guard beginConfiguring() else {
+            self.logger.warning(.configuration, "configure called more than once — ignoring")
+            return
+        }
+        // Mirror production: store the sink + level and rebuild the filter
+        // through the same code path. `.debug` so tests see every breadcrumb
+        // out of the box; later `installLogger(_:)` calls keep that level.
+        installLogger(logger, minLevel: .debug)
+        self.identity = identity
+        if let midConfigure { await midConfigure() }
+        self.queue = queue
+        self.contextProvider = contextProvider
+        setCachedEndUserId(identity.endUserId)
+        setCachedAppAccountToken(identity.purchaseAttributionToken)
+        self.logger.info(.configuration, "SDK configured (testing)", metadata: [
+            "anonymousId": identity.anonymousId,
+        ])
+        await finishConfiguring(queue: queue, integrations: integrations)
+    }
+
+    /// `requestOptOut` for tests: sets the flag, then waits for this core's
+    /// queue purge instead of submitting it.
+    func setOptedOut(_ value: Bool) async {
+        guard Self.setOptedOutFlag(value) else { return }
+        await optOutDidChange(to: value)
+    }
+
+    /// This core's identified user id (`nil` while anonymous).
+    var currentEndUserId: String? { identity?.endUserId }
+}
+
 /// One-shot signal: `wait()` suspends until `open()` is called. Two of them
 /// (reached / release) hold `SDKHarness.configure(midConfigure:)` mid-flight
 /// while a test makes calls.
@@ -169,22 +231,16 @@ actor TestGate {
     }
 }
 
-/// Tiny indirection so the harness can rebuild the MessageQueue inside
-/// `configure()` (the queue stored on the harness was used at construction
-/// only — we want the same queue at configure time but with the same
-/// consumer/storage so assertions still hold).
-///
-/// In practice we reuse the same queue instance — but routing through a
-/// helper makes it easy to swap in a different queue later (e.g. one with
-/// a batching window) without changing every test.
+/// Builds the `MessageQueue` a test core is configured with: a fresh queue
+/// over the harness's recording consumer and in-memory storage, so
+/// assertions on either see what the core emits.
 enum MessageQueueAccess {
     @GalvaActor
     static func queue(
         for consumer: RecordingConsumer,
-        storage: InMemoryMessageStorage,
-        options: MessageQueue.QueueOptions? = nil
+        storage: InMemoryMessageStorage
     ) -> MessageQueue {
-        MessageQueue(consumer: consumer, storage: storage, options: options)
+        MessageQueue(consumer: consumer, storage: storage)
     }
 }
 

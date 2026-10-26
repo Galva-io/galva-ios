@@ -14,7 +14,6 @@ import Foundation
 @testable import Galva
 import XCTest
 
-#if canImport(StoreKit)
 import StoreKit
 
 /// Stands in for `Product.products(for:)`: records each call, throws a
@@ -114,5 +113,3 @@ final class StoreKitProductPrefetcherTests: XCTestCase {
         XCTAssertEqual(calls, 1)
     }
 }
-
-#endif // canImport(StoreKit)

@@ -57,19 +57,19 @@ final class InAppMessagePresenter: NSObject {
     let bundleCache: WebViewBundleCache
     let logger: any GalvaLogger
 
-    #if canImport(StoreKit)
     /// Optional StoreKit warm-cache routed into the bridge so a
     /// `requestPurchase` call can resolve the `Product` without a
     /// round-trip when the SDK already fetched the SKU.
     let storeKitPrefetcher: StoreKitProductPrefetcher?
-    #endif
 
     /// Currently-presented VC, if any. Owned strongly so it stays alive
     /// for the lifetime of the presentation; dropped on dismiss.
     private(set) var viewController: InAppMessageViewController?
 
-    /// Bridge installed on the active VC's WebView. Kept here so the
-    /// WebView's weak script-handler reference stays valid.
+    /// Bridge installed on the active VC's WebView. WebKit already retains
+    /// it strongly as the script-message handler; the presenter keeps it to
+    /// hand to `InAppMessageWebViewFactory.tearDown(webView:bridge:)`, which
+    /// removes that handler on teardown.
     private var bridge: NativeBridge?
 
     /// ID of the message currently being presented. Used to dedupe
@@ -90,7 +90,6 @@ final class InAppMessagePresenter: NSObject {
     /// bridge reaches it through.
     var webView: WKWebView? { viewController?.webView }
 
-    #if canImport(StoreKit)
     init(
         messageManager: InAppMessageManager,
         identity: IdentityStore,
@@ -104,19 +103,6 @@ final class InAppMessagePresenter: NSObject {
         self.storeKitPrefetcher = storeKitPrefetcher
         self.logger = logger
     }
-    #else
-    init(
-        messageManager: InAppMessageManager,
-        identity: IdentityStore,
-        bundleCache: WebViewBundleCache,
-        logger: any GalvaLogger
-    ) {
-        self.messageManager = messageManager
-        self.identity = identity
-        self.bundleCache = bundleCache
-        self.logger = logger
-    }
-    #endif
 
     // MARK: - Show
 
@@ -291,8 +277,7 @@ final class InAppMessagePresenter: NSObject {
         // Both UIKit and SwiftUI presentation paths share the same
         // WebView + bridge construction; the factory keeps the two in
         // lockstep without copy-paste drift.
-        #if canImport(StoreKit)
-        return InAppMessageWebViewFactory.make(
+        InAppMessageWebViewFactory.make(
             messageId: messageId,
             bundleURL: bundleURL,
             messageManager: messageManager,
@@ -303,18 +288,6 @@ final class InAppMessagePresenter: NSObject {
             deepLinkParameters: deepLinkParameters,
             logger: logger
         )
-        #else
-        return InAppMessageWebViewFactory.make(
-            messageId: messageId,
-            bundleURL: bundleURL,
-            messageManager: messageManager,
-            identity: identity,
-            host: self,
-            prefetchedProducts: prefetchedProducts,
-            deepLinkParameters: deepLinkParameters,
-            logger: logger
-        )
-        #endif
     }
 
     /// Start a UIKit transition and wait for its completion until

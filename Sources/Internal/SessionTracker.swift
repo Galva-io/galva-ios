@@ -6,20 +6,23 @@
 //  in `autoTrackCategories` on `Galva.configure(...)`.
 //
 //  Session rules (see /sdk/overview/#session-tracking):
-//      • Cold start             → emit `session_start` immediately.
-//      • Foreground after 30+ minutes of background inactivity → emit.
-//      • Foreground within 30 minutes → no-op (session continues).
+//      • First launch           → emit `session_start` immediately.
+//      • Launch or foreground 30+ minutes after the last `session_start`
+//        → emit. The window is persisted (see Persistence below), so a
+//        relaunch inside it doesn't start a new session.
+//      • Launch or foreground within 30 minutes → no-op (session continues).
 //      • No `session_end` event — duration is computed server-side from
 //        successive `session_start` timestamps.
 //
-//  Event properties are built by `ContextProvider.sessionProperties()` so
-//  they're derived from the same snapshot / bundle / library values that
-//  populate every message's `context` envelope. A session_start's properties
-//  therefore never disagree with the `context` on its own message:
+//  The event is built by `ContextProvider.sessionStartEvent()`, so its
+//  properties are derived from the same snapshot / bundle / library values
+//  that populate every message's `context` envelope. A session_start's
+//  properties therefore never disagree with the `context` on its own message:
 //      • device_locale  — `Locale.current.identifier`
 //      • os_version     — `context.os.version` (`UIDevice.systemVersion`)
 //      • app_version    — `CFBundleShortVersionString` from Info.plist
-//      • sdk_version    — `SDKConstants.version`
+//      • sdk_version    — `SDKIdentity.version` (the wrapper's version
+//                         under React Native, else `SDKConstants.version`)
 //
 //  `device_country` is intentionally NOT included on the wire — the
 //  server derives it from the request IP, which is more reliable than

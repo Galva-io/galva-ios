@@ -7,7 +7,8 @@
 //  DEFERRED while anonymous and replays automatically on identify.
 //
 //  The `deepLinkTarget` scenario returns an empty poll, so nothing renders
-//  except as a direct result of the deep link (no auto-display interference).
+//  except as a direct result of the deep link (automatic presentation has
+//  nothing to show).
 //
 
 import XCTest

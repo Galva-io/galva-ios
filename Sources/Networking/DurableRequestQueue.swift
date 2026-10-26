@@ -190,7 +190,7 @@ final class DurableRequestQueue {
         }
     }
 
-    /// Number of requests currently awaiting delivery (diagnostics / tests).
+    /// Number of requests currently awaiting delivery. Used by tests.
     var pendingCount: Int {
         get async { (try? await store.count()) ?? 0 }
     }

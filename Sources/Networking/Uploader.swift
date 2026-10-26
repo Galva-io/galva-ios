@@ -151,7 +151,7 @@ actor Uploader: MessageUploader {
             return .retryable(UploadError.http(status: status, body: bodyString(body)))
         case 400..<500:
             // 4xx (other than 408/429) is a client error — payload is invalid,
-            // auth is wrong, etc. Retrying won't help. Quarantine the batch.
+            // auth is wrong, etc. Retrying won't help. Drop the batch (logged).
             return .permanent(UploadError.http(status: status, body: bodyString(body)))
         default:
             return .retryable(UploadError.http(status: status, body: bodyString(body)))

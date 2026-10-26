@@ -50,7 +50,7 @@ final class AppLifecycleObserver {
 
     /// UIApplication's didBecomeActive; `nil` where there is none (macOS).
     nonisolated static var applicationDidBecomeActive: Notification.Name? {
-        #if canImport(UIKit) && !os(watchOS)
+        #if canImport(UIKit)
         UIApplication.didBecomeActiveNotification
         #else
         nil
@@ -87,6 +87,8 @@ final class AppLifecycleObserver {
         }
     }
 
+    /// Remove the notification observers. Used by tests — SDKCore keeps its
+    /// observer for the SDK's lifetime.
     func stop() {
         for token in observers { center.removeObserver(token) }
         observers.removeAll()

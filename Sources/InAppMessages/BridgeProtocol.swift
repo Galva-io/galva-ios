@@ -131,9 +131,9 @@ struct BridgeError: Error, Sendable, Hashable, Codable {
 /// malicious bundle can probe but never invoke an unknown surface, while
 /// still getting a clean Promise rejection (with its `requestId`).
 enum BridgeMethod: String, Sendable, Hashable, Codable {
-    /// Anti-FOUC: reveal the overlay window after the bundle's first paint.
+    /// Anti-FOUC: reveal the sheet's WebView after the bundle's first paint.
     case ready
-    /// Close the overlay. Payload may carry `{ "reason": "..." }`.
+    /// Close the sheet. Payload may carry `{ "reason": "..." }`.
     case dismiss
     /// Return identity / locale / safe-area / storefront context.
     case getPageContext

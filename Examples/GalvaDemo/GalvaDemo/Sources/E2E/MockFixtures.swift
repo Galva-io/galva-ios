@@ -17,8 +17,10 @@ enum MockFixtures {
     static let pollMessageId = "11111111-1111-1111-1111-111111111111"
     /// Deep-link target communication id.
     static let deepLinkCommunicationId = "22222222-2222-2222-2222-222222222222"
-    /// Second, distinct message for the `showInAppMessageTwice` scenario. Shares
-    /// bundle `1.0.0` with `pollMessageId` so its presentation is a cache hit.
+    /// Second, distinct message, delivered by the "Next message" control. Shares
+    /// bundle `1.0.0` with `pollMessageId` so its presentation is a cache hit
+    /// (`showInAppMessageTwice`); the deep-link scenarios use it as the poll
+    /// message that must yield to the active deep link.
     static let secondMessageId = "44444444-4444-4444-4444-444444444444"
 
     private static let createdAt = "2026-06-18T10:30:00.000Z"
@@ -29,8 +31,9 @@ enum MockFixtures {
     """
 
     /// `GET /identities/communications` — scenario-dependent message list.
-    /// `second` selects the second message for `showInAppMessageTwice` (flipped
-    /// by the demo's "Next message" control).
+    /// `second` selects the second message for `showInAppMessageTwice`,
+    /// `deepLinkTarget` and `deepLinkRace` (flipped by the demo's "Next
+    /// message" control).
     static func poll(for scenario: E2EScenario, second: Bool = false) -> String {
         switch scenario {
         case .showInAppMessage, .showInAppMessageUIKit, .showInAppMessageSwiftUISheet:

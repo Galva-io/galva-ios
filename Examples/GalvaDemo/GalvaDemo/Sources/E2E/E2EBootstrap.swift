@@ -2,9 +2,10 @@
 //  E2EBootstrap.swift
 //  GalvaDemo
 //
-//  One-shot startup hook for UI-test runs: reset all prior SDK state (so each
-//  test starts anonymous with empty caches), select the mock scenario, and
-//  register the in-process mock transport — all before the SDK is configured.
+//  One-shot startup hook for UI-test runs: reset prior SDK state (so each
+//  test starts anonymous with an empty bundle cache), select the mock
+//  scenario, and register the in-process mock transport — all before the SDK
+//  is configured.
 //
 
 import Foundation
@@ -23,8 +24,10 @@ enum E2EBootstrap {
         return config
     }
 
-    /// Wipe everything the SDK persists so tests are independent: identity
-    /// (UserDefaults) and the on-disk caches (`<Caches>/galva/…`).
+    /// Wipe the SDK state tests depend on: identity, opt-out and session state
+    /// (UserDefaults) and the web-view bundle cache (`<Caches>/galva/`). The
+    /// queue databases and init cache in `<Application Support>/Galva/` are
+    /// kept.
     private static func resetState() {
         if let bundleId = Bundle.main.bundleIdentifier {
             UserDefaults.standard.removePersistentDomain(forName: bundleId)

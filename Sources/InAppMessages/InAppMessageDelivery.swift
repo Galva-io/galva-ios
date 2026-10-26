@@ -36,6 +36,8 @@ final class InAppMessageDelivery {
         }
     }
 
+    /// Stop presenting. Used by tests — SDKCore keeps its delivery for the
+    /// SDK's lifetime.
     func stop() {
         task?.cancel()
         task = nil
