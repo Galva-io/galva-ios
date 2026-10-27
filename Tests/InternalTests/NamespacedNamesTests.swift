@@ -2,11 +2,12 @@
 //  NamespacedNamesTests.swift
 //  GalvaTests
 //
-//  An app with its own `AppUser`, `AppEvents` or `InAppMessages` type
-//  reaches the SDK's through `Galva.AppUser`, `Galva.AppEvents` and
-//  `Galva.InAppMessages`. `ShadowingApp` plays that app: inside it the plain
-//  names mean its own types, so this file only compiles if the aliases
-//  exist and name the SDK's types.
+//  The SDK's `AppUser`, `AppEvents` and `InAppMessages` are declared under
+//  `Galva`, with the top-level names as shorthands. An app with its own type
+//  of one of those names reaches the SDK's through `Galva.AppUser`,
+//  `Galva.AppEvents` and `Galva.InAppMessages`. `ShadowingApp` plays that
+//  app: inside it the plain names mean its own types, so this file only
+//  compiles if the qualified names name the SDK's types.
 //
 
 import Foundation
@@ -43,5 +44,13 @@ final class NamespacedNamesTests: XCTestCase {
 
     func test_shadowingAppTypes_areTheApps() {
         XCTAssertFalse(ShadowingApp.AppUser.self == AppUser.self)
+    }
+
+    func test_typesAreDeclaredUnderGalva() {
+        // So no helper alias is needed to reach them from `Galva`, and none
+        // shows up in autocompletion.
+        XCTAssertEqual(String(reflecting: AppUser.self), "Galva.Galva.AppUser")
+        XCTAssertEqual(String(reflecting: AppEvents.self), "Galva.Galva.AppEvents")
+        XCTAssertEqual(String(reflecting: InAppMessages.self), "Galva.Galva.InAppMessages")
     }
 }

@@ -22,7 +22,9 @@
 //  `promotionalOffer(_:compactJWS:)`. Galva commits to the JWS path so the
 //  server only needs one signing pipeline. Apple back-deployed that API to
 //  the SDK's floor (iOS 15 / macOS 12), so there's no OS check and no
-//  fallback that could silently drop the discount.
+//  fallback that could silently drop the discount. An offer the backend
+//  couldn't sign (no In-App Purchase key in Galva) fails as `invalidOffer`
+//  before StoreKit is asked, for the same reason.
 //
 //  Outputs:
 //      • `Outcome.completed(…)`            — verified + completed
@@ -124,17 +126,24 @@ struct StoreKitPurchaser {
         promotionalOffer: PromotionalOffer?,
         appAccountToken: UUID
     ) async throws -> Product.PurchaseResult {
-        let product = try await resolveProduct(productId: productId)
-
         var options: Set<Product.PurchaseOption> = []
         options.insert(.appAccountToken(appAccountToken))
 
         if let promo = promotionalOffer {
-            makePromotionalOptions(promo)
+            guard let compactJWS = promo.compactJWS else {
+                logger.warning(.purchases, "promotional offer is unsigned: Galva has no In-App Purchase key for this app. Add one in Galva to sell it with StoreKit, or install a purchase controller that has it signed.", metadata: [
+                    "productId": productId,
+                    "offerId": promo.offerId,
+                ])
+                throw Failure.invalidOffer(detail: "unsigned: Galva has no In-App Purchase key for this app")
+            }
+            makePromotionalOptions(offerId: promo.offerId, compactJWS: compactJWS)
                 .forEach {
                     options.insert($0)
                 }
         }
+
+        let product = try await resolveProduct(productId: productId)
 
         return try await Self.settle {
             try await product.purchase(options: options)
@@ -232,14 +241,15 @@ struct StoreKitPurchaser {
     /// No runtime `#available` gate is needed; the symbol is safe to call
     /// on every supported OS.
     private func makePromotionalOptions(
-        _ promo: PromotionalOffer
+        offerId: String,
+        compactJWS: String
     ) -> [Product.PurchaseOption] {
         // Explicit type prefix because dot-shorthand resolves against the
         // return type (`[Product.PurchaseOption]`); the static factory
         // lives on the element type, not the array.
         return Product.PurchaseOption.promotionalOffer(
-            promo.offerId,
-            compactJWS: promo.compactJWS
+            offerId,
+            compactJWS: compactJWS
         )
     }
 

@@ -62,21 +62,24 @@ final class PurchaseControllerTests: XCTestCase {
     // MARK: - Dispatch
 
     func test_run_handsControllerTheParsedRequest() async {
-        let offer = Galva.PromotionalOffer(offerId: "winback_50", compactJWS: "h.p.s")
-        let controller = StubController { _ in .cancelled }
+        // Unsigned too: a controller can have the offer signed elsewhere.
+        for jws in ["h.p.s", nil] {
+            let offer = Galva.PromotionalOffer(offerId: "winback_50", compactJWS: jws)
+            let controller = StubController { _ in .cancelled }
 
-        _ = await PurchaseBridgeCodec.run(
-            makeRequest(promotionalOffer: offer),
-            with: controller,
-            logger: SilentLogger()
-        )
+            _ = await PurchaseBridgeCodec.run(
+                makeRequest(promotionalOffer: offer),
+                with: controller,
+                logger: SilentLogger()
+            )
 
-        XCTAssertEqual(controller.requests.count, 1)
-        let request = controller.requests[0]
-        XCTAssertEqual(request.productId, "com.app.pro.year")
-        XCTAssertEqual(request.promotionalOffer, offer)
-        XCTAssertEqual(request.appAccountToken, token)
-        XCTAssertEqual(request.messageId, "msg-1")
+            XCTAssertEqual(controller.requests.count, 1)
+            let request = controller.requests[0]
+            XCTAssertEqual(request.productId, "com.app.pro.year")
+            XCTAssertEqual(request.promotionalOffer, offer)
+            XCTAssertEqual(request.appAccountToken, token)
+            XCTAssertEqual(request.messageId, "msg-1")
+        }
     }
 
     func test_run_cancelled_encodesLikeBuiltInPath() async {
@@ -168,6 +171,33 @@ final class PurchaseControllerTests: XCTestCase {
         for (failure, expected) in cases {
             XCTAssertEqual(PurchaseBridgeCodec.bridgeError(for: failure).code, expected, "\(failure)")
         }
+    }
+
+    // MARK: - Unsigned offer
+
+    func test_builtInFlow_unsignedOffer_failsAsInvalidOffer_beforeStoreKit() async {
+        // Galva had no In-App Purchase key to sign it. Failing before the
+        // product lookup also means StoreKit is never asked.
+        let logger = RecordingLogger()
+        let purchaser = StoreKitPurchaser(prefetcher: nil, logger: logger)
+
+        do {
+            _ = try await purchaser.performPurchase(
+                productId: "com.app.pro.year",
+                promotionalOffer: Galva.PromotionalOffer(offerId: "winback_50", compactJWS: nil),
+                appAccountToken: token
+            )
+            XCTFail("expected invalidOffer")
+        } catch StoreKitPurchaser.Failure.invalidOffer(let detail) {
+            XCTAssertTrue(detail.hasPrefix("unsigned"), detail)
+        } catch {
+            XCTFail("expected invalidOffer, got \(error)")
+        }
+
+        let warning = logger.entries.first { $0.message.contains("unsigned") }
+        XCTAssertEqual(warning?.level, .warning)
+        XCTAssertEqual(warning?.category, .purchases)
+        XCTAssertEqual(warning?.metadata["offerId"], "winback_50")
     }
 
     // MARK: - Thrown cancel
