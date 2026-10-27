@@ -2,34 +2,25 @@
 //  Galva+Namespaces.swift
 //  Galva
 //
-//  `Galva.AppUser`, `Galva.AppEvents` and `Galva.InAppMessages`: the same
-//  types as the top-level names, for an app that has its own type called
-//  `AppUser`, `AppEvents` or `InAppMessages`. In such an app the plain name
-//  means the app's type, and `Galva.AppUser` can't name the SDK's either —
-//  `Galva` there is this enum, not the module — so these aliases are how it
-//  reaches the SDK:
+//  `AppUser`, `AppEvents` and `InAppMessages` are declared under `Galva`
+//  (in Galva.swift); these top-level names are shorthands for them. An app
+//  that has its own type called `AppUser`, `AppEvents` or `InAppMessages`
+//  uses the qualified name, since there the plain name means the app's type:
 //
 //      Galva.AppUser.identify(userId: "user_42")
 //      Galva.AppEvents.track("onboarding_completed")
 //
-//  The underscored aliases are a hop the nested ones need: inside `Galva`,
-//  `AppUser` would mean the nested alias itself. They're not for use.
+//  Declaring the types under `Galva`, rather than aliasing top-level types
+//  from inside it, means no helper alias shows up in autocompletion.
 //
 
 import Foundation
 
-public typealias _GalvaAppUser = AppUser
-public typealias _GalvaAppEvents = AppEvents
-public typealias _GalvaInAppMessages = InAppMessages
+/// Shorthand for ``Galva/AppUser``.
+public typealias AppUser = Galva.AppUser
 
-public extension Galva {
+/// Shorthand for ``Galva/AppEvents``.
+public typealias AppEvents = Galva.AppEvents
 
-    /// The SDK's `AppUser`, for an app with its own type of that name.
-    typealias AppUser = _GalvaAppUser
-
-    /// The SDK's `AppEvents`, for an app with its own type of that name.
-    typealias AppEvents = _GalvaAppEvents
-
-    /// The SDK's `InAppMessages`, for an app with its own type of that name.
-    typealias InAppMessages = _GalvaInAppMessages
-}
+/// Shorthand for ``Galva/InAppMessages``.
+public typealias InAppMessages = Galva.InAppMessages

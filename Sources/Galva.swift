@@ -592,78 +592,81 @@ public typealias EventAttributes = [String: any GalvaCompatibleValue]
 
 // MARK: - AppEvents
 
-/// Event-tracking entry point.
-///
-/// All `track(...)` calls return immediately; the event is queued, persisted,
-/// and uploaded asynchronously.
-public enum AppEvents {
+extension Galva {
 
-    /// Protocol for strongly-typed events. Conform a struct or enum to
-    /// avoid stringly-typed `AppEvents.track("…")` call sites.
+    /// Event-tracking entry point.
     ///
-    /// Example:
-    ///
-    ///     struct PurchaseEvent: AppEvents.Event {
-    ///         let sku: String
-    ///         let price: Double
-    ///         var eventName: String { "Purchase" }
-    ///         var attributes: EventAttributes? {
-    ///             ["sku": sku, "price": price]
-    ///         }
-    ///     }
-    ///
-    ///     AppEvents.track(PurchaseEvent(sku: "pro", price: 9.99))
-    public protocol Event: Sendable {
-        /// Wire name for the event, e.g. `"Purchase"`. Should match your
-        /// taxonomy.
-        var eventName: String { get }
+    /// All `track(...)` calls return immediately; the event is queued, persisted,
+    /// and uploaded asynchronously.
+    public enum AppEvents {
 
-        /// Optional properties attached to the event. `nil` for events
-        /// with no payload.
-        var attributes: EventAttributes? { get }
-    }
+        /// Protocol for strongly-typed events. Conform a struct or enum to
+        /// avoid stringly-typed `AppEvents.track("…")` call sites.
+        ///
+        /// Example:
+        ///
+        ///     struct PurchaseEvent: AppEvents.Event {
+        ///         let sku: String
+        ///         let price: Double
+        ///         var eventName: String { "Purchase" }
+        ///         var attributes: EventAttributes? {
+        ///             ["sku": sku, "price": price]
+        ///         }
+        ///     }
+        ///
+        ///     AppEvents.track(PurchaseEvent(sku: "pro", price: 9.99))
+        public protocol Event: Sendable {
+            /// Wire name for the event, e.g. `"Purchase"`. Should match your
+            /// taxonomy.
+            var eventName: String { get }
 
-    /// Track an event with a string name and an optional loose attribute bag.
-    ///
-    /// Attributes are `[String: Any]` for ergonomics — pass any dictionary
-    /// (including one you already have, e.g. from JSON) without converting
-    /// each value yourself. The SDK keeps everything JSON-compatible and
-    /// **silently drops** anything that isn't:
-    ///   • Kept: `String`, `Bool`, `Int`/`Int64`, `Double`/`Float`, `Decimal`,
-    ///     `Date`, `URL`, `UUID`, any custom `Codable` `GalvaCompatibleValue`,
-    ///     `NSNumber`/`NSString`/`NSNull`, and nested arrays/dictionaries of
-    ///     those.
-    ///   • Dropped: custom classes, closures, and other non-JSON values.
-    ///
-    /// For compile-time-checked attributes, define an `AppEvents.Event` and
-    /// use the `track(_:)` overload instead.
-    ///
-    /// - Parameters:
-    ///   - eventName: Wire name. Use a stable, snake_case or PascalCase
-    ///     string from your taxonomy.
-    ///   - attributes: Optional loose payload; incompatible values are filtered.
-    ///
-    /// Example:
-    ///
-    ///     AppEvents.track("AddHabitButtonTapped")
-    ///     AppEvents.track("Purchase", attributes: [
-    ///         "sku": "pro_yearly",
-    ///         "price": 9.99,
-    ///         "currency": "USD"
-    ///     ])
-    public static func track(_ eventName: String, attributes: [String: Any]? = nil) {
-        let props = attributes.flatMap { dict -> [String: AnyJSONValue]? in
-            let coerced = AnyJSONValue.coercing(dictionary: dict)
-            return coerced.isEmpty ? nil : coerced
+            /// Optional properties attached to the event. `nil` for events
+            /// with no payload.
+            var attributes: EventAttributes? { get }
         }
-        SDKCore.shared.submit { await $0.track(event: eventName, properties: props) }
-    }
 
-    /// Track a strongly-typed `AppEvents.Event` value. Attributes flow through
-    /// the typed `GalvaCompatibleValue` path — lossless, nothing is filtered.
-    public static func track<E: Event>(_ event: E) {
-        let props = event.attributes?.mapValues { AnyJSONValue($0) }
-        SDKCore.shared.submit { await $0.track(event: event.eventName, properties: props) }
+        /// Track an event with a string name and an optional loose attribute bag.
+        ///
+        /// Attributes are `[String: Any]` for ergonomics — pass any dictionary
+        /// (including one you already have, e.g. from JSON) without converting
+        /// each value yourself. The SDK keeps everything JSON-compatible and
+        /// **silently drops** anything that isn't:
+        ///   • Kept: `String`, `Bool`, `Int`/`Int64`, `Double`/`Float`, `Decimal`,
+        ///     `Date`, `URL`, `UUID`, any custom `Codable` `GalvaCompatibleValue`,
+        ///     `NSNumber`/`NSString`/`NSNull`, and nested arrays/dictionaries of
+        ///     those.
+        ///   • Dropped: custom classes, closures, and other non-JSON values.
+        ///
+        /// For compile-time-checked attributes, define an `AppEvents.Event` and
+        /// use the `track(_:)` overload instead.
+        ///
+        /// - Parameters:
+        ///   - eventName: Wire name. Use a stable, snake_case or PascalCase
+        ///     string from your taxonomy.
+        ///   - attributes: Optional loose payload; incompatible values are filtered.
+        ///
+        /// Example:
+        ///
+        ///     AppEvents.track("AddHabitButtonTapped")
+        ///     AppEvents.track("Purchase", attributes: [
+        ///         "sku": "pro_yearly",
+        ///         "price": 9.99,
+        ///         "currency": "USD"
+        ///     ])
+        public static func track(_ eventName: String, attributes: [String: Any]? = nil) {
+            let props = attributes.flatMap { dict -> [String: AnyJSONValue]? in
+                let coerced = AnyJSONValue.coercing(dictionary: dict)
+                return coerced.isEmpty ? nil : coerced
+            }
+            SDKCore.shared.submit { await $0.track(event: eventName, properties: props) }
+        }
+
+        /// Track a strongly-typed `AppEvents.Event` value. Attributes flow through
+        /// the typed `GalvaCompatibleValue` path — lossless, nothing is filtered.
+        public static func track<E: Event>(_ event: E) {
+            let props = event.attributes?.mapValues { AnyJSONValue($0) }
+            SDKCore.shared.submit { await $0.track(event: event.eventName, properties: props) }
+        }
     }
 }
 
@@ -794,207 +797,213 @@ public extension AppUserAttribute where Self == AppUserTraits.TotalLifetimeValue
     static var totalLifetimeValue: AppUserTraits.TotalLifetimeValue { .init() }
 }
 
-/// User identity and traits.
-///
-/// Galva tracks two kinds of identifiers:
-/// 1. **Anonymous ID** — generated on first launch, persisted across sessions
-///    until `logOut()` rotates it. Always present.
-/// 2. **End-user ID** — your app's user id, set via `identify(userId:)`.
-///    `nil` until you call `identify`.
-public enum AppUser {
+extension Galva {
 
-    /// Currently-identified end-user id. Returns `nil` if no user has been
-    /// identified, or if `logOut()` was called.
+    /// User identity and traits.
     ///
-    /// This is a synchronous snapshot, kept in sync with `identify`/`logOut`.
-    /// Safe to read from any thread.
-    public static var identifiedUserId: String? {
-        SDKCore.shared.cachedEndUserId
-    }
+    /// Galva tracks two kinds of identifiers:
+    /// 1. **Anonymous ID** — generated on first launch, persisted across sessions
+    ///    until `logOut()` rotates it. Always present.
+    /// 2. **End-user ID** — your app's user id, set via `identify(userId:)`.
+    ///    `nil` until you call `identify`.
+    public enum AppUser {
 
-    /// The StoreKit 2 `appAccountToken` Galva attaches to purchases for the
-    /// current identity. Returns the `appAccountToken` you passed to
-    /// `identify(userId:appAccountToken:)` when set, otherwise the token Galva
-    /// generates for you (the anonymous id as a UUID). It's the *same* value the
-    /// SDK uses for its own purchases, so passing it into a purchase you start
-    /// yourself reconciles that purchase to the same Galva account:
-    ///
-    ///     let token = AppUser.appAccountToken
-    ///     let result = try await product.purchase(
-    ///         options: token.map { [.appAccountToken($0)] } ?? []
-    ///     )
-    ///
-    /// A synchronous snapshot, kept in sync with `configure`/`identify`/`logOut`
-    /// and safe to read from any thread. `nil` only before `Galva.configure(...)`.
-    public static var appAccountToken: UUID? {
-        SDKCore.shared.cachedAppAccountToken
-    }
-
-    /// Identify the current end user. Subsequent events are attributed to
-    /// this user id until `logOut()` is called.
-    ///
-    /// - Parameters:
-    ///   - userId: Your app's stable identifier for the user.
-    ///   - appAccountToken: Optional StoreKit 2 `appAccountToken` (UUID) for
-    ///     linking subscription purchases to this user.
-    ///
-    /// Example:
-    ///
-    ///     AppUser.identify(userId: "user_42")
-    public static func identify(userId: String, appAccountToken: UUID? = nil) {
-        SDKCore.shared.submit {
-            await $0.identify(userId: userId, appAccountToken: appAccountToken, traits: nil)
+        /// Currently-identified end-user id. Returns `nil` if no user has been
+        /// identified, or if `logOut()` was called.
+        ///
+        /// This is a synchronous snapshot, kept in sync with `identify`/`logOut`.
+        /// Safe to read from any thread.
+        public static var identifiedUserId: String? {
+            SDKCore.shared.cachedEndUserId
         }
-    }
 
-    /// Set a typed user trait.
-    ///
-    /// Example:
-    ///
-    ///     AppUser.set(.email, "peter@example.com")
-    ///     AppUser.set(.firstName, "Peter")
-    public static func set<A: AppUserAttribute>(_ attribute: A, _ value: A.Value) {
-        let trait = [attribute.attributeName: AnyJSONValue(value)]
-        SDKCore.shared.submit { await $0.identify(userId: nil, appAccountToken: nil, traits: trait) }
-    }
+        /// The StoreKit 2 `appAccountToken` Galva attaches to purchases for the
+        /// current identity. Returns the `appAccountToken` you passed to
+        /// `identify(userId:appAccountToken:)` when set, otherwise the token Galva
+        /// generates for you (the anonymous id as a UUID). It's the *same* value the
+        /// SDK uses for its own purchases, so passing it into a purchase you start
+        /// yourself reconciles that purchase to the same Galva account:
+        ///
+        ///     let token = AppUser.appAccountToken
+        ///     let result = try await product.purchase(
+        ///         options: token.map { [.appAccountToken($0)] } ?? []
+        ///     )
+        ///
+        /// A synchronous snapshot, kept in sync with `configure`/`identify`/`logOut`
+        /// and safe to read from any thread. `nil` only before `Galva.configure(...)`.
+        public static var appAccountToken: UUID? {
+            SDKCore.shared.cachedAppAccountToken
+        }
 
-    /// Set an arbitrary user trait by string key. Use the typed `set(_:_:)`
-    /// overload whenever possible — it catches typos at compile time.
-    ///
-    /// Example:
-    ///
-    ///     AppUser.set(attribute: "plan_tier", "pro")
-    ///     AppUser.set(attribute: "habit_count", 13)
-    public static func set<V: GalvaCompatibleValue>(attribute attributeName: String, _ value: V) {
-        let trait = [attributeName: AnyJSONValue(value)]
-        SDKCore.shared.submit { await $0.identify(userId: nil, appAccountToken: nil, traits: trait) }
-    }
+        /// Identify the current end user. Subsequent events are attributed to
+        /// this user id until `logOut()` is called.
+        ///
+        /// - Parameters:
+        ///   - userId: Your app's stable identifier for the user.
+        ///   - appAccountToken: Optional StoreKit 2 `appAccountToken` (UUID) for
+        ///     linking subscription purchases to this user.
+        ///
+        /// Example:
+        ///
+        ///     AppUser.identify(userId: "user_42")
+        public static func identify(userId: String, appAccountToken: UUID? = nil) {
+            SDKCore.shared.submit {
+                await $0.identify(userId: userId, appAccountToken: appAccountToken, traits: nil)
+            }
+        }
 
-    /// Set one or more user traits from a loose `[String: Any]` dictionary
-    /// — the lenient mirror of `AppEvents.track(_:attributes:)`.
-    ///
-    /// Use this when the values come from an untyped source (a JSON parse,
-    /// a host-side `[String: Any]` payload, values read back from
-    /// `UserDefaults`). Foundation-bridged values (`NSString`, `NSNumber`,
-    /// `NSNull`, nested `NSDictionary` / `NSArray`) flow through cleanly so a host
-    /// doesn't have to bridge each value to its Swift equivalent first — a
-    /// failed bridge there is exactly the path that silently drops traits
-    /// at the call site (e.g. an email read as `NSString` cast through a
-    /// non-`@objc` protocol type ends up `nil`).
-    ///
-    /// Same rules as `AppEvents.track` for what survives the coercion:
-    ///   • Kept: `String`, `Bool`, `Int`/`Int64`, `Double`/`Float`, `Decimal`,
-    ///     `Date`, `URL`, `UUID`, any custom `Codable` `GalvaCompatibleValue`,
-    ///     `NSNumber`/`NSString`/`NSNull`, and nested arrays/dictionaries of
-    ///     those.
-    ///   • Dropped: custom classes, closures, and other non-JSON values.
-    ///
-    /// Example:
-    ///
-    ///     // Values the app stored itself, read back key by key:
-    ///     let defaults = UserDefaults.standard
-    ///     AppUser.set([
-    ///         "$gv_email":    defaults.object(forKey: "email")    ?? NSNull(),  // NSString → ok
-    ///         "$gv_country":  defaults.object(forKey: "country")  ?? NSNull(),
-    ///         "plan_tier":    defaults.object(forKey: "plan")     ?? NSNull(),
-    ///     ])
-    ///
-    /// Read only keys your app wrote. Don't pass
-    /// `UserDefaults.dictionaryRepresentation()`: it also holds values the
-    /// system writes, such as languages, locale and keyboards, which the
-    /// `UserDefaults` reason apps declare (CA92.1) doesn't let them read,
-    /// and they'd go to Galva.
-    public static func set(_ attributes: [String: Any]) {
-        let coerced = AnyJSONValue.coercing(dictionary: attributes)
-        guard !coerced.isEmpty else { return }
-        SDKCore.shared.submit { await $0.identify(userId: nil, appAccountToken: nil, traits: coerced) }
-    }
+        /// Set a typed user trait.
+        ///
+        /// Example:
+        ///
+        ///     AppUser.set(.email, "peter@example.com")
+        ///     AppUser.set(.firstName, "Peter")
+        public static func set<A: AppUserAttribute>(_ attribute: A, _ value: A.Value) {
+            let trait = [attribute.attributeName: AnyJSONValue(value)]
+            SDKCore.shared.submit { await $0.identify(userId: nil, appAccountToken: nil, traits: trait) }
+        }
 
-    /// Log out the current user. Clears the identified user id and rotates
-    /// the anonymous id so subsequent events are attributed to a fresh
-    /// anonymous session.
-    public static func logOut() {
-        SDKCore.shared.submit { await $0.logOut() }
+        /// Set an arbitrary user trait by string key. Use the typed `set(_:_:)`
+        /// overload whenever possible — it catches typos at compile time.
+        ///
+        /// Example:
+        ///
+        ///     AppUser.set(attribute: "plan_tier", "pro")
+        ///     AppUser.set(attribute: "habit_count", 13)
+        public static func set<V: GalvaCompatibleValue>(attribute attributeName: String, _ value: V) {
+            let trait = [attributeName: AnyJSONValue(value)]
+            SDKCore.shared.submit { await $0.identify(userId: nil, appAccountToken: nil, traits: trait) }
+        }
+
+        /// Set one or more user traits from a loose `[String: Any]` dictionary
+        /// — the lenient mirror of `AppEvents.track(_:attributes:)`.
+        ///
+        /// Use this when the values come from an untyped source (a JSON parse,
+        /// a host-side `[String: Any]` payload, values read back from
+        /// `UserDefaults`). Foundation-bridged values (`NSString`, `NSNumber`,
+        /// `NSNull`, nested `NSDictionary` / `NSArray`) flow through cleanly so a host
+        /// doesn't have to bridge each value to its Swift equivalent first — a
+        /// failed bridge there is exactly the path that silently drops traits
+        /// at the call site (e.g. an email read as `NSString` cast through a
+        /// non-`@objc` protocol type ends up `nil`).
+        ///
+        /// Same rules as `AppEvents.track` for what survives the coercion:
+        ///   • Kept: `String`, `Bool`, `Int`/`Int64`, `Double`/`Float`, `Decimal`,
+        ///     `Date`, `URL`, `UUID`, any custom `Codable` `GalvaCompatibleValue`,
+        ///     `NSNumber`/`NSString`/`NSNull`, and nested arrays/dictionaries of
+        ///     those.
+        ///   • Dropped: custom classes, closures, and other non-JSON values.
+        ///
+        /// Example:
+        ///
+        ///     // Values the app stored itself, read back key by key:
+        ///     let defaults = UserDefaults.standard
+        ///     AppUser.set([
+        ///         "$gv_email":    defaults.object(forKey: "email")    ?? NSNull(),  // NSString → ok
+        ///         "$gv_country":  defaults.object(forKey: "country")  ?? NSNull(),
+        ///         "plan_tier":    defaults.object(forKey: "plan")     ?? NSNull(),
+        ///     ])
+        ///
+        /// Read only keys your app wrote. Don't pass
+        /// `UserDefaults.dictionaryRepresentation()`: it also holds values the
+        /// system writes, such as languages, locale and keyboards, which the
+        /// `UserDefaults` reason apps declare (CA92.1) doesn't let them read,
+        /// and they'd go to Galva.
+        public static func set(_ attributes: [String: Any]) {
+            let coerced = AnyJSONValue.coercing(dictionary: attributes)
+            guard !coerced.isEmpty else { return }
+            SDKCore.shared.submit { await $0.identify(userId: nil, appAccountToken: nil, traits: coerced) }
+        }
+
+        /// Log out the current user. Clears the identified user id and rotates
+        /// the anonymous id so subsequent events are attributed to a fresh
+        /// anonymous session.
+        public static func logOut() {
+            SDKCore.shared.submit { await $0.logOut() }
+        }
     }
 }
 
 // MARK: - InAppMessages
 
-/// In-app message delivery.
-///
-/// Galva fetches pending in-app messages from active workflows every time
-/// the app becomes active: the cold start, a return from the background, or
-/// a system overlay like Control Center closing. Never on a timer. The
-/// highest-priority message — resolved server-side from the workflow
-/// waterfall — reaches the screen the way `Galva.configure(…, inAppMessages:)`
-/// says:
-///
-/// - `.automatic` (default): the SDK presents it as a sheet on your app's
-///   active window. There's nothing to write.
-/// - `.manual`: the SDK doesn't present the messages it fetches. Your app
-///   reads `messages` and presents each one with `.inAppMessageSheet(_:)`
-///   (SwiftUI) or `message.show()` (UIKit).
-///
-/// A Galva link the user opens (for example "Continue in App" from an email)
-/// presents its message right away in both modes, since the user asked for
-/// it. It doesn't go through `messages`.
-///
-/// Either way, the SDK handles the page download and cache, identity, and the
-/// native bridge (purchase prompt, dismissal, deep link, manage-subscription
-/// URL).
-public enum InAppMessages {
+extension Galva {
 
-    /// Async stream of pending in-app messages addressed to the current
-    /// identity. The SDK publishes the winning message after each
-    /// foreground poll; multiple consumers may iterate concurrently.
+    /// In-app message delivery.
     ///
-    /// Every message is published here in both presentation modes. In
-    /// `.manual` mode, this is where your app gets messages to present. A
-    /// message published before your loop starts is held and handed to the
-    /// first subscriber, so a loop that starts a moment after launch doesn't
-    /// miss it. In `.automatic` mode the SDK already presents each message,
-    /// so read the stream only to observe messages, not to present them
-    /// again.
+    /// Galva fetches pending in-app messages from active workflows every time
+    /// the app becomes active: the cold start, a return from the background, or
+    /// a system overlay like Control Center closing. Never on a timer. The
+    /// highest-priority message — resolved server-side from the workflow
+    /// waterfall — reaches the screen the way `Galva.configure(…, inAppMessages:)`
+    /// says:
     ///
-    /// `@MainActor`: the stream is main-actor-isolated, so when you iterate
-    /// it from a MainActor context — a SwiftUI `.task { … }` or
-    /// `Task { @MainActor in … }` — each message is delivered on the main
-    /// thread and you can drive UI (present a sheet, call `show(in:)`) in the
-    /// loop body without a manual hop.
-    @MainActor
-    public static var messages: AsyncStream<InAppMessages.Message> {
-        SDKCore.shared.inAppMessageStream.makeStream()
-    }
+    /// - `.automatic` (default): the SDK presents it as a sheet on your app's
+    ///   active window. There's nothing to write.
+    /// - `.manual`: the SDK doesn't present the messages it fetches. Your app
+    ///   reads `messages` and presents each one with `.inAppMessageSheet(_:)`
+    ///   (SwiftUI) or `message.show()` (UIKit).
+    ///
+    /// A Galva link the user opens (for example "Continue in App" from an email)
+    /// presents its message right away in both modes, since the user asked for
+    /// it. It doesn't go through `messages`.
+    ///
+    /// Either way, the SDK handles the page download and cache, identity, and the
+    /// native bridge (purchase prompt, dismissal, deep link, manage-subscription
+    /// URL).
+    public enum InAppMessages {
 
-    /// Manually trigger a poll for pending messages. Normally driven by
-    /// the foreground lifecycle — use this when you want to refresh
-    /// outside the standard cold-start / return-to-foreground cadence
-    /// (e.g. after the user completes an in-app action that should
-    /// retrigger a workflow attempt).
-    public static func checkForMessages() {
-        SDKCore.shared.submit { await $0.inAppMessageManager?.poll() }
-    }
+        /// Async stream of pending in-app messages addressed to the current
+        /// identity. The SDK publishes the winning message after each
+        /// foreground poll; multiple consumers may iterate concurrently.
+        ///
+        /// Every message is published here in both presentation modes. In
+        /// `.manual` mode, this is where your app gets messages to present. A
+        /// message published before your loop starts is held and handed to the
+        /// first subscriber, so a loop that starts a moment after launch doesn't
+        /// miss it. In `.automatic` mode the SDK already presents each message,
+        /// so read the stream only to observe messages, not to present them
+        /// again.
+        ///
+        /// `@MainActor`: the stream is main-actor-isolated, so when you iterate
+        /// it from a MainActor context — a SwiftUI `.task { … }` or
+        /// `Task { @MainActor in … }` — each message is delivered on the main
+        /// thread and you can drive UI (present a sheet, call `show(in:)`) in the
+        /// loop body without a manual hop.
+        @MainActor
+        public static var messages: AsyncStream<InAppMessages.Message> {
+            SDKCore.shared.inAppMessageStream.makeStream()
+        }
 
-    /// Errors `message.show(in:)` throws when a message can't be shown.
-    ///
-    /// Galva may add cases in minor releases. If you switch on this error,
-    /// add an `@unknown default` case, so a new one only warns instead of
-    /// breaking your build.
-    public enum Error: Swift.Error, Sendable, Hashable {
-        /// SDK has not been configured.
-        case notConfigured
-        /// The server no longer considers the message valid (workflow
-        /// exited, message invalidated), or its id isn't one Galva issued.
-        case messageNotFound
-        /// WebView bundle for the resolved version isn't on disk and
-        /// couldn't be downloaded.
-        case bundleUnavailable
-        /// No foreground window scene, or no view controller in it, to
-        /// present the message on — or UIKit didn't finish presenting the
-        /// sheet within a few seconds.
-        case noPresentingViewController
-        /// Galva's servers couldn't be reached, or returned an error, while
-        /// resolving the message.
-        case requestFailed
+        /// Manually trigger a poll for pending messages. Normally driven by
+        /// the foreground lifecycle — use this when you want to refresh
+        /// outside the standard cold-start / return-to-foreground cadence
+        /// (e.g. after the user completes an in-app action that should
+        /// retrigger a workflow attempt).
+        public static func checkForMessages() {
+            SDKCore.shared.submit { await $0.inAppMessageManager?.poll() }
+        }
+
+        /// Errors `message.show(in:)` throws when a message can't be shown.
+        ///
+        /// Galva may add cases in minor releases. If you switch on this error,
+        /// add an `@unknown default` case, so a new one only warns instead of
+        /// breaking your build.
+        public enum Error: Swift.Error, Sendable, Hashable {
+            /// SDK has not been configured.
+            case notConfigured
+            /// The server no longer considers the message valid (workflow
+            /// exited, message invalidated), or its id isn't one Galva issued.
+            case messageNotFound
+            /// WebView bundle for the resolved version isn't on disk and
+            /// couldn't be downloaded.
+            case bundleUnavailable
+            /// No foreground window scene, or no view controller in it, to
+            /// present the message on — or UIKit didn't finish presenting the
+            /// sheet within a few seconds.
+            case noPresentingViewController
+            /// Galva's servers couldn't be reached, or returned an error, while
+            /// resolving the message.
+            case requestFailed
+        }
     }
 }
