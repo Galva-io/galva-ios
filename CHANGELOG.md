@@ -4,7 +4,7 @@ All notable changes to the Galva iOS SDK are documented here. The format follows
 
 Minor releases may add values to `InAppMessages.WorkflowType` and `Galva.LogCategory`, and cases to `InAppMessages.Error` and `Galva.PurchaseError`. Switch on those with a `default` or `@unknown default` case.
 
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-10-27
 
 First public release.
 
