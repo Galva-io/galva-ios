@@ -2,25 +2,89 @@
 //  PurchaseBridgeCodec.swift
 //  Galva
 //
-//  Encodes `requestPurchase` results into the bridge wire shape, and runs
-//  host-installed `GalvaPurchaseController`s.
+//  Decodes `requestPurchase` payloads, encodes their results into the
+//  bridge wire shape, and runs host-installed `GalvaPurchaseController`s.
 //
 //  Surface:
+//    • `decodeRequest(_:)` — bridge `payload` → product id + offer
 //    • `encode(_:)`        — StoreKit outcome → bridge `result` payload
 //    • `bridgeError(for:)` — internal `StoreKitPurchaser.Failure` or public
 //                            `Galva.PurchaseError` → structured `BridgeError`
 //    • `run(_:with:logger:)` — drive a controller, encode its result
 //
 //  Split out of `NativeBridge+Purchases.swift` (UIKit + WebKit only) so the
-//  encoding is host-testable under `swift test` on macOS. Both the built-in
-//  StoreKit path and the controller path go through here, so the bundle sees
-//  one wire format whichever ran the purchase.
+//  decoding and encoding are host-testable under `swift test` on macOS. Both
+//  the built-in StoreKit path and the controller path go through here, so
+//  the bundle sees one wire format whichever ran the purchase.
 //
 
 import Foundation
 import StoreKit
 
 enum PurchaseBridgeCodec {
+
+    // MARK: - Request decoding
+
+    /// A decoded `requestPurchase` payload.
+    struct Request: Equatable {
+        let productId: String
+        let promotionalOffer: StoreKitPurchaser.PromotionalOffer?
+    }
+
+    /// Decode a `requestPurchase` payload. `productId` is required.
+    /// `promotionalOffer` is optional — absent or null both mean "no offer,
+    /// standard list-price purchase" — but needs its `offerId` when present:
+    /// a partial offer is rejected rather than quietly dropped, since the
+    /// message promised the user a discount and a list-price purchase would
+    /// surprise them. Its `signature` may be missing: Galva's backend leaves
+    /// it out when the app has no In-App Purchase key in Galva, for a
+    /// purchase controller that has the offer signed elsewhere.
+    static func decodeRequest(_ payload: [String: AnyJSONValue]?) -> Result<Request, BridgeError> {
+        guard let payload,
+              case .string(let productId)? = payload["productId"],
+              !productId.isEmpty else {
+            return .failure(BridgeError(
+                code: .invalidPayload,
+                message: "Missing productId"
+            ))
+        }
+
+        let promo: StoreKitPurchaser.PromotionalOffer?
+        switch payload["promotionalOffer"] {
+        case .object(let promoObj)?:
+            switch decodePromotionalOffer(promoObj) {
+            case .success(let p): promo = p
+            case .failure(let err): return .failure(err)
+            }
+        case .null?, nil:
+            promo = nil
+        default:
+            return .failure(BridgeError(
+                code: .invalidPayload,
+                message: "promotionalOffer must be an object"
+            ))
+        }
+        return .success(Request(productId: productId, promotionalOffer: promo))
+    }
+
+    /// The JWS-only promotional offer payload: `offerId`, and the
+    /// `signature` (a JWS compact string) when Galva signed the offer.
+    private static func decodePromotionalOffer(
+        _ obj: [String: AnyJSONValue]
+    ) -> Result<StoreKitPurchaser.PromotionalOffer, BridgeError> {
+        func string(_ key: String) -> String? {
+            if case .string(let s)? = obj[key], !s.isEmpty { return s } else { return nil }
+        }
+        guard let offerId = string("offerId") else {
+            return .failure(BridgeError(code: .invalidPayload,
+                                        message: "promotionalOffer.offerId missing"))
+        }
+        // Accept either `signature` (the canonical wire name) or
+        // `compactJWS` (mirrors Apple's API parameter) so backend / bundle
+        // teams can use whichever feels more natural without an SDK bump.
+        let jws = string("signature") ?? string("compactJWS")
+        return .success(.init(offerId: offerId, compactJWS: jws))
+    }
 
     // MARK: - Controller dispatch
 

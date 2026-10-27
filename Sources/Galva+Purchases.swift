@@ -66,21 +66,25 @@ public protocol GalvaPurchaseController: Sendable {
 
 public extension Galva {
 
-    /// A promotional offer Galva's backend signed for this purchase. The JWS
-    /// carries every claim (key id, nonce, product id, timestamp) the App Store
-    /// needs to validate it — pass it to
-    /// `Product.PurchaseOption.promotionalOffer(_:compactJWS:)`.
+    /// A promotional offer an in-app message asked to apply. Galva's backend
+    /// signs it when the app has an In-App Purchase key in Galva: the JWS
+    /// carries every claim (key id, nonce, product id, timestamp) the App
+    /// Store needs to validate it — pass it to
+    /// `Product.PurchaseOption.promotionalOffer(_:compactJWS:)`. Without that
+    /// key the offer comes unsigned, for a controller that has it signed
+    /// elsewhere, as GalvaRevenueCat has RevenueCat sign it.
     struct PromotionalOffer: Sendable, Hashable {
         /// The offer identifier configured in App Store Connect.
         public let offerId: String
         /// JWS compact serialization (`header.payload.signature`) of the
-        /// offer's signed claims.
-        public let compactJWS: String
+        /// offer's signed claims; `nil` when Galva has no In-App Purchase key
+        /// to sign it. ``PurchaseRequest/purchaseWithStoreKit()`` needs it.
+        public let compactJWS: String?
 
         /// Build an offer by hand — for unit-testing a controller. Galva
         /// builds real offers itself.
         @_spi(Testing)
-        public init(offerId: String, compactJWS: String) {
+        public init(offerId: String, compactJWS: String?) {
             self.offerId = offerId
             self.compactJWS = compactJWS
         }
@@ -91,7 +95,7 @@ public extension Galva {
     struct PurchaseRequest: Sendable {
         /// App Store product identifier.
         public let productId: String
-        /// Galva-signed promotional offer to apply, if the message offers one.
+        /// Promotional offer to apply, if the message offers one.
         public let promotionalOffer: PromotionalOffer?
         /// The `appAccountToken` Galva attributes this user's purchases to —
         /// the same value as ``AppUser/appAccountToken``. Attach it to the
@@ -127,9 +131,13 @@ public extension Galva {
         ///
         /// Returns StoreKit's raw result with the transaction **unfinished**,
         /// so you can hand it to your billing layer (e.g. a "record purchase"
-        /// API) and finish it there. Use this when your billing SDK can't
-        /// apply a Galva-signed promotional offer itself. A cancelled Apple ID
-        /// sign-in comes back as `.userCancelled` too, not as an error.
+        /// API) and finish it there. A cancelled Apple ID sign-in comes back
+        /// as `.userCancelled` too, not as an error.
+        ///
+        /// A promotional offer needs Galva's signature here: for an unsigned
+        /// one (``PromotionalOffer/compactJWS`` is `nil`) it throws
+        /// ``Galva/PurchaseError/invalidOffer(_:)`` without starting a
+        /// purchase.
         ///
         /// - Throws: ``Galva/PurchaseError``.
         @MainActor

@@ -9,12 +9,9 @@
 //       dispatched from `NativeBridge.handle(envelope:)` for the
 //       `.requestPurchase` method.
 //
-//  Everything else in this file is private payload parsing
-//  (`ParsedPurchaseRequest`, `parsePurchaseRequest`,
-//  `parsePromotionalOffer`). Outcome / failure encoding and controller
-//  dispatch live in `PurchaseBridgeCodec` (host-testable on macOS). Add a
-//  new purchase-related helper here rather than touching the core bridge
-//  file.
+//  Payload decoding, outcome / failure encoding and controller dispatch live
+//  in `PurchaseBridgeCodec` (host-testable on macOS). Add a new
+//  purchase-related helper here rather than touching the core bridge file.
 //
 
 import Foundation
@@ -37,7 +34,7 @@ extension NativeBridge {
     ///       "productId": "com.app.pro.year",
     ///       "promotionalOffer": {              // optional
     ///         "offerId":   "...",
-    ///         "signature": "<JWS compact string>"  // header.payload.signature
+    ///         "signature": "<JWS compact string>"  // optional; header.payload.signature
     ///       }
     ///     }
     ///
@@ -45,7 +42,10 @@ extension NativeBridge {
     /// it carries every claim (keyId, nonce, productId, timestamp) the
     /// App Store needs to validate. We deliberately don't accept the
     /// legacy 5-tuple shape any longer — `promotionalOffer(_:compactJWS:)`
-    /// is the only API the SDK calls.
+    /// is the only API the SDK calls. The backend leaves it out when the
+    /// app has no In-App Purchase key in Galva: a purchase controller can
+    /// still have the offer signed (GalvaRevenueCat has RevenueCat sign
+    /// it), while the built-in StoreKit path fails with `invalidOffer`.
     ///
     /// Success response (`result` payload):
     ///     • completed → `{ outcome: "completed", transaction: {…} }`
@@ -66,8 +66,8 @@ extension NativeBridge {
     ) async -> Result<AnyJSONValue?, BridgeError> {
         // 1. Parse payload — productId is required, promotionalOffer is
         //    optional but must be well-formed when present.
-        let parsed: ParsedPurchaseRequest
-        switch parsePurchaseRequest(payload) {
+        let parsed: PurchaseBridgeCodec.Request
+        switch PurchaseBridgeCodec.decodeRequest(payload) {
         case .success(let req): parsed = req
         case .failure(let err): return .failure(err)
         }
@@ -135,72 +135,6 @@ extension NativeBridge {
         }
     }
 
-    // MARK: - Purchase payload parsing
-
-    private struct ParsedPurchaseRequest {
-        let productId: String
-        let promotionalOffer: StoreKitPurchaser.PromotionalOffer?
-    }
-
-    private func parsePurchaseRequest(
-        _ payload: [String: AnyJSONValue]?
-    ) -> Result<ParsedPurchaseRequest, BridgeError> {
-        guard let payload,
-              case .string(let productId)? = payload["productId"],
-              !productId.isEmpty else {
-            return .failure(BridgeError(
-                code: .invalidPayload,
-                message: "Missing productId"
-            ))
-        }
-
-        // promotionalOffer is optional — absent or null both mean "no
-        // offer, standard list-price purchase". When present, every
-        // field is required; partial offers are rejected so we never
-        // hand StoreKit a half-built offer.
-        let promo: StoreKitPurchaser.PromotionalOffer?
-        if case .object(let promoObj)? = payload["promotionalOffer"] {
-            switch parsePromotionalOffer(promoObj) {
-            case .success(let p): promo = p
-            case .failure(let err): return .failure(err)
-            }
-        } else if case .null? = payload["promotionalOffer"] {
-            promo = nil
-        } else if payload["promotionalOffer"] == nil {
-            promo = nil
-        } else {
-            return .failure(BridgeError(
-                code: .invalidPayload,
-                message: "promotionalOffer must be an object"
-            ))
-        }
-        return .success(.init(productId: productId, promotionalOffer: promo))
-    }
-
-    /// Parse the JWS-only promotional offer payload. Both `offerId` and
-    /// `signature` (a JWS compact string) are required — we never quietly
-    /// drop a partial offer since the bundle's UX promised the user a
-    /// discount and a list-price fallback would surprise them.
-    private func parsePromotionalOffer(
-        _ obj: [String: AnyJSONValue]
-    ) -> Result<StoreKitPurchaser.PromotionalOffer, BridgeError> {
-        func string(_ key: String) -> String? {
-            if case .string(let s)? = obj[key], !s.isEmpty { return s } else { return nil }
-        }
-        guard let offerId = string("offerId") else {
-            return .failure(BridgeError(code: .invalidPayload,
-                                        message: "promotionalOffer.offerId missing"))
-        }
-        // Accept either `signature` (the canonical wire name) or
-        // `compactJWS` (mirrors Apple's API parameter) so backend / bundle
-        // teams can use whichever feels more natural without an SDK bump.
-        guard let jws = string("signature") ?? string("compactJWS") else {
-            return .failure(BridgeError(code: .invalidPayload,
-                                        message: "promotionalOffer.signature missing (JWS compact string)"))
-        }
-
-        return .success(.init(offerId: offerId, compactJWS: jws))
-    }
 }
 
 #endif // canImport(WebKit) && canImport(UIKit)

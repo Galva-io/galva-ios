@@ -3,14 +3,15 @@
 //  GalvaTests
 //
 //  Pure-Swift tests for the bridge's `requestPurchase` payload parsing
-//  (BridgeRequest decoder + promotional-offer field shape). The actual
-//  StoreKit purchase flow is exercised via integration / device tests
-//  because `Product.purchase(options:)` requires a live StoreKit
-//  configuration file or the App Store sandbox.
+//  (BridgeRequest decoder, promotional-offer field shape, and
+//  `PurchaseBridgeCodec.decodeRequest`). The actual StoreKit purchase flow
+//  is exercised via integration / device tests because
+//  `Product.purchase(options:)` requires a live StoreKit configuration file
+//  or the App Store sandbox.
 //
 
 import Foundation
-@testable import Galva
+@_spi(Testing) @testable import Galva
 import XCTest
 
 #if canImport(WebKit)
@@ -62,6 +63,77 @@ final class RequestPurchasePayloadTests: XCTestCase {
         }
         XCTAssertEqual(jws.split(separator: ".").count, 3,
                        "signature must be a JWS compact serialization")
+    }
+
+    // MARK: - Payload decoding
+
+    private func decode(_ json: String) throws -> Result<PurchaseBridgeCodec.Request, BridgeError> {
+        let payload = try JSONDecoder().decode([String: AnyJSONValue].self, from: Data(json.utf8))
+        return PurchaseBridgeCodec.decodeRequest(payload)
+    }
+
+    func test_decode_signedOffer() throws {
+        let request = try decode(#"""
+        { "productId": "com.app.pro.month",
+          "promotionalOffer": { "offerId": "winback_50", "signature": "h.p.s" } }
+        """#).get()
+
+        XCTAssertEqual(request, PurchaseBridgeCodec.Request(
+            productId: "com.app.pro.month",
+            promotionalOffer: Galva.PromotionalOffer(offerId: "winback_50", compactJWS: "h.p.s")
+        ))
+    }
+
+    func test_decode_unsignedOffer_isAccepted() throws {
+        // Galva's backend leaves the signature out when the app has no
+        // In-App Purchase key in Galva; a purchase controller can still have
+        // the offer signed.
+        let offers = [
+            #"{ "offerId": "winback_50" }"#,
+            #"{ "offerId": "winback_50", "signature": "" }"#,
+            #"{ "offerId": "winback_50", "signature": null }"#,
+        ]
+        for offer in offers {
+            let request = try decode(#"{ "productId": "com.app.pro.month", "promotionalOffer": \#(offer) }"#).get()
+
+            XCTAssertEqual(request.promotionalOffer, Galva.PromotionalOffer(offerId: "winback_50", compactJWS: nil), offer)
+        }
+    }
+
+    func test_decode_acceptsCompactJWSAsTheSignature() throws {
+        let request = try decode(#"""
+        { "productId": "com.app.pro.month",
+          "promotionalOffer": { "offerId": "winback_50", "compactJWS": "h.p.s" } }
+        """#).get()
+
+        XCTAssertEqual(request.promotionalOffer?.compactJWS, "h.p.s")
+    }
+
+    func test_decode_noOffer() throws {
+        for json in [#"{ "productId": "p" }"#, #"{ "productId": "p", "promotionalOffer": null }"#] {
+            XCTAssertEqual(try decode(json).get(), PurchaseBridgeCodec.Request(productId: "p", promotionalOffer: nil), json)
+        }
+    }
+
+    func test_decode_rejectsMalformedPayloads() throws {
+        let cases: [(String, String)] = [
+            (#"{}"#, "Missing productId"),
+            (#"{ "productId": "" }"#, "Missing productId"),
+            (#"{ "productId": "p", "promotionalOffer": "winback_50" }"#, "promotionalOffer must be an object"),
+            (#"{ "productId": "p", "promotionalOffer": { "signature": "h.p.s" } }"#, "promotionalOffer.offerId missing"),
+        ]
+        for (json, message) in cases {
+            guard case .failure(let error) = try decode(json) else {
+                XCTFail("\(json): expected a failure")
+                continue
+            }
+            XCTAssertEqual(error.code, .invalidPayload, json)
+            XCTAssertEqual(error.message, message, json)
+        }
+        guard case .failure(let error) = PurchaseBridgeCodec.decodeRequest(nil) else {
+            return XCTFail("no payload: expected a failure")
+        }
+        XCTAssertEqual(error.message, "Missing productId")
     }
 
     // NOTE: the client-side `isLikelyJWS` shape check was removed from

@@ -271,6 +271,8 @@ Galva.setPurchaseController(MyPurchaseController())
 
 You can also buy through your own purchase API instead of `purchaseWithStoreKit()` and return the verified transaction. Throw a `Galva.PurchaseError` so the message shows the right state.
 
+A promotional offer arrives unsigned when Galva has no In-App Purchase key for your app: `request.promotionalOffer?.compactJWS` is `nil`, and `purchaseWithStoreKit()` throws `Galva.PurchaseError.invalidOffer` for it. If your billing SDK can sign the offer by its `offerId`, as RevenueCat can for GalvaRevenueCat, buy it that way. Otherwise add the key in Galva.
+
 ## How the SDK behaves
 
 - **It never blocks your app.** Every call returns immediately and does its work on a background actor.
