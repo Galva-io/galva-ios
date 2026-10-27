@@ -116,7 +116,7 @@ Avoid wall-clock-dependent assertions. Use the `eventually(timeout:condition:)` 
 
 [`Package.swift`](Package.swift) declares a single `Galva` library product. Galva ships as source through Swift Package Manager only — no XCFramework, no CocoaPods trunk pod — and SwiftPM / the consuming target decides static vs dynamic linking.
 
-The swift-tools-version stays at 6.0 so the manifest parses on every Xcode that can build the SDK; don't use newer manifest features without bumping it deliberately.
+The swift-tools-version is 6.2, Xcode 26's, since that's the oldest Xcode that can build the SDK: SwiftPM turns older toolchains away when resolving the package instead of failing in the SDK's sources. Don't use newer manifest features without bumping it deliberately.
 
 ### Public value sets that grow are structs
 

@@ -1,10 +1,11 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 //
-// Minimum Swift the package manifest needs to parse. Bumping this also
-// bumps the floor for *consumers* (anyone resolving us via SPM must have
-// at least this toolchain). The source code uses Swift 6 strict-
-// concurrency features but nothing 6.2-specific, so 6.0 is the right
-// floor — broader Xcode 16.x coverage in CI and downstream apps.
+// The oldest toolchain that can resolve this package, so the floor for
+// every app that depends on it. 6.2 is Xcode 26, the oldest Xcode that
+// compiles Galva: its StoreKit offer path uses an iOS 26 SDK API,
+// back-deployed to iOS 15. With an older Xcode, SwiftPM stops at
+// resolution, saying which tools version the package needs, instead of
+// failing to compile Galva's sources.
 import PackageDescription
 
 let package = Package(

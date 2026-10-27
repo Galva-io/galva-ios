@@ -351,7 +351,7 @@ Opting out doesn't change your App Privacy answers. See [Privacy and App Review]
 | | |
 |---|---|
 | **iOS** | 15.0 or later |
-| **Xcode** | 26 or later. The SDK uses a StoreKit API from the iOS 26 SDK for offer purchases; your app still runs on iOS 15. |
+| **Xcode** | 26 or later. The SDK uses a StoreKit API from the iOS 26 SDK for offer purchases; your app still runs on iOS 15. With an older Xcode, SwiftPM stops when resolving the package. |
 | **Install** | Swift Package Manager only. There's no prebuilt framework or CocoaPods pod. |
 
 ## Example app
