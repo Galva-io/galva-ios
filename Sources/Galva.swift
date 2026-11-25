@@ -36,8 +36,9 @@
 //    survive crashes, kills, and network outages.
 //  • Failed uploads retry with exponential backoff + jitter. 4xx errors
 //    (other than 408/429) are treated as permanent and dropped after logging.
-//  • The server resolves your appId and environment from `apiKey`. You don't
-//    need to configure either explicitly.
+//  • The server resolves your app from `apiKey`. Each key works only in the
+//    environment that issued it — pass `environment: .development` when using
+//    a key issued for Galva's development environment.
 //
 
 import Foundation
@@ -257,7 +258,8 @@ public enum Galva {
     /// - Parameters:
     ///   - apiKey: Your App ID, from **Admin → Settings → Connect → Client
     ///     SDKs** in Galva. It starts with `pk_` and is safe to ship in your
-    ///     app. The server resolves your app and environment from it.
+    ///     app. The server identifies your app from it; each key works only in
+    ///     the environment that issued it, so match `environment` to the key.
     ///   - environment: Backend to talk to. Default is `.production`. Use
     ///     `.development` only with an App ID issued for Galva's development
     ///     environment, or `.custom(...)` for proxy setups.
@@ -736,16 +738,20 @@ public enum AppUserTraits {
     }
 
     /// Timezone trait (IANA name). Server key: `$gv_timezone`.
-    /// Auto-attached from the device on every identify; set explicitly
-    /// only to override (e.g. host app exposes its own picker).
+    /// Auto-attached from the device at launch and on every `identify` and
+    /// `AppUser.set` call that leaves it out. Set explicitly only to override
+    /// (e.g. host app exposes its own picker), and re-send it on subsequent
+    /// calls so the device value doesn't overwrite it.
     public struct Timezone: Sendable, AppUserAttribute {
         public typealias Value = String
         public let attributeName = BuiltInTraitKey.timezone
     }
 
     /// Language code trait (BCP 47 tag). Server key: `$gv_languageCode`.
-    /// Auto-attached from the device on every identify; set explicitly
-    /// only to override.
+    /// Auto-attached from the device at launch and on every `identify` and
+    /// `AppUser.set` call that leaves it out. Set explicitly only to override,
+    /// and re-send it on subsequent calls so the device value doesn't overwrite
+    /// it.
     public struct LanguageCode: Sendable, AppUserAttribute {
         public typealias Value = String
         public let attributeName = BuiltInTraitKey.languageCode
@@ -819,10 +825,13 @@ extension Galva {
 
         /// The StoreKit 2 `appAccountToken` Galva attaches to purchases for the
         /// current identity. Returns the `appAccountToken` you passed to
-        /// `identify(userId:appAccountToken:)` when set, otherwise the token Galva
-        /// generates for you (the anonymous id as a UUID). It's the *same* value the
-        /// SDK uses for its own purchases, so passing it into a purchase you start
-        /// yourself reconciles that purchase to the same Galva account:
+        /// `identify(userId:appAccountToken:)` when set; otherwise returns a
+        /// locally generated UUID (the anonymous id as a UUID), which Galva
+        /// doesn't link to a subscriber on its own.
+        ///
+        /// Pass a stable per-subscriber UUID to `identify(userId:appAccountToken:)`,
+        /// then read this property when starting purchases yourself so both your
+        /// purchases and Galva's offer purchases carry the same linked token:
         ///
         ///     let token = AppUser.appAccountToken
         ///     let result = try await product.purchase(
@@ -830,7 +839,8 @@ extension Galva {
         ///     )
         ///
         /// A synchronous snapshot, kept in sync with `configure`/`identify`/`logOut`
-        /// and safe to read from any thread. `nil` only before `Galva.configure(...)`.
+        /// and safe to read from any thread. `nil` before `Galva.configure(...)`
+        /// finishes starting.
         public static var appAccountToken: UUID? {
             SDKCore.shared.cachedAppAccountToken
         }

@@ -103,19 +103,22 @@ Apps without scenes forward links from `application(_:open:options:)` with `Galv
 
 </details>
 
-Replace `pk_your_app_id` with your App ID. While you integrate, add `logLevel: .debug` to see everything the SDK does. To decide yourself when messages appear, see [Present messages yourself](#present-messages-yourself).
+Replace `pk_your_app_id` with your App ID. While you integrate, add `logLevel: .debug` to see everything the SDK does. Keep `.debug` and `.info` out of release builds: at those levels, log lines include user IDs and anonymous IDs in plain text. To decide yourself when messages appear, see [Present messages yourself](#present-messages-yourself).
 
 ### 4. Identify subscribers
 
-Identify with the user ID your backend and subscription data already use, after sign-in and when your app restores a signed-in session:
+Identify with the user ID your backend and subscription data already use, after sign-in and when your app restores a signed-in session. Pass each subscriber's own app account token (a UUID you store with their account) so Galva links it to the subscriber and matches App Store notifications immediately:
 
 ```swift
-AppUser.identify(userId: "user_42")
+// accountToken: a UUID you store with this subscriber's account
+AppUser.identify(userId: "user_42", appAccountToken: accountToken)
 AppUser.set(.email, "alex@example.com")
 
 // When the subscriber signs out:
 AppUser.logOut()
 ```
+
+Always call `AppUser.logOut()` before identifying a different person, even if the previous person didn't sign out. Identifying a new user ID without logging out keeps the anonymous ID and permanently merges the previous subscriber into the new one.
 
 Using RevenueCat? Skip this step and add the [RevenueCat integration](#using-revenuecat) instead.
 
@@ -129,6 +132,8 @@ So **Continue in App** on Galva's offer page opens your app, add your `gv-` sche
 <key>CFBundleURLTypes</key>
 <array>
     <dict>
+        <key>CFBundleURLName</key>
+        <string>app.galva</string>
         <key>CFBundleURLSchemes</key>
         <array><string>gv-your-scheme</string></array>
     </dict>
@@ -149,7 +154,7 @@ for await result in Transaction.unfinished {
 }
 ```
 
-If your app also starts purchases itself, attach Galva's token so they're matched to the subscriber:
+If your app also starts purchases itself, attach the token you passed to `AppUser.identify(userId:appAccountToken:)` — `AppUser.appAccountToken` returns it once `configure` has finished starting. Before you pass a token to `identify`, `AppUser.appAccountToken` returns a locally generated UUID that Galva doesn't link to a subscriber:
 
 ```swift
 let token = AppUser.appAccountToken
@@ -176,7 +181,7 @@ To follow one area, add a category to the filter: `category:inAppMessages` for i
 
 ## Push notifications
 
-Add your APNs key in Galva under **Admin → Settings → Communication → Push Notifications**, then forward the device token from your app delegate:
+Add your APNs key in Galva under **Admin → Settings → Communication → Push Notifications**, call `application.registerForRemoteNotifications()` at launch after `Galva.configure`, and forward the device token from your app delegate:
 
 ```swift
 func application(
@@ -187,7 +192,7 @@ func application(
 }
 ```
 
-Asking for permission and registering for remote notifications stay in your app; Galva never prompts. To report taps on Galva notifications, see [Send push tokens](https://docs.galva.io/sdks/ios/push).
+In a SwiftUI app, attach an app delegate with `@UIApplicationDelegateAdaptor` to receive this callback. Asking for permission and registering for remote notifications stay in your app; Galva never prompts. For the SwiftUI app delegate setup and reporting taps on Galva notifications, see [Send push tokens](https://docs.galva.io/sdks/ios/push).
 
 ## Present messages yourself
 
@@ -271,7 +276,7 @@ Galva.setPurchaseController(MyPurchaseController())
 
 You can also buy through your own purchase API instead of `purchaseWithStoreKit()` and return the verified transaction. Throw a `Galva.PurchaseError` so the message shows the right state.
 
-A promotional offer arrives unsigned when Galva has no In-App Purchase key for your app: `request.promotionalOffer?.compactJWS` is `nil`, and `purchaseWithStoreKit()` throws `Galva.PurchaseError.invalidOffer` for it. If your billing SDK can sign the offer by its `offerId`, as RevenueCat can for GalvaRevenueCat, buy it that way. Otherwise add the key in Galva.
+Galva requires your In-App Purchase key (with its Issuer ID) in Galva to send and sign App Store promotional offers; see [Set up App Store offers](https://docs.galva.io/integrations/app-store-offers). `request.promotionalOffer?.compactJWS` is optional in the SDK contract so a purchase controller that signs offers itself can still handle an unsigned offer if one arrives; `purchaseWithStoreKit()` throws `Galva.PurchaseError.invalidOffer` when `compactJWS` is `nil`.
 
 ## How the SDK behaves
 
@@ -351,6 +356,7 @@ Opting out doesn't change your App Privacy answers. See [Privacy and App Review]
 | | |
 |---|---|
 | **iOS** | 15.0 or later |
+| **macOS** | 12.0 or later (in-app messages and UIKit forwarders are iOS only) |
 | **Xcode** | 26 or later. The SDK uses a StoreKit API from the iOS 26 SDK for offer purchases; your app still runs on iOS 15. With an older Xcode, SwiftPM stops when resolving the package. |
 | **Install** | Swift Package Manager only. There's no prebuilt framework or CocoaPods pod. |
 
